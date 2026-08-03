@@ -38,7 +38,7 @@ const EAGLE_RULE_IDS = {
 
 async function withSourceHtml(run) {
   const directory = mkdtempSync(join(tmpdir(), 'ssmanagement-eagle-'))
-  const htmlPath = join(directory, 'SSManagement.html')
+  const htmlPath = join(directory, 'SSMCompiler.html')
   writeFileSync(htmlPath, buildHtml())
   try {
     return await run(htmlPath)

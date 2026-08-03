@@ -8,13 +8,13 @@ import { loadApp } from './support/harness.mjs'
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
-test('SSManagement.html is up to date with src/', () => {
-  const onDisk = readFileSync(resolve(rootDir, 'SSManagement.html'), 'utf8')
-  assert.equal(onDisk, buildHtml(), 'SSManagement.html is stale — run `npm run build`')
+test('SSMCompiler.html is up to date with src/', () => {
+  const onDisk = readFileSync(resolve(rootDir, 'SSMCompiler.html'), 'utf8')
+  assert.equal(onDisk, buildHtml(), 'SSMCompiler.html is stale — run `npm run build`')
 })
 
 test('the generated file carries a do-not-edit banner', () => {
-  const onDisk = readFileSync(resolve(rootDir, 'SSManagement.html'), 'utf8')
+  const onDisk = readFileSync(resolve(rootDir, 'SSMCompiler.html'), 'utf8')
   assert.match(onDisk, /GENERATED FILE — do not edit directly/)
 })
 

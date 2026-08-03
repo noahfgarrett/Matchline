@@ -1,6 +1,6 @@
 {
-  "name": "SSManagement",
-  "short_name": "SSManagement",
+  "name": "SSM Compiler",
+  "short_name": "SSMCompiler",
   "description": "Build site-aware SSM hierarchies from local spreadsheet imports.",
   "start_url": "./",
   "scope": "./",

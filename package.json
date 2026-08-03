@@ -1,6 +1,6 @@
 {
-  "name": "ssmanagement",
-  "version": "3.5.0",
+  "name": "ssmcompiler",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {

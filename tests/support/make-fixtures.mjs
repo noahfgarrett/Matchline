@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { createContext, runInContext } from 'node:vm'
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const htmlPath = resolve(rootDir, 'SSManagement.html')
+const htmlPath = resolve(rootDir, 'SSMCompiler.html')
 const fixturesDir = resolve(rootDir, 'tests/fixtures')
 const html = readFileSync(htmlPath, 'utf8')
 const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]

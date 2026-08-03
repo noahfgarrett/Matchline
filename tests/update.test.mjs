@@ -70,11 +70,11 @@ test('isNewerVersion orders semantic versions correctly', () => {
 })
 
 test('trustedUpdateAssetApiUrl accepts only the public SSManagement release channel', () => {
-  const trusted = 'https://api.github.com/repos/noahfgarrett/SSManagement-Releases/releases/assets/12345'
+  const trusted = 'https://api.github.com/repos/noahfgarrett/SSMCompiler-Releases/releases/assets/12345'
   assert.equal(trustedUpdateAssetApiUrl(trusted), trusted)
   assert.equal(trustedUpdateAssetApiUrl('https://api.github.com/repos/attacker/evil/releases/assets/1'), '')
   assert.equal(
-    trustedUpdateAssetApiUrl('https://api.github.com.evil.com/repos/noahfgarrett/SSManagement-Releases/releases/assets/1'),
+    trustedUpdateAssetApiUrl('https://api.github.com.evil.com/repos/noahfgarrett/SSMCompiler-Releases/releases/assets/1'),
     '',
   )
   assert.equal(trustedUpdateAssetApiUrl('https://api.github.com/repos/noahfgarrett/SSManagement/releases/assets/1'), '')
@@ -91,25 +91,25 @@ test('notesHtml escapes HTML so a release body cannot inject markup', () => {
 test('selectUpdateAsset prefers the gzip HTML asset and keeps the plain HTML as fallback', () => {
   const assets = [
     {
-      name: 'SSManagement.html',
-      url: 'https://api.github.com/repos/noahfgarrett/SSManagement-Releases/releases/assets/1',
-      browser_download_url: 'https://example.com/SSManagement.html',
+      name: 'SSMCompiler.html',
+      url: 'https://api.github.com/repos/noahfgarrett/SSMCompiler-Releases/releases/assets/1',
+      browser_download_url: 'https://example.com/SSMCompiler.html',
     },
     {
-      name: 'SSManagement.html.gz',
-      url: 'https://api.github.com/repos/noahfgarrett/SSManagement-Releases/releases/assets/2',
-      browser_download_url: 'https://example.com/SSManagement.html.gz',
+      name: 'SSMCompiler.html.gz',
+      url: 'https://api.github.com/repos/noahfgarrett/SSMCompiler-Releases/releases/assets/2',
+      browser_download_url: 'https://example.com/SSMCompiler.html.gz',
     },
   ]
   const selected = selectUpdateAsset(assets)
   assert.equal(selected.downloadKind, 'gzip-html')
-  assert.equal(selected.assetName, 'SSManagement.html.gz')
-  assert.equal(selected.fallbackAssetName, 'SSManagement.html')
+  assert.equal(selected.assetName, 'SSMCompiler.html.gz')
+  assert.equal(selected.fallbackAssetName, 'SSMCompiler.html')
 })
 
 test('versionedUpdateFilename sanitises the version into a safe filename', () => {
-  assert.equal(versionedUpdateFilename('3.0.0'), 'SSManagement-v3.0.0.html')
-  assert.equal(versionedUpdateFilename('v3.0.0'), 'SSManagement-v3.0.0.html')
+  assert.equal(versionedUpdateFilename('3.0.0'), 'SSMCompiler-v3.0.0.html')
+  assert.equal(versionedUpdateFilename('v3.0.0'), 'SSMCompiler-v3.0.0.html')
   const traversal = versionedUpdateFilename('../../etc/passwd')
   assert.ok(!traversal.includes('/'), `expected path separators to be stripped, got: ${traversal}`)
 })
@@ -136,7 +136,7 @@ test('updateInfoFromRelease returns null when the release tag matches the curren
    the build (or a future edit to one copy but not the other) fails loudly here instead
    of silently shipping broken release notes. */
 test('CHANGELOG in the built HTML matches src/changelog.json exactly', () => {
-  const html = readFileSync(resolve(rootDir, 'SSManagement.html'), 'utf8')
+  const html = readFileSync(resolve(rootDir, 'SSMCompiler.html'), 'utf8')
   const changelogOnDisk = JSON.parse(readFileSync(resolve(rootDir, 'src/changelog.json'), 'utf8'))
   const marker = 'const CHANGELOG = '
   const start = html.indexOf(marker)
@@ -154,7 +154,7 @@ test('fetchLatestUpdateRelease anonymously checks only the public release channe
   const fetchSpy = makeFetchSpy(async () => ({ ok: true, json: async () => release }))
   globalThis.fetch = fetchSpy
   try {
-    assert.equal(UPDATE_REPOSITORY, 'noahfgarrett/SSManagement-Releases')
+    assert.equal(UPDATE_REPOSITORY, 'noahfgarrett/SSMCompiler-Releases')
     assert.deepEqual(await fetchLatestUpdateRelease(), release)
     assert.equal(fetchSpy.calls.length, 1)
     assert.equal(fetchSpy.calls[0][0], UPDATE_RELEASE_API)
@@ -170,7 +170,7 @@ test('fetchGitHubAssetBlob refuses untrusted asset URLs before making any reques
   globalThis.fetch = fetchSpy
   const untrustedUrls = [
     'https://api.github.com/repos/attacker/evil/releases/assets/1',
-    'https://api.github.com.evil.com/repos/noahfgarrett/SSManagement-Releases/releases/assets/1',
+    'https://api.github.com.evil.com/repos/noahfgarrett/SSMCompiler-Releases/releases/assets/1',
     'https://api.github.com/repos/noahfgarrett/SSManagement/releases/assets/1',
     'https://api.github.com/repos/noahfgarrett/SSM-Builder/releases/assets/1',
     'https://example.com/not-related',
@@ -214,10 +214,10 @@ test('downloadUpdateFile falls back to the public direct URL after both API tier
   const info = {
     version: '9.9.9',
     downloadKind: 'gzip-html',
-    assetApiUrl: 'https://api.github.com/repos/noahfgarrett/SSManagement-Releases/releases/assets/111',
-    assetName: 'SSManagement.html.gz',
-    fallbackAssetApiUrl: 'https://api.github.com/repos/noahfgarrett/SSManagement-Releases/releases/assets/222',
-    fallbackAssetName: 'SSManagement.html',
+    assetApiUrl: 'https://api.github.com/repos/noahfgarrett/SSMCompiler-Releases/releases/assets/111',
+    assetName: 'SSMCompiler.html.gz',
+    fallbackAssetApiUrl: 'https://api.github.com/repos/noahfgarrett/SSMCompiler-Releases/releases/assets/222',
+    fallbackAssetName: 'SSMCompiler.html',
     downloadUrl: 'https://objects.githubusercontent.com/anonymous-gzip-download',
     fallbackDownloadUrl: 'https://objects.githubusercontent.com/anonymous-plain-download',
   }
@@ -228,7 +228,7 @@ test('downloadUpdateFile falls back to the public direct URL after both API tier
     assert.equal(fetchSpy.calls.length, 2)
     assert.equal(documentStub._created.length, 1)
     assert.equal(documentStub._created[0].href, info.fallbackDownloadUrl)
-    assert.equal(documentStub._created[0].download, 'SSManagement-v9.9.9.html')
+    assert.equal(documentStub._created[0].download, 'SSMCompiler-v9.9.9.html')
     assert.equal(documentStub._created[0].clicked, true)
   } finally {
     globalThis.fetch = originalFetch

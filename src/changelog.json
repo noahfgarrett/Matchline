@@ -1,5 +1,11 @@
 [
   {
+    "version": "0.1.0",
+    "date": "2026-08-03T00:00:00Z",
+    "type": "major",
+    "notes": "- Forked the SSManagement v3.5.0 core into SSM Compiler (see docs/FORK.md)\n- Rebranded the single-file artifact to SSMCompiler.html on the SSMCompiler-Releases channel"
+  },
+  {
     "version": "3.5.0",
     "date": "2026-08-03T00:00:00Z",
     "type": "feature",

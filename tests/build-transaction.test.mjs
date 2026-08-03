@@ -8,7 +8,7 @@ import { loadApp } from './support/harness.mjs'
 
 test('a failed rebuild restores the complete previous result snapshot', async () => {
   const directory=mkdtempSync(join(tmpdir(),'ssmanagement-transaction-'))
-  const htmlPath=join(directory,'SSManagement.html')
+  const htmlPath=join(directory,'SSMCompiler.html')
   writeFileSync(htmlPath,buildHtml())
   try{
     const app=await loadApp(htmlPath),bytes=[...readFileSync(resolve('tests/fixtures/easy-power.xlsx'))]

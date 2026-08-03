@@ -113,7 +113,7 @@ test('the vendored payload can be embedded in a script block without escaping ha
 })
 
 test('the built artifact embeds PDF.js escaped, in its own block, with no external fetch target', () => {
-  const html = readFileSync(resolve(rootDir, 'SSManagement.html'), 'utf8')
+  const html = readFileSync(resolve(rootDir, 'SSMCompiler.html'), 'utf8')
   assert.match(html, /const LEGEND_PDFJS_LIB="/)
   assert.match(html, /const LEGEND_PDFJS_WORKER="/)
   assert.equal((html.match(/<script>/g) || []).length, 4)

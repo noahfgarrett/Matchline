@@ -11,7 +11,7 @@ import { loadApp } from './support/harness.mjs'
 
 async function loadSourceApp() {
   const directory = mkdtempSync(join(tmpdir(), 'ssmanagement-unified-'))
-  const htmlPath = join(directory, 'SSManagement.html')
+  const htmlPath = join(directory, 'SSMCompiler.html')
   writeFileSync(htmlPath, buildHtml())
   try {
     return await loadApp(htmlPath)

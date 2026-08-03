@@ -157,7 +157,7 @@ test('a PDF in a build without the vendored extractor says so, and names what do
 test('the shipped build does carry the PDF extractor', () => {
   // The counterpart to the test above: the harness skipping PDF.js must not be
   // mistaken for the artifact lacking it.
-  const html = readFileSync(resolve(rootDir, 'SSManagement.html'), 'utf8')
+  const html = readFileSync(resolve(rootDir, 'SSMCompiler.html'), 'utf8')
   assert.match(html, /const LEGEND_PDFJS_LIB="/, 'the built artifact must embed the PDF.js library source')
   assert.match(html, /const LEGEND_PDFJS_WORKER="/, 'and its worker source')
   assert.equal((html.match(/<script>/g) || []).length, 4, 'PDF.js lives in its own script block')
