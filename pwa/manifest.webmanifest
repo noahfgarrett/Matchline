@@ -1,0 +1,18 @@
+{
+  "name": "SSM Compiler",
+  "short_name": "SSMCompiler",
+  "description": "Build site-aware SSM hierarchies from local spreadsheet imports.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#eceef0",
+  "theme_color": "#222428",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

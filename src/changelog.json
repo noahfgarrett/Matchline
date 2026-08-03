@@ -1,0 +1,560 @@
+[
+  {
+    "version": "0.1.0",
+    "date": "2026-08-03T00:00:00Z",
+    "type": "major",
+    "notes": "- Forked the SSManagement v3.5.0 core into SSM Compiler (see docs/FORK.md)\n- Rebranded the single-file artifact to SSMCompiler.html on the SSMCompiler-Releases channel"
+  },
+  {
+    "version": "3.5.0",
+    "date": "2026-08-03T00:00:00Z",
+    "type": "feature",
+    "stats": {
+      "features": 3,
+      "improvements": 2,
+      "fixes": 4
+    },
+    "notes": "- Added tag anatomy binding: select the characters of a sample tag and point them at the value list that explains them\n- Added region selection over the rendered legend page, for lists the extractor missed or read wrongly\n- Added a coverage check that measures a bound character range against the real tags in your project sheets\n- Improved section detection so blocks labelled with wording the app has not seen still divide the page\n- Improved value lists so a heading set above its table still names it\n- Fixed levels, voltages, and power supplies being labelled as equipment types on numbering sheets\n- Fixed codes and descriptions losing their pairing when a single narrow table was selected\n- Fixed a stray separator being kept at the front of a meaning\n- Fixed a missing icon on the locked-profile badge"
+  },
+  {
+    "version": "3.4.0",
+    "date": "2026-08-03T00:00:00Z",
+    "type": "feature",
+    "stats": {
+      "features": 6,
+      "improvements": 3
+    },
+    "notes": "- Added design legend analysis when creating Site Profiles\n- Added searchable PDF, spreadsheet, CSV, and pasted-text legend inputs with a full review step before any rule is created\n- Added editable rule proposals with project-tag validation and impact previews\n- Added legend provenance and re-analysis for existing profiles\n- Improved tag anatomy and rule editing in Site Profile Studio\n- Improved profile creation with a step-by-step wizard that saves nothing until you confirm\n- Added MEL System Parent nesting for equipment the Cable Schedule does not cover\n- Added a Duplicate button for copying any site profile, including Eagle\n- Improved first-run setup so new installs start on an editable site profile instead of the locked Eagle example"
+  },
+  {
+    "version": "3.2.0",
+    "date": "2026-07-29T00:00:00Z",
+    "type": "feature",
+    "stats": {
+      "features": 4,
+      "improvements": 2
+    },
+    "notes": "- Added a Visual Trainer for moving hierarchy tags and teaching exact or reusable project rules\n- Added impact previews for affected, ambiguous, pinned, and invalid placements before rules are applied\n- Added drag, tap-to-move, undo, redo, and fullscreen workflows for desktop and iPad\n- Added visual Building, Discipline, and System grouping rules for SSM Hierarchy profiles\n- Improved large hierarchy rule matching with indexed lookups\n- Improved Test & Publish with closest-parent and ambiguity impact counts"
+  },
+  {
+    "version": "3.1.0",
+    "date": "2026-07-28T00:00:00Z",
+    "type": "feature",
+    "stats": {
+      "features": 3,
+      "improvements": 2
+    },
+    "notes": "- Added full-sheet scrolling and fullscreen spreadsheet previews in Site Profile Studio\n- Added hierarchy-aware previews that show only the tabs used in the current build\n- Added import guidance and a sectioned in-app Guide covering the complete SSM workflow\n- Improved cell and Tag Trainer selections so they persist when switching preview sizes\n- Improved spreadsheet preview performance for large workbooks"
+  },
+  {
+    "version": "3.0.1",
+    "date": "2026-07-28T00:00:00Z",
+    "type": "fix",
+    "stats": {
+      "features": 2,
+      "fixes": 4,
+      "improvements": 2
+    },
+    "notes": "- Added complete Eagle rule, hierarchy, and processing-policy references to Site Profile Studio\n- Added automatic hierarchy rebuilds when site profiles are switched, imported, or applied\n- Fixed the Eagle compatibility profile not exactly matching SSM Builder 1.1.37 for edge cases and exports\n- Fixed older or stale builds being able to overwrite newer profile and source selections\n- Fixed separate-sheet SSM exports diverging from the combined register\n- Improved Site Profile Studio rule layouts on iPad"
+  },
+  {
+    "version": "3.0.0",
+    "date": "2026-07-28T00:00:00Z",
+    "type": "major",
+    "stats": {
+      "features": 7,
+      "fixes": 8,
+      "improvements": 5
+    },
+    "notes": "- Added Eagle as a locked compatibility profile that preserves the original SSM Builder electrical rules\n- Added guided Tag Trainer and Relationships tools for defining project-specific naming and parent rules from uploaded sheets\n- Added configurable Electrical Flow and SSM hierarchy views driven by the active site profile\n- Added automatic column mapping with immediate manual overrides\n- Added durable site profiles and manual branch placements that carry into downloaded updates\n- Added simple one-ping updates through the dedicated SSManagement release channel with no GitHub token required\n- Unified Hierarchy, Comparison, and SSM exports around the same resolved equipment relationships\n- Fixed equipment being dropped when downstream columns contain gaps or tags use different capitalization\n- Fixed ambiguous parents and cable-feed conflicts being selected silently instead of appearing in Placement Review\n- Fixed site profiles growing without limit and added recoverable profile storage\n- Fixed MAH, CIM, transformer, and terminal-suffix conventions being applied inconsistently\n- Improved responsiveness and memory use for very large spreadsheet imports"
+  },
+  {
+    "version": "2.1.1",
+    "date": "2026-07-24T15:08:46Z",
+    "type": "fix",
+    "stats": {
+      "features": 1,
+      "fixes": 1
+    },
+    "notes": "- Added local authentication for private GitHub release updates\n- Fixed private builds not prompting when newer versions are available"
+  },
+  {
+    "version": "2.1.0",
+    "date": "2026-07-24T14:38:28Z",
+    "type": "feature",
+    "stats": {
+      "features": 1,
+      "improvements": 1
+    },
+    "notes": "- Added automatic column mapping for Easy Power, Cable Schedule, MEL, and PMD imports\n- Improved manual mapping so selections update instantly without rebuilding the sheet preview"
+  },
+  {
+    "version": "2.0.1",
+    "date": "2026-07-24T14:06:46Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1,
+      "improvements": 1
+    },
+    "notes": "- Fixed inconsistent dropdown heights in Data Mapping and Tag Trainer\n- Improved control alignment throughout Site Profile Studio on desktop and iPad"
+  },
+  {
+    "version": "2.0.0",
+    "date": "2026-07-24T00:00:00Z",
+    "type": "major",
+    "stats": {
+      "features": 5,
+      "improvements": 1
+    },
+    "notes": "- Added portable Site Profiles with local persistence and revision history\n- Added sheet previews, semantic column mapping, and a site-specific Tag Trainer\n- Added configurable Building, Discipline, System, and equipment hierarchy rules\n- Added Electrical Flow and SSM Hierarchy views with shared equipment identity\n- Added a configurable equipment details panel\n- Improved profile training and hierarchy review on iPad-sized screens"
+  },
+  {
+    "version": "1.1.37",
+    "date": "2026-07-24T11:51:30Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1
+    },
+    "notes": "- Reverted the Cable Schedule parent override introduced in version 1.1.36"
+  },
+  {
+    "version": "1.1.36",
+    "date": "2026-07-24T11:17:25Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1
+    },
+    "notes": "- Changed Cable Schedule parent corrections so displaced Easy Power parents became dependencies"
+  },
+  {
+    "version": "1.1.35",
+    "date": "2026-07-23T20:09:52Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1
+    },
+    "notes": "- Removed trailing -A, -B, and -OUTPUT suffixes from equipment tags"
+  },
+  {
+    "version": "1.1.34",
+    "date": "2026-07-23T20:03:36Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1
+    },
+    "notes": "- Fixed Cable Schedule parent chains being missed when related rows appear earlier in the sheet"
+  },
+  {
+    "version": "1.1.33",
+    "date": "2026-07-23T18:41:09Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 2
+    },
+    "notes": "- Fixed Comparison columns shifting while scrolling large datasets\n- Fixed a gap between the grouped Comparison headers"
+  },
+  {
+    "version": "1.1.32",
+    "date": "2026-07-23T18:23:53Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1,
+      "improvements": 1
+    },
+    "notes": "- Fixed Placement Review becoming unresponsive with thousands of branches\n- Improved Placement Review scrolling, filtering, and tab switching for large review lists"
+  },
+  {
+    "version": "1.1.31",
+    "date": "2026-07-23T17:59:28Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1,
+      "improvements": 3
+    },
+    "notes": "- Fixed hierarchy builds stalling when optional PMD, MEL, or Cable Schedule files were not included\n- Improved large hierarchy reconciliation, sorting, and placement preparation\n- Reduced PMD memory use by loading per-tab instruments only for separate exports\n- Improved Review and Comparison scrolling stability"
+  },
+  {
+    "version": "1.1.30",
+    "date": "2026-07-23T17:26:55Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1,
+      "improvements": 1
+    },
+    "notes": "- Fixed hierarchy builds hanging during MEL UPN and MAH parent corrections\n- Improved build progress to identify each reconciliation stage"
+  },
+  {
+    "version": "1.1.29",
+    "date": "2026-07-23T16:41:41Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1,
+      "improvements": 1
+    },
+    "notes": "- Fixed hierarchy builds hanging near 77% with large MEL datasets\n- Improved MEL tag matching performance for large imports"
+  },
+  {
+    "version": "1.1.28",
+    "date": "2026-07-23T16:30:40Z",
+    "type": "feature",
+    "stats": {
+      "features": 1
+    },
+    "notes": "- Added MAH parent splitting so suffixed MAH tags remain dependencies"
+  },
+  {
+    "version": "1.1.27",
+    "date": "2026-07-23T16:12:31Z",
+    "type": "feature",
+    "stats": {
+      "features": 1
+    },
+    "notes": "- Added click-to-copy tags throughout Hierarchy, Review, and Comparison views"
+  },
+  {
+    "version": "1.1.26",
+    "date": "2026-07-23T15:17:44Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1,
+      "improvements": 1
+    },
+    "notes": "- Fixed the changelog close button sometimes reopening after dismissal\n- Improved centering for icon-only buttons throughout the app"
+  },
+  {
+    "version": "1.1.25",
+    "date": "2026-07-23T14:14:15Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1
+    },
+    "notes": "- Fixed MEL System Parent corrections when Equipment IDs are contained inside building-prefixed MEL tags"
+  },
+  {
+    "version": "1.1.24",
+    "date": "2026-07-23T13:55:40Z",
+    "type": "fix",
+    "stats": {
+      "features": 1,
+      "fixes": 1
+    },
+    "notes": "- Fixed MEL System Parent checks skipping extracted Equipment IDs shown in Comparison\n- Added MEL parent-check outcomes to equipment details"
+  },
+  {
+    "version": "1.1.23",
+    "date": "2026-07-23T13:31:46Z",
+    "type": "feature",
+    "stats": {
+      "features": 1,
+      "fixes": 1
+    },
+    "notes": "- Added MEL System Parent corrections when equipment and closest-parent UPNs differ\n- Added review flags when required MEL parent data is missing"
+  },
+  {
+    "version": "1.1.22",
+    "date": "2026-07-22T13:36:43Z",
+    "type": "feature",
+    "stats": {
+      "features": 2,
+      "fixes": 2
+    },
+    "notes": "- Added Placement Review for moving flagged branches with path previews, parent validation, and undo\n- Added amber review flags for unique MEL transformer placements\n- Fixed unanchored Cable Schedule branches appearing beside System Names\n- Fixed MEL transformer matching when XFM or LVS appears later in an equipment tag\n- Renamed the existing review workflow to Cross-Sheet Tag Review"
+  },
+  {
+    "version": "1.1.21",
+    "date": "2026-07-21T20:20:43Z",
+    "type": "feature",
+    "stats": {
+      "features": 2
+    },
+    "notes": "- Added Cable Schedule parent-chain corrections when extracted parents and dependencies disagree\n- Added missing Cable Schedule panels to the hierarchy, Comparison, and SSM exports"
+  },
+  {
+    "version": "1.1.20",
+    "date": "2026-07-21T19:17:53Z",
+    "type": "feature",
+    "stats": {
+      "features": 3
+    },
+    "notes": "- Added MEL-derived closest parents for SCR and SCC equipment\n- Added building-based closest parents for CIM equipment\n- Added 602 Medium Voltage as the hierarchy parent for GIS starting sources"
+  },
+  {
+    "version": "1.1.19",
+    "date": "2026-07-21T15:01:29Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1
+    },
+    "notes": "- Fixed MEL transformer matches failing when sheet headers or equipment tag separators used alternate formatting"
+  },
+  {
+    "version": "1.1.18",
+    "date": "2026-07-21T14:52:11Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1
+    },
+    "notes": "- Fixed mismatched LVS branches with intermediate Downstream levels not receiving their matching MEL transformer"
+  },
+  {
+    "version": "1.1.17",
+    "date": "2026-07-21T14:35:49Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1
+    },
+    "notes": "- Fixed comparisons marking semicolon-separated working dependencies as different when one tag matches"
+  },
+  {
+    "version": "1.1.16",
+    "date": "2026-07-21T14:13:31Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1
+    },
+    "notes": "- Fixed mismatched LVS branches by inserting the matching MEL transformer and moving the complete subtree beneath it"
+  },
+  {
+    "version": "1.1.15",
+    "date": "2026-07-20T20:08:52Z",
+    "type": "feature",
+    "stats": {
+      "features": 2
+    },
+    "notes": "- Added Master Equipment List imports for correcting LV transformer parents with exact MEL matches\n- Added MEL UPN values to hierarchy details and SSM exports"
+  },
+  {
+    "version": "1.1.14",
+    "date": "2026-07-20T19:28:49Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 2
+    },
+    "notes": "- Fixed comparisons marking an N/A working dependency as different when the extracted dependency matches both parents\n- Fixed working-copy tags with trailing bracketed notes being marked as different"
+  },
+  {
+    "version": "1.1.13",
+    "date": "2026-07-20T17:42:22Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 2,
+      "improvements": 1
+    },
+    "notes": "- Fixed hierarchy paths skipping numbered Downstream levels\n- Fixed later Downstream values appearing after the first blank\n- Improved shared Downstream and Load Description tags while preserving SSM precedence"
+  },
+  {
+    "version": "1.1.12",
+    "date": "2026-07-20T17:27:30Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 2
+    },
+    "notes": "- Fixed Load Descriptions to use ID Name as both the closest parent and dependency\n- Fixed matching ID Name and Load Description rows to use Final Source with an N/A dependency"
+  },
+  {
+    "version": "1.1.11",
+    "date": "2026-07-20T17:15:58Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 2
+    },
+    "notes": "- Fixed Load Description dependencies to use ID Name when available\n- Fixed Load Descriptions with blank ID Names to use Final Source as the parent and dependency"
+  },
+  {
+    "version": "1.1.10",
+    "date": "2026-07-20T17:03:02Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1
+    },
+    "notes": "- Fixed duplicate Equipment IDs appearing in SSM exports by keeping the first hierarchy relationship"
+  },
+  {
+    "version": "1.1.9",
+    "date": "2026-07-20T16:31:16Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1,
+      "improvements": 1
+    },
+    "notes": "- Fixed strikethrough tags appearing crossed out in the app and SSM exports\n- Added Cable Schedule strikethrough status to equipment details"
+  },
+  {
+    "version": "1.1.8",
+    "date": "2026-07-20T15:30:00Z",
+    "type": "feature",
+    "stats": {
+      "features": 1,
+      "improvements": 2
+    },
+    "notes": "- Added support for preserving strikethrough tags from XLSX imports and SSM exports\n- Improved tag normalization by removing trailing -S suffixes and preferring Load Descriptions\n- Improved blank register values and no-ID Final Source relationships in comparisons and SSM exports"
+  },
+  {
+    "version": "1.1.7",
+    "date": "2026-07-20T12:00:00Z",
+    "type": "feature",
+    "stats": {
+      "features": 1,
+      "improvements": 1
+    },
+    "notes": "- Improved hierarchy search to show non-matching sibling equipment automatically\n- Added difference filters and sortable columns to the Comparison tab"
+  },
+  {
+    "version": "1.1.6",
+    "date": "2026-07-17T18:30:00Z",
+    "type": "feature",
+    "stats": {
+      "features": 1,
+      "improvements": 1
+    },
+    "notes": "- Added inline controls to reveal non-matching equipment within filtered hierarchy branches\n- Improved search result counts to show matching and total child equipment"
+  },
+  {
+    "version": "1.1.5",
+    "date": "2026-07-17T16:00:00Z",
+    "type": "feature",
+    "stats": {
+      "features": 1,
+      "improvements": 2
+    },
+    "notes": "- Added a hierarchy toggle for matched PMD panel labels\n- Removed Files, Tabs, and Rows Read summary cards\n- Improved hierarchy search so matched branches can be expanded to nested equipment"
+  },
+  {
+    "version": "1.1.4",
+    "date": "2026-07-17T12:00:00Z",
+    "type": "feature",
+    "stats": {
+      "features": 2
+    },
+    "notes": "- Added PMD matching for building-prefixed panels and instrument tags\n- Improved PMD metadata and SSM exports with building-aware labels"
+  },
+  {
+    "version": "1.1.3",
+    "date": "2026-07-16T12:00:00Z",
+    "type": "feature",
+    "stats": {
+      "features": 4
+    },
+    "notes": "- Added Point Master Database instruments to hierarchy views, details, and SSM exports\n- Added full-screen views for Hierarchy, Review, and Comparison tabs\n- Removed trailing -P suffixes from equipment tags\n- Improved downloaded HTML packages with versioned filenames"
+  },
+  {
+    "version": "1.1.2",
+    "date": "2026-07-06T17:52:44Z",
+    "type": "feature",
+    "stats": {
+      "features": 1
+    },
+    "notes": "- Improved large-dataset tab performance with virtualized Review and Comparison tables"
+  },
+  {
+    "version": "1.1.1",
+    "date": "2026-07-06T17:41:52Z",
+    "type": "feature",
+    "stats": {
+      "features": 1
+    },
+    "notes": "- Improved Comparison tab performance for large working-copy reviews"
+  },
+  {
+    "version": "1.1.0",
+    "date": "2026-07-06T17:12:38Z",
+    "type": "feature",
+    "stats": {
+      "features": 1
+    },
+    "notes": "- Added session caching so Hierarchy, Review, and Comparison tabs reopen instantly"
+  },
+  {
+    "version": "1.0.9",
+    "date": "2026-07-06T15:25:48Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 2
+    },
+    "notes": "- Improved Review tab source headers and column separation\n- Fixed changelog entries crowding together instead of scrolling"
+  },
+  {
+    "version": "1.0.8",
+    "date": "2026-07-06T14:12:16Z",
+    "type": "feature",
+    "stats": {
+      "features": 1,
+      "fixes": 1
+    },
+    "notes": "- Added source labels to the Review tab columns\n- Fixed duplicated dependency values in comparison and SSM exports"
+  },
+  {
+    "version": "1.0.7",
+    "date": "2026-07-06T13:54:18Z",
+    "type": "feature",
+    "stats": {
+      "features": 1,
+      "fixes": 1
+    },
+    "notes": "- Added version numbers to downloaded update filenames\n- Improved the SSManagement header alignment"
+  },
+  {
+    "version": "1.0.6",
+    "date": "2026-07-06T13:28:42Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1
+    },
+    "notes": "- Improved the LotusWorks logo size in the header"
+  },
+  {
+    "version": "1.0.5",
+    "date": "2026-07-06T13:12:08Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 2
+    },
+    "notes": "- Fixed update tabs changing the modal height\n- Fixed update downloads opening share sheets on mobile devices\n- Improved the LotusWorks logo size in the header"
+  },
+  {
+    "version": "1.0.4",
+    "date": "2026-07-06T12:55:12Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1
+    },
+    "notes": "- Fixed update downloads opening the Windows share sheet"
+  },
+  {
+    "version": "1.0.3",
+    "date": "2026-07-06T12:43:45Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1
+    },
+    "notes": "- Fixed LotusWorks logo sizing and placement in the header"
+  },
+  {
+    "version": "1.0.2",
+    "date": "2026-07-06T12:31:12Z",
+    "type": "feature",
+    "stats": {
+      "features": 2,
+      "fixes": 1
+    },
+    "notes": "- Added a changelog viewer with clickable version history\n- Added the LotusWorks logo to the header\n- Fixed update downloads in browsers"
+  },
+  {
+    "version": "1.0.1",
+    "date": "2026-07-06T12:00:27Z",
+    "type": "fix",
+    "stats": {
+      "fixes": 1
+    },
+    "notes": "- Fixed an issue where loading spinners could get stuck occasionally"
+  },
+  {
+    "version": "1.0.0",
+    "date": "2026-07-06T11:31:11Z",
+    "type": "major",
+    "stats": {
+      "features": 1
+    },
+    "notes": "- Added the initial SSManagement single-file app"
+  }
+]

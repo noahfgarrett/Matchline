@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="SSM Compiler">
+  <rect width="512" height="512" rx="104" fill="#222428"/>
+  <path d="M124 348h264" fill="none" stroke="#f97316" stroke-width="32" stroke-linecap="round"/>
+  <path d="M156 256h200" fill="none" stroke="#fdba74" stroke-width="32" stroke-linecap="round"/>
+  <path d="M196 164h120" fill="none" stroke="#ffffff" stroke-width="32" stroke-linecap="round"/>
+  <path d="M256 164v184" fill="none" stroke="#ffffff" stroke-width="28" stroke-linecap="round"/>
+  <path d="M216 232l40-68 40 68" fill="none" stroke="#ffffff" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

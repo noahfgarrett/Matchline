@@ -18,7 +18,7 @@
 - Create: `docs/FORK.md`
 - Copy from `/Users/noahgarrett/Codebase/SSManagement` @ `6d51935`: `src/`, `build/`, `tests/`, `package.json`, `AGENTS.md`
 
-- [ ] **Step 1: Commit the existing bootstrap files on main**
+- [x] **Step 1: Commit the existing bootstrap files on main**
 
 ```bash
 cd /Users/noahgarrett/Codebase/SSMCompiler
@@ -26,13 +26,13 @@ git add README.md docs/ .gitignore
 git commit -m "chore: bootstrap repo with design spec and phase 1 plan"
 ```
 
-- [ ] **Step 2: Create the working branch**
+- [x] **Step 2: Create the working branch**
 
 ```bash
 git checkout -b feat/phase-1-compiler-core
 ```
 
-- [ ] **Step 3: Copy the fork (never modifies SSManagement)**
+- [x] **Step 3: Copy the fork (never modifies SSManagement)**
 
 ```bash
 SRC=/Users/noahgarrett/Codebase/SSManagement
@@ -41,7 +41,7 @@ cp -R "$SRC/src" "$SRC/build" "$SRC/tests" ./
 cp "$SRC/package.json" "$SRC/AGENTS.md" ./
 ```
 
-- [ ] **Step 4: Write `docs/FORK.md`**
+- [x] **Step 4: Write `docs/FORK.md`**
 
 ```markdown
 # Fork provenance
@@ -57,7 +57,7 @@ Trim of unused surfaces (legend trainer, update UI, etc.) is deferred to
 Phase 3 — see docs/specs/2026-08-03-ssm-compiler-design.md §11.
 ```
 
-- [ ] **Step 5: Verify the copy builds and tests green as-is**
+- [x] **Step 5: Verify the copy builds and tests green as-is**
 
 ```bash
 node build/build.mjs        # writes SSManagement.html (rebrand comes in Task 2)
@@ -65,7 +65,7 @@ npm test 2>&1 | tail -5
 ```
 Expected: `built SSManagement.html`; test summary with `fail 0`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 printf 'SSManagement.html\n' >> .gitignore   # transient pre-rebrand artifact; removed in Task 2
@@ -79,7 +79,7 @@ git commit -m "chore: fork SSManagement core at 6d51935"
 - Modify: `build/build.mjs` (output filename), `src/index.html` (title), `package.json` (name/version), `src/update/private-update.js` (release channel + versioned filename), `src/changelog.json` (reset), `.gitignore`
 - Modify: every test referencing the artifact name/channel: `tests/build.test.mjs`, `tests/build-transaction.test.mjs`, `tests/deployment.test.mjs`, `tests/eagle-profile.acceptance.test.mjs`, `tests/legend-pdf.test.mjs`, `tests/legend-wizard.test.mjs`, `tests/update.test.mjs`
 
-- [ ] **Step 1: Global rename of artifact and release channel across src, build, tests**
+- [x] **Step 1: Global rename of artifact and release channel across src, build, tests**
 
 ```bash
 grep -rl "SSManagement" build src tests | while read f; do
@@ -95,7 +95,7 @@ grep -rn "SSManagement" build src tests | grep -v "FORK\|fork" | head
 ```
 Expected: remaining hits are only prose/comments (deployment test title regex now expects `SSM Compiler`; fix any leftover assertion by hand — `tests/deployment.test.mjs:18` must be `assert.match(html, /<title>SSM Compiler<\/title>/)`).
 
-- [ ] **Step 2: package.json identity**
+- [x] **Step 2: package.json identity**
 
 ```json
 {
@@ -110,7 +110,7 @@ Expected: remaining hits are only prose/comments (deployment test title regex no
 }
 ```
 
-- [ ] **Step 3: Reset changelog**
+- [x] **Step 3: Reset changelog**
 
 `src/changelog.json` becomes:
 
@@ -122,7 +122,7 @@ Expected: remaining hits are only prose/comments (deployment test title regex no
 
 If any test asserts on specific changelog content, update that expectation to 0.1.0.
 
-- [ ] **Step 4: Build + full test suite**
+- [x] **Step 4: Build + full test suite**
 
 ```bash
 sed -i '' '/^SSManagement\.html$/d' .gitignore
@@ -131,7 +131,7 @@ npm run build && npm test 2>&1 | tail -5
 ```
 Expected: `built SSMCompiler.html`, `fail 0`. Iterate on stragglers (the grep in Step 1 is the map).
 
-- [ ] **Step 5: Commit (artifact included — it is a committed build product)**
+- [x] **Step 5: Commit (artifact included — it is a committed build product)**
 
 ```bash
 git add -A
@@ -144,7 +144,7 @@ git commit -m "chore: rebrand artifact to SSMCompiler.html, version 0.1.0"
 - Modify: `src/io/detect.js` (`melInfo`), `src/hierarchy/build.js` (`buildMel` lookup columns)
 - Test: `tests/compiler-seed.test.mjs` (created here, grown in Task 4)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/compiler-seed.test.mjs`:
 
@@ -163,14 +163,14 @@ test('melInfo captures Project Phase and Equipment Description columns', () => {
 })
 ```
 
-- [ ] **Step 2: Run it — expect failure**
+- [x] **Step 2: Run it — expect failure**
 
 ```bash
 node --test tests/compiler-seed.test.mjs
 ```
 Expected: FAIL (`info.projectPhase` undefined). Adjust the test to `melInfo`'s real signature if it takes a worksheet rather than a header array — mirror however `tests/*.test.mjs` already call it (check `grep -n "melInfo" tests/*.mjs`).
 
-- [ ] **Step 3: Implement — extend `melInfo` column scan**
+- [x] **Step 3: Implement — extend `melInfo` column scan**
 
 In `src/io/detect.js`, alongside the existing System Description/Discipline matchers, add:
 
@@ -183,14 +183,14 @@ and include `projectPhase, description` in the returned info object (follow the 
 
 In `src/hierarchy/build.js` `buildMel()`, thread the new columns into each stored MEL record and the lookup's `columns` map: `ProjectPhase: clean(row[info.projectPhase])`, `Description: clean(row[info.description])`.
 
-- [ ] **Step 4: Run to green**
+- [x] **Step 4: Run to green**
 
 ```bash
 node --test tests/compiler-seed.test.mjs && npm test 2>&1 | tail -3
 ```
 Expected: PASS, suite `fail 0`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/io/detect.js src/hierarchy/build.js tests/compiler-seed.test.mjs
@@ -206,7 +206,7 @@ Every MEL row becomes a canonical record even when no other source mentions it (
 - Modify: `src/profile/schema.js` (`makeDefaultProfile` gains `hierarchy.melSeed = { enabled: true, excludedPhases: ['Future'] }`)
 - Test: `tests/compiler-seed.test.mjs`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/compiler-seed.test.mjs` (state setup mirrors existing hierarchy tests — see `tests/hierarchy-correctness.test.mjs` for the established way to populate `S` and invoke `buildCanonicalModel`; reuse its helpers/imports rather than inventing new ones):
 
@@ -229,13 +229,13 @@ test('MEL rows seed canonical records even when absent from every other source',
 })
 ```
 
-- [ ] **Step 2: Run it — expect failure** (`rec` undefined)
+- [x] **Step 2: Run it — expect failure** (`rec` undefined)
 
 ```bash
 node --test tests/compiler-seed.test.mjs
 ```
 
-- [ ] **Step 3: Implement seeding in `buildCanonicalModel`**
+- [x] **Step 3: Implement seeding in `buildCanonicalModel`**
 
 In `src/hierarchy/projection.js`, after the `S.ssmCombined` loop (line ~113) and before the MEL dependency-claims loop, insert:
 
@@ -258,14 +258,14 @@ if (melSeed && melSeed.enabled !== false) {
 
 Adapt field names to how `S.melRows` rows are actually shaped after Task 3 (`grep -n "melRows" src/hierarchy/build.js`) — if rows are raw arrays plus a column-info object, read via the stored info indices instead of named properties. Add `phaseExcluded: false` to the record literal in `ensure()` so the property always exists. Add `melSeed` to `makeDefaultProfile()`'s `hierarchy` object in `src/profile/schema.js` and to the starter profile if it builds `hierarchy` separately.
 
-- [ ] **Step 4: Run to green, then the full suite**
+- [x] **Step 4: Run to green, then the full suite**
 
 ```bash
 node --test tests/compiler-seed.test.mjs && npm test 2>&1 | tail -3
 ```
 Expected: PASS / `fail 0`. If an existing register test now sees extra rows, that test's fixture predates MEL seeding — set `melSeed: { enabled: false }` in that fixture's profile rather than weakening the assertion.
 
-- [ ] **Step 5: Rebuild artifact + commit**
+- [x] **Step 5: Rebuild artifact + commit**
 
 ```bash
 npm run build
@@ -279,7 +279,7 @@ git commit -m "feat: seed canonical model from MEL rows (MEL-first universe)"
 - Modify: `src/hierarchy/projection.js` (`resolveRecordContext`)
 - Test: `tests/compiler-attributes.test.mjs`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/compiler-attributes.test.mjs` (same state-setup helpers as Task 4):
 
@@ -304,9 +304,9 @@ test('classify rules and manual overrides still beat MEL attributes', () => {
 
 Write the second test fully by copying the profile-construction pattern from `tests/rules-classify.test.mjs`; the assertion is that rule-assigned values outrank MEL-derived ones (existing precedence: override → rule → source-derived → fallback).
 
-- [ ] **Step 2: Run — expect failure** (`system` falls back to 'Unassigned System')
+- [x] **Step 2: Run — expect failure** (`system` falls back to 'Unassigned System')
 
-- [ ] **Step 3: Implement in `resolveRecordContext`**
+- [x] **Step 3: Implement in `resolveRecordContext`**
 
 In `src/hierarchy/projection.js:15-30`, the discipline and system lines gain a MEL tier (mirroring how `building` already consumes `mel.building`):
 
@@ -324,13 +324,13 @@ const system = overrideValues.system || assign.values.system || melSystem || rec
 
 Update the `explicit` map: `explicit.discipline = !!(assign.values.discipline || melDiscipline) || record.isInstrument;` and `explicit.system = !!(assign.values.system || melSystem) || isSystemName(record.tag);` — MEL-derived values are explicit (they must not be overwritten by parent-attribute inheritance). Field names again per the actual MEL record shape.
 
-- [ ] **Step 4: Run to green + full suite**
+- [x] **Step 4: Run to green + full suite**
 
 ```bash
 node --test tests/compiler-attributes.test.mjs && npm test 2>&1 | tail -3
 ```
 
-- [ ] **Step 5: Rebuild + commit**
+- [x] **Step 5: Rebuild + commit**
 
 ```bash
 npm run build && git add -A && git commit -m "feat: derive discipline and system attributes from MEL (UPN + description)"
@@ -346,7 +346,7 @@ The heart of the Compiler (spec §5). A pure module so it is trivially testable.
 - Modify: `src/hierarchy/projection.js` (apply the fold before `resolveHierarchyClaims`)
 - Test: `tests/compiler-fold.test.mjs`
 
-- [ ] **Step 1: Write the failing tests (pure function)**
+- [x] **Step 1: Write the failing tests (pure function)**
 
 Create `tests/compiler-fold.test.mjs`:
 
@@ -396,13 +396,13 @@ test('dependency claims and manual claims pass through untouched', () => {
 
 Import the real claim-kind constants instead of string literals if `HIERARCHY_CLAIM_KIND` exports cleanly into the test (`import { HIERARCHY_CLAIM_KIND } from '../src/hierarchy/claims.js'`) — match whatever the actual enum values are (check `src/hierarchy/claims.js`).
 
-- [ ] **Step 2: Run — expect failure** (module does not exist)
+- [x] **Step 2: Run — expect failure** (module does not exist)
 
 ```bash
 node --test tests/compiler-fold.test.mjs
 ```
 
-- [ ] **Step 3: Implement `src/compiler/fold.js`**
+- [x] **Step 3: Implement `src/compiler/fold.js`**
 
 ```js
 import { HIERARCHY_CLAIM_KIND } from '../hierarchy/claims.js'
@@ -436,13 +436,13 @@ export function recordPartitionKey(record) {
 
 Add `'src/compiler/fold.js'` to `build/manifest.mjs` immediately after `'src/hierarchy/claims.js'` (it must appear before `src/hierarchy/projection.js`, which will call it).
 
-- [ ] **Step 4: Run the fold tests to green**
+- [x] **Step 4: Run the fold tests to green**
 
 ```bash
 node --test tests/compiler-fold.test.mjs
 ```
 
-- [ ] **Step 5: Wire the fold into `buildCanonicalModel`**
+- [x] **Step 5: Wire the fold into `buildCanonicalModel`**
 
 In `src/hierarchy/projection.js`, records' contexts are resolved (line ~137) *before* candidates are assembled (line ~147), so partition keys are available. Immediately before `const snapshot = resolveHierarchyClaims({...})`:
 
@@ -454,7 +454,7 @@ const snapshot = resolveHierarchyClaims({ observations, candidates: folded, manu
 
 Manual overrides intentionally bypass the fold (a human placement wins; spec §5.6 flags contradictions instead — the QA listing for that arrives with Phase 2's scorecard).
 
-- [ ] **Step 6: Add the integration test**
+- [x] **Step 6: Add the integration test**
 
 Append to `tests/compiler-fold.test.mjs` (using the Task 4/5 state helpers): seed a MEL with `panel603` (ELECTRICAL / 603) and `rio650` (I&C / 650), record a cable claim `rio650 → panel603` the way `recordSourceParentClaim` stores them (mirror `tests/hierarchy-correctness.test.mjs`), run `buildCanonicalModel()`, then assert:
 
@@ -463,7 +463,7 @@ assert.equal(rec.ssmParentTag, '', 'RIO must root — no structural parent')
 assert.ok([...rec.dependencies].some(d => tagKey(d) === tagKey('PANEL-603-TAG')))
 ```
 
-- [ ] **Step 7: Full suite, rebuild, commit**
+- [x] **Step 7: Full suite, rebuild, commit**
 
 ```bash
 npm test 2>&1 | tail -3 && npm run build
@@ -477,7 +477,7 @@ git commit -m "feat: partition fold — cross-UPN/discipline feeders demote to d
 - Modify: `src/export/xlsx.js` (`addSsm3Sheet` gains System/Building/Discipline columns; new `addCompletedMelSheet`)
 - Test: `tests/compiler-exports.test.mjs`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/compiler-exports.test.mjs`, following the sheet-assertion pattern of existing export coverage (`grep -n "addSsm3Sheet\|aoa" tests/*.test.mjs` for the established way to build a workbook and read rows back):
 
@@ -497,9 +497,9 @@ test('completed MEL sheet proposes parents with provenance and never overwrites 
 
 Flesh both out with the fixture from Task 6; the point under test: proposals fill blanks, contradictions flag rather than overwrite (spec §8.2).
 
-- [ ] **Step 2: Run — expect failure**
+- [x] **Step 2: Run — expect failure**
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/export/xlsx.js`:
 
@@ -528,13 +528,13 @@ function addCompletedMelSheet(wb) {
 
 Extend `addSsm3Sheet` (line ~120) so each row appends `melUpn(equip)`, `recordAttribute(record,'system')`, `recordAttribute(record,'building')`, `recordAttribute(record,'discipline')` after the existing four values, and call `addCompletedMelSheet(wb)` wherever the SSM workbook is assembled (same call site as `addSsm3Sheet`). Match the file's actual helper names — `melUpn` exists in `src/hierarchy/build.js:106`; import-style references are fine since the bundle is one scope, but keep the module's existing import lines consistent.
 
-- [ ] **Step 4: Run to green + full suite + rebuild**
+- [x] **Step 4: Run to green + full suite + rebuild**
 
 ```bash
 node --test tests/compiler-exports.test.mjs && npm test 2>&1 | tail -3 && npm run build
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A
@@ -543,20 +543,20 @@ git commit -m "feat: SSM register partition columns + Completed MEL backfill she
 
 ### Task 8: Phase 1 close-out
 
-- [ ] **Step 1: Full verification**
+- [x] **Step 1: Full verification**
 
 ```bash
 npm test 2>&1 | tail -5 && npm run build && git status --short
 ```
 Expected: `fail 0`, fresh artifact, clean tree after commit.
 
-- [ ] **Step 2: Update FORK.md with any deviations discovered during execution** (field-name differences, extra tests touched). Commit:
+- [x] **Step 2: Update FORK.md with any deviations discovered during execution** (field-name differences, extra tests touched). Commit:
 
 ```bash
 git add -A && git commit -m "docs: record phase 1 fork deviations"
 ```
 
-- [ ] **Step 3: Merge back to main**
+- [x] **Step 3: Merge back to main**
 
 ```bash
 git checkout main && git merge --no-ff feat/phase-1-compiler-core -m "feat: phase 1 — MEL-first fold engine (SSM Compiler core)"

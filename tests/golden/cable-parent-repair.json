@@ -1,0 +1,999 @@
+{
+  "roots": [
+    {
+      "name": "602 Medium Voltage",
+      "isId": false,
+      "isLoad": false,
+      "isInstrument": false,
+      "dep": "",
+      "kids": [
+        {
+          "name": "GIS-02",
+          "isId": false,
+          "isLoad": false,
+          "isInstrument": false,
+          "dep": "",
+          "kids": [
+            {
+              "name": "B14-CIM-0001",
+              "isId": false,
+              "isLoad": false,
+              "isInstrument": false,
+              "dep": "",
+              "kids": []
+            },
+            {
+              "name": "B14-MAH-01",
+              "isId": false,
+              "isLoad": false,
+              "isInstrument": false,
+              "dep": "",
+              "kids": [
+                {
+                  "name": "B14-PNL-0700",
+                  "isId": false,
+                  "isLoad": false,
+                  "isInstrument": false,
+                  "dep": "B14-MAH-01_SEC1",
+                  "kids": []
+                }
+              ]
+            },
+            {
+              "name": "B14-SCR-3300_SEC2",
+              "isId": false,
+              "isLoad": false,
+              "isInstrument": false,
+              "dep": "",
+              "kids": [
+                {
+                  "name": "B14-PNL-3301",
+                  "isId": false,
+                  "isLoad": false,
+                  "isInstrument": false,
+                  "dep": "",
+                  "kids": []
+                }
+              ]
+            },
+            {
+              "name": "B14-XFM-4001",
+              "isId": false,
+              "isLoad": false,
+              "isInstrument": false,
+              "dep": "",
+              "kids": [
+                {
+                  "name": "B14-LVS-4001",
+                  "isId": false,
+                  "isLoad": false,
+                  "isInstrument": false,
+                  "dep": "",
+                  "kids": []
+                }
+              ]
+            },
+            {
+              "name": "B14-XFM-4002",
+              "isId": false,
+              "isLoad": false,
+              "isInstrument": false,
+              "dep": "",
+              "kids": [
+                {
+                  "name": "B14-LVS-4002",
+                  "isId": false,
+                  "isLoad": false,
+                  "isInstrument": false,
+                  "dep": "",
+                  "kids": [
+                    {
+                      "name": "B14-DP-4400",
+                      "isId": false,
+                      "isLoad": false,
+                      "isInstrument": false,
+                      "dep": "B14-LVS-4002",
+                      "kids": [
+                        {
+                          "name": "MTR-4300",
+                          "isId": false,
+                          "isLoad": true,
+                          "isInstrument": false,
+                          "dep": "B14-DP-4400",
+                          "kids": []
+                        }
+                      ]
+                    },
+                    {
+                      "name": "MTR-4100",
+                      "isId": false,
+                      "isLoad": true,
+                      "isInstrument": false,
+                      "dep": "B14-LVS-4002",
+                      "kids": []
+                    },
+                    {
+                      "name": "MTR-4200",
+                      "isId": false,
+                      "isLoad": true,
+                      "isInstrument": false,
+                      "dep": "B14-LVS-4002",
+                      "kids": []
+                    },
+                    {
+                      "name": "SPACE-2",
+                      "isId": false,
+                      "isLoad": true,
+                      "isInstrument": false,
+                      "dep": "B14-LVS-4002",
+                      "kids": []
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "B14-XFM-4003",
+              "isId": false,
+              "isLoad": false,
+              "isInstrument": false,
+              "dep": "",
+              "kids": [
+                {
+                  "name": "B14-LVS-4003",
+                  "isId": false,
+                  "isLoad": false,
+                  "isInstrument": false,
+                  "dep": "",
+                  "kids": []
+                }
+              ]
+            },
+            {
+              "name": "B14-XFM-4005",
+              "isId": false,
+              "isLoad": false,
+              "isInstrument": false,
+              "dep": "",
+              "kids": [
+                {
+                  "name": "B14-LVS-4005",
+                  "isId": false,
+                  "isLoad": false,
+                  "isInstrument": false,
+                  "dep": "",
+                  "kids": [
+                    {
+                      "name": "MTR-4500",
+                      "isId": false,
+                      "isLoad": true,
+                      "isInstrument": false,
+                      "dep": "B14-LVS-4005",
+                      "kids": []
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "B14-XFM-4006",
+              "isId": false,
+              "isLoad": false,
+              "isInstrument": false,
+              "dep": "",
+              "kids": [
+                {
+                  "name": "B14-LVS-4006",
+                  "isId": false,
+                  "isLoad": false,
+                  "isInstrument": false,
+                  "dep": "",
+                  "kids": [
+                    {
+                      "name": "MTR-4600",
+                      "isId": false,
+                      "isLoad": true,
+                      "isInstrument": false,
+                      "dep": "B14-LVS-4006",
+                      "kids": []
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "B14-XFM-4007",
+              "isId": false,
+              "isLoad": false,
+              "isInstrument": false,
+              "dep": "",
+              "kids": [
+                {
+                  "name": "B14-PNL-0800",
+                  "isId": false,
+                  "isLoad": false,
+                  "isInstrument": false,
+                  "dep": "",
+                  "kids": [
+                    {
+                      "name": "MTR-4700",
+                      "isId": false,
+                      "isLoad": true,
+                      "isInstrument": false,
+                      "dep": "B14-PNL-0800",
+                      "kids": []
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "B14-XFM-5001",
+              "isId": false,
+              "isLoad": false,
+              "isInstrument": false,
+              "dep": "",
+              "kids": [
+                {
+                  "name": "B14-LVS-5002",
+                  "isId": false,
+                  "isLoad": false,
+                  "isInstrument": false,
+                  "dep": "",
+                  "kids": []
+                }
+              ]
+            },
+            {
+              "name": "B14-XFM-5003",
+              "isId": false,
+              "isLoad": false,
+              "isInstrument": false,
+              "dep": "",
+              "kids": [
+                {
+                  "name": "B14-LVS-5004_CPS",
+                  "isId": false,
+                  "isLoad": false,
+                  "isInstrument": false,
+                  "dep": "",
+                  "kids": []
+                }
+              ]
+            },
+            {
+              "name": "B14-XFM-5005",
+              "isId": false,
+              "isLoad": false,
+              "isInstrument": false,
+              "dep": "",
+              "kids": [
+                {
+                  "name": "B14-LVS-6009",
+                  "isId": false,
+                  "isLoad": false,
+                  "isInstrument": false,
+                  "dep": "",
+                  "kids": []
+                }
+              ]
+            },
+            {
+              "name": "B70-XFM-5006",
+              "isId": false,
+              "isLoad": false,
+              "isInstrument": false,
+              "dep": "",
+              "kids": [
+                {
+                  "name": "B70-LVS-7777",
+                  "isId": false,
+                  "isLoad": false,
+                  "isInstrument": false,
+                  "dep": "",
+                  "kids": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "register": [
+    [
+      "602 Medium Voltage",
+      "N/A",
+      "N/A"
+    ],
+    [
+      "GIS-02",
+      "602 Medium Voltage",
+      "N/A"
+    ],
+    [
+      "B14-XFM-4001",
+      "GIS-02",
+      "N/A"
+    ],
+    [
+      "B14-LVS-4001",
+      "B14-XFM-4001",
+      "N/A"
+    ],
+    [
+      "MTR-4100",
+      "B14-LVS-4002",
+      "B14-LVS-4002"
+    ],
+    [
+      "B14-XFM-4002",
+      "GIS-02",
+      "N/A"
+    ],
+    [
+      "B14-LVS-4002",
+      "B14-XFM-4002",
+      "N/A"
+    ],
+    [
+      "MTR-4200",
+      "B14-LVS-4002",
+      "B14-LVS-4002"
+    ],
+    [
+      "B14-XFM-4003",
+      "GIS-02",
+      "N/A"
+    ],
+    [
+      "B14-LVS-4003",
+      "B14-XFM-4003",
+      "N/A"
+    ],
+    [
+      "B14-DP-4400",
+      "B14-LVS-4002",
+      "B14-LVS-4002"
+    ],
+    [
+      "MTR-4300",
+      "B14-DP-4400",
+      "B14-DP-4400"
+    ],
+    [
+      "B14-XFM-4005",
+      "GIS-02",
+      "N/A"
+    ],
+    [
+      "B14-LVS-4005",
+      "B14-XFM-4005",
+      "N/A"
+    ],
+    [
+      "MTR-4500",
+      "B14-LVS-4005",
+      "B14-LVS-4005"
+    ],
+    [
+      "B14-XFM-4006",
+      "GIS-02",
+      "N/A"
+    ],
+    [
+      "B14-LVS-4006",
+      "B14-XFM-4006",
+      "N/A"
+    ],
+    [
+      "MTR-4600",
+      "B14-LVS-4006",
+      "B14-LVS-4006"
+    ],
+    [
+      "B14-SWG-9100",
+      "N/A",
+      "N/A"
+    ],
+    [
+      "B14-PNL-9101",
+      "B14-SWG-9100",
+      "N/A"
+    ],
+    [
+      "B14-XFM-4007",
+      "GIS-02",
+      "N/A"
+    ],
+    [
+      "B14-PNL-0800",
+      "B14-XFM-4007",
+      "N/A"
+    ],
+    [
+      "MTR-4700",
+      "B14-PNL-0800",
+      "B14-PNL-0800"
+    ],
+    [
+      "SPACE-2",
+      "B14-LVS-4002",
+      "B14-LVS-4002"
+    ],
+    [
+      "B14-XFM-5001",
+      "GIS-02",
+      "N/A"
+    ],
+    [
+      "B14-LVS-5002",
+      "B14-XFM-5001",
+      "N/A"
+    ],
+    [
+      "B14-XFM-5003",
+      "GIS-02",
+      "N/A"
+    ],
+    [
+      "B14-LVS-5004_CPS",
+      "B14-XFM-5003",
+      "N/A"
+    ],
+    [
+      "B14-XFM-5005",
+      "GIS-02",
+      "N/A"
+    ],
+    [
+      "B14-LVS-6009",
+      "B14-XFM-5005",
+      "N/A"
+    ],
+    [
+      "B70-XFM-5006",
+      "GIS-02",
+      "N/A"
+    ],
+    [
+      "B70-LVS-7777",
+      "B70-XFM-5006",
+      "N/A"
+    ],
+    [
+      "B14-CIM-0001",
+      "GIS-02",
+      "N/A"
+    ],
+    [
+      "B14-SCR-3300_SEC2",
+      "GIS-02",
+      "N/A"
+    ],
+    [
+      "B14-PNL-3301",
+      "B14-SCR-3300_SEC2",
+      "N/A"
+    ],
+    [
+      "B14-MAH-01",
+      "GIS-02",
+      "N/A"
+    ],
+    [
+      "B14-PNL-0700",
+      "B14-MAH-01",
+      "B14-MAH-01_SEC1"
+    ]
+  ],
+  "review": [
+    [
+      "B14-TIE-4600",
+      "MTR-4600",
+      "2",
+      []
+    ]
+  ],
+  "placements": [
+    [
+      "MTR-4500",
+      "unplaced",
+      "Cable Schedule",
+      "B14-LVS-4005",
+      "B99-UNKNOWN-DP",
+      "Cable Schedule parent chain does not connect to the existing hierarchy"
+    ],
+    [
+      "MTR-4600",
+      "unplaced",
+      "Cable Schedule",
+      "B14-LVS-4006",
+      "B14-TIE-4600",
+      "Cable Schedule parent chain contains a cycle"
+    ],
+    [
+      "B14-SWG-9100",
+      "unplaced",
+      "Hierarchy validation",
+      "Unplaced",
+      "",
+      "Only System Names can be top-level hierarchy items"
+    ]
+  ],
+  "compare": [],
+  "ssm": {
+    "roots": [
+      {
+        "name": "Unassigned Building",
+        "kind": "building",
+        "isId": false,
+        "isLoad": false,
+        "isInstrument": false,
+        "isSpare": false,
+        "isSpace": false,
+        "dep": "",
+        "kids": [
+          {
+            "name": "Electrical",
+            "kind": "discipline",
+            "isId": false,
+            "isLoad": false,
+            "isInstrument": false,
+            "isSpare": false,
+            "isSpace": false,
+            "dep": "",
+            "kids": [
+              {
+                "name": "602 Medium Voltage",
+                "kind": "system",
+                "isId": false,
+                "isLoad": false,
+                "isInstrument": false,
+                "isSpare": false,
+                "isSpace": false,
+                "dep": "",
+                "kids": [
+                  {
+                    "name": "B14-SWG-9100",
+                    "kind": "equipment",
+                    "isId": false,
+                    "isLoad": false,
+                    "isInstrument": false,
+                    "isSpare": false,
+                    "isSpace": false,
+                    "dep": "",
+                    "kids": [
+                      {
+                        "name": "B14-PNL-9101",
+                        "kind": "equipment",
+                        "isId": false,
+                        "isLoad": false,
+                        "isInstrument": false,
+                        "isSpare": false,
+                        "isSpace": false,
+                        "dep": "",
+                        "kids": []
+                      }
+                    ]
+                  },
+                  {
+                    "name": "GIS-02",
+                    "kind": "equipment",
+                    "isId": false,
+                    "isLoad": false,
+                    "isInstrument": false,
+                    "isSpare": false,
+                    "isSpace": false,
+                    "dep": "",
+                    "kids": [
+                      {
+                        "name": "B14-CIM-0001",
+                        "kind": "equipment",
+                        "isId": false,
+                        "isLoad": false,
+                        "isInstrument": false,
+                        "isSpare": false,
+                        "isSpace": false,
+                        "dep": "",
+                        "kids": []
+                      },
+                      {
+                        "name": "B14-MAH-01",
+                        "kind": "equipment",
+                        "isId": false,
+                        "isLoad": false,
+                        "isInstrument": false,
+                        "isSpare": false,
+                        "isSpace": false,
+                        "dep": "",
+                        "kids": [
+                          {
+                            "name": "B14-PNL-0700",
+                            "kind": "equipment",
+                            "isId": false,
+                            "isLoad": false,
+                            "isInstrument": false,
+                            "isSpare": false,
+                            "isSpace": false,
+                            "dep": "B14-MAH-01_SEC1",
+                            "kids": []
+                          }
+                        ]
+                      },
+                      {
+                        "name": "B14-SCR-3300_SEC2",
+                        "kind": "equipment",
+                        "isId": false,
+                        "isLoad": false,
+                        "isInstrument": false,
+                        "isSpare": false,
+                        "isSpace": false,
+                        "dep": "",
+                        "kids": [
+                          {
+                            "name": "B14-PNL-3301",
+                            "kind": "equipment",
+                            "isId": false,
+                            "isLoad": false,
+                            "isInstrument": false,
+                            "isSpare": false,
+                            "isSpace": false,
+                            "dep": "",
+                            "kids": []
+                          }
+                        ]
+                      },
+                      {
+                        "name": "B14-XFM-4001",
+                        "kind": "equipment",
+                        "isId": false,
+                        "isLoad": false,
+                        "isInstrument": false,
+                        "isSpare": false,
+                        "isSpace": false,
+                        "dep": "",
+                        "kids": [
+                          {
+                            "name": "B14-LVS-4001",
+                            "kind": "equipment",
+                            "isId": false,
+                            "isLoad": false,
+                            "isInstrument": false,
+                            "isSpare": false,
+                            "isSpace": false,
+                            "dep": "",
+                            "kids": []
+                          }
+                        ]
+                      },
+                      {
+                        "name": "B14-XFM-4002",
+                        "kind": "equipment",
+                        "isId": false,
+                        "isLoad": false,
+                        "isInstrument": false,
+                        "isSpare": false,
+                        "isSpace": false,
+                        "dep": "",
+                        "kids": [
+                          {
+                            "name": "B14-LVS-4002",
+                            "kind": "equipment",
+                            "isId": false,
+                            "isLoad": false,
+                            "isInstrument": false,
+                            "isSpare": false,
+                            "isSpace": false,
+                            "dep": "",
+                            "kids": [
+                              {
+                                "name": "B14-DP-4400",
+                                "kind": "equipment",
+                                "isId": false,
+                                "isLoad": false,
+                                "isInstrument": false,
+                                "isSpare": false,
+                                "isSpace": false,
+                                "dep": "B14-LVS-4002",
+                                "kids": [
+                                  {
+                                    "name": "MTR-4300",
+                                    "kind": "equipment",
+                                    "isId": false,
+                                    "isLoad": true,
+                                    "isInstrument": false,
+                                    "isSpare": false,
+                                    "isSpace": false,
+                                    "dep": "B14-DP-4400",
+                                    "kids": []
+                                  }
+                                ]
+                              },
+                              {
+                                "name": "MTR-4100",
+                                "kind": "equipment",
+                                "isId": false,
+                                "isLoad": true,
+                                "isInstrument": false,
+                                "isSpare": false,
+                                "isSpace": false,
+                                "dep": "B14-LVS-4002",
+                                "kids": []
+                              },
+                              {
+                                "name": "MTR-4200",
+                                "kind": "equipment",
+                                "isId": false,
+                                "isLoad": true,
+                                "isInstrument": false,
+                                "isSpare": false,
+                                "isSpace": false,
+                                "dep": "B14-LVS-4002",
+                                "kids": []
+                              },
+                              {
+                                "name": "SPACE-2",
+                                "kind": "equipment",
+                                "isId": false,
+                                "isLoad": true,
+                                "isInstrument": false,
+                                "isSpare": false,
+                                "isSpace": true,
+                                "dep": "B14-LVS-4002",
+                                "kids": []
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "name": "B14-XFM-4003",
+                        "kind": "equipment",
+                        "isId": false,
+                        "isLoad": false,
+                        "isInstrument": false,
+                        "isSpare": false,
+                        "isSpace": false,
+                        "dep": "",
+                        "kids": [
+                          {
+                            "name": "B14-LVS-4003",
+                            "kind": "equipment",
+                            "isId": false,
+                            "isLoad": false,
+                            "isInstrument": false,
+                            "isSpare": false,
+                            "isSpace": false,
+                            "dep": "",
+                            "kids": []
+                          }
+                        ]
+                      },
+                      {
+                        "name": "B14-XFM-4005",
+                        "kind": "equipment",
+                        "isId": false,
+                        "isLoad": false,
+                        "isInstrument": false,
+                        "isSpare": false,
+                        "isSpace": false,
+                        "dep": "",
+                        "kids": [
+                          {
+                            "name": "B14-LVS-4005",
+                            "kind": "equipment",
+                            "isId": false,
+                            "isLoad": false,
+                            "isInstrument": false,
+                            "isSpare": false,
+                            "isSpace": false,
+                            "dep": "",
+                            "kids": [
+                              {
+                                "name": "MTR-4500",
+                                "kind": "equipment",
+                                "isId": false,
+                                "isLoad": true,
+                                "isInstrument": false,
+                                "isSpare": false,
+                                "isSpace": false,
+                                "dep": "B14-LVS-4005",
+                                "kids": []
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "name": "B14-XFM-4006",
+                        "kind": "equipment",
+                        "isId": false,
+                        "isLoad": false,
+                        "isInstrument": false,
+                        "isSpare": false,
+                        "isSpace": false,
+                        "dep": "",
+                        "kids": [
+                          {
+                            "name": "B14-LVS-4006",
+                            "kind": "equipment",
+                            "isId": false,
+                            "isLoad": false,
+                            "isInstrument": false,
+                            "isSpare": false,
+                            "isSpace": false,
+                            "dep": "",
+                            "kids": [
+                              {
+                                "name": "MTR-4600",
+                                "kind": "equipment",
+                                "isId": false,
+                                "isLoad": true,
+                                "isInstrument": false,
+                                "isSpare": false,
+                                "isSpace": false,
+                                "dep": "B14-LVS-4006",
+                                "kids": []
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "name": "B14-XFM-4007",
+                        "kind": "equipment",
+                        "isId": false,
+                        "isLoad": false,
+                        "isInstrument": false,
+                        "isSpare": false,
+                        "isSpace": false,
+                        "dep": "",
+                        "kids": [
+                          {
+                            "name": "B14-PNL-0800",
+                            "kind": "equipment",
+                            "isId": false,
+                            "isLoad": false,
+                            "isInstrument": false,
+                            "isSpare": false,
+                            "isSpace": false,
+                            "dep": "",
+                            "kids": [
+                              {
+                                "name": "MTR-4700",
+                                "kind": "equipment",
+                                "isId": false,
+                                "isLoad": true,
+                                "isInstrument": false,
+                                "isSpare": false,
+                                "isSpace": false,
+                                "dep": "B14-PNL-0800",
+                                "kids": []
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "name": "B14-XFM-5001",
+                        "kind": "equipment",
+                        "isId": false,
+                        "isLoad": false,
+                        "isInstrument": false,
+                        "isSpare": false,
+                        "isSpace": false,
+                        "dep": "",
+                        "kids": [
+                          {
+                            "name": "B14-LVS-5002",
+                            "kind": "equipment",
+                            "isId": false,
+                            "isLoad": false,
+                            "isInstrument": false,
+                            "isSpare": false,
+                            "isSpace": false,
+                            "dep": "",
+                            "kids": []
+                          }
+                        ]
+                      },
+                      {
+                        "name": "B14-XFM-5003",
+                        "kind": "equipment",
+                        "isId": false,
+                        "isLoad": false,
+                        "isInstrument": false,
+                        "isSpare": false,
+                        "isSpace": false,
+                        "dep": "",
+                        "kids": [
+                          {
+                            "name": "B14-LVS-5004_CPS",
+                            "kind": "equipment",
+                            "isId": false,
+                            "isLoad": false,
+                            "isInstrument": false,
+                            "isSpare": false,
+                            "isSpace": false,
+                            "dep": "",
+                            "kids": []
+                          }
+                        ]
+                      },
+                      {
+                        "name": "B14-XFM-5005",
+                        "kind": "equipment",
+                        "isId": false,
+                        "isLoad": false,
+                        "isInstrument": false,
+                        "isSpare": false,
+                        "isSpace": false,
+                        "dep": "",
+                        "kids": [
+                          {
+                            "name": "B14-LVS-6009",
+                            "kind": "equipment",
+                            "isId": false,
+                            "isLoad": false,
+                            "isInstrument": false,
+                            "isSpare": false,
+                            "isSpace": false,
+                            "dep": "",
+                            "kids": []
+                          }
+                        ]
+                      },
+                      {
+                        "name": "B70-XFM-5006",
+                        "kind": "equipment",
+                        "isId": false,
+                        "isLoad": false,
+                        "isInstrument": false,
+                        "isSpare": false,
+                        "isSpace": false,
+                        "dep": "",
+                        "kids": [
+                          {
+                            "name": "B70-LVS-7777",
+                            "kind": "equipment",
+                            "isId": false,
+                            "isLoad": false,
+                            "isInstrument": false,
+                            "isSpare": false,
+                            "isSpace": false,
+                            "dep": "",
+                            "kids": []
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "stats": {
+      "nodes": 39,
+      "leaves": 17,
+      "maxDepth": 8,
+      "idCount": 0,
+      "sources": 1,
+      "deps": 9,
+      "loads": 7,
+      "instruments": 0,
+      "review": 4
+    }
+  },
+  "stats": {
+    "nodes": 35,
+    "leaves": 16,
+    "maxDepth": 6,
+    "rowsRead": 15,
+    "loads": 7,
+    "instruments": 0
+  }
+}
