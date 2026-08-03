@@ -107,28 +107,107 @@ export function addHierSheet(wb,name,roots,used){
 /* Exto SSM: UPN -> G, Equipment ID -> K, Closest Parent -> P, Dependencies -> AM (header row 2, data row 3).
    Load Description rows: Closest Parent blank, Dependency = equipment above. */
 export function addExtoSheet(wb,name,rows,used){
-  const G=6,K=10,P=15,AM=38,W=39,aoa=[];
+  /* Column layout is profile data (spec §8.1) so an upload-template revision
+     never requires code — the defaults reproduce the historical G/K/P/AM
+     layout, and a milestone column is emitted only when the map places one. */
+  const cfg=activeProfile().hierarchy&&activeProfile().hierarchy.extoColumns||{};
+  const G=cfg.upn??6,K=cfg.equipmentId??10,P=cfg.closestParent??15,AM=cfg.dependencies??38,MS=cfg.milestone??-1;
+  const W=Math.max(G,K,P,AM,MS)+1,aoa=[];
   aoa.push(new Array(W).fill(''));
-  const head=new Array(W).fill('');head[G]='UPN';head[K]='Equipment ID';head[P]='Closest Parent';head[AM]='Dependencies';aoa.push(head);
-  for(const r of filterSsm(rows)){const {equip,parent,dep}=ssmRegisterResolve(r);const row=new Array(W).fill('');row[G]=melUpn(equip);row[K]=equip;row[P]=registerDisplayValue(parent);row[AM]=registerDisplayValue(dep);aoa.push(row);}
+  const head=new Array(W).fill('');head[G]='UPN';head[K]='Equipment ID';head[P]='Closest Parent';head[AM]='Dependencies';if(MS>=0)head[MS]='L2 Milestone';aoa.push(head);
+  for(const r of filterSsm(rows)){
+    const {equip,parent,dep}=ssmRegisterResolve(r),record=MS>=0?canonicalRecord(equip):null;
+    const row=new Array(W).fill('');row[G]=melUpn(equip);row[K]=equip;row[P]=registerDisplayValue(parent);row[AM]=registerDisplayValue(dep);
+    if(MS>=0)row[MS]=record&&record.milestone?record.milestone.label:'';
+    aoa.push(row);
+  }
   const ws=XLSX.utils.aoa_to_sheet(aoa);
-  const cols=new Array(W).fill(0).map(()=>({wch:9}));cols[G]={wch:12};cols[K]={wch:26};cols[P]={wch:26};cols[AM]={wch:24};ws['!cols']=cols;
-  styleHeaderRow(ws,1);                                     // only the G/K/P/AM header cells are non-empty
+  const cols=new Array(W).fill(0).map(()=>({wch:9}));cols[G]={wch:12};cols[K]={wch:26};cols[P]={wch:26};cols[AM]={wch:24};if(MS>=0)cols[MS]={wch:34};ws['!cols']=cols;
+  styleHeaderRow(ws,1);                                     // only the mapped header cells are non-empty
   addSheet(wb,ws,name,used,2);
 }
 /* Plain SSM register: Equipment ID, Closest Parent, Dependencies, UPN, then the
    partition columns the Compiler groups by (spec §8.1). */
 export function addSsm3Sheet(wb,name,rows,used){
-  const aoa=[['Equipment ID','Closest Parent','Dependencies','UPN','System','Building','Discipline']];
+  const aoa=[['Equipment ID','Closest Parent','Dependencies','UPN','System','Building','Discipline','L2 Milestone','Sequence']];
   for(const r of filterSsm(rows)){
     const {equip,parent,dep}=ssmRegisterResolve(r),record=canonicalRecord(equip);
     aoa.push([equip,registerDisplayValue(parent),registerDisplayValue(dep),melUpn(equip),
-      record?recordAttribute(record,'system'):'',record?recordAttribute(record,'building'):'',record?recordAttribute(record,'discipline'):'']);
+      record?recordAttribute(record,'system'):'',record?recordAttribute(record,'building'):'',record?recordAttribute(record,'discipline'):'',
+      record&&record.milestone?record.milestone.label:'',record&&record.sequence!=null?record.sequence:'']);
   }
   const ws=XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols']=[{wch:28},{wch:28},{wch:24},{wch:12},{wch:24},{wch:14},{wch:14}];
+  ws['!cols']=[{wch:28},{wch:28},{wch:24},{wch:12},{wch:24},{wch:14},{wch:14},{wch:34},{wch:10}];
   styleHeaderRow(ws,0);setFilter(ws,0);
   addSheet(wb,ws,name,used,1);
+}
+/* UPN predecessor matrix (spec §8.3) — the contract "one pager", derived. */
+export function addPredecessorMatrixSheet(wb,used){
+  const precedence=S.upnPrecedence;
+  if(!precedence||(!precedence.edges.length&&!precedence.order.length))return;
+  const edgeAoa=[['Predecessor UPN','Successor UPN','Via']];
+  for(const edge of precedence.edges)edgeAoa.push([edge.from,edge.to,edge.via.join('; ')]);
+  if(precedence.cycles.length)edgeAoa.push(['CYCLE — review required',precedence.cycles.join(', '),'']);
+  const edgeWs=XLSX.utils.aoa_to_sheet(edgeAoa);
+  edgeWs['!cols']=[{wch:18},{wch:18},{wch:60}];styleHeaderRow(edgeWs,0);setFilter(edgeWs,0);
+  addSheet(wb,edgeWs,'UPN Predecessors',used,1);
+  const upns=[...new Set([...precedence.order,...precedence.cycles])];
+  const matrixAoa=[['Pred \\ Succ',...upns]];
+  for(const from of upns)matrixAoa.push([from,...upns.map(to=>precedence.edges.some(e=>e.from===from&&e.to===to)?'X':'')]);
+  const matrixWs=XLSX.utils.aoa_to_sheet(matrixAoa);
+  matrixWs['!cols']=[{wch:14},...upns.map(()=>({wch:8}))];styleHeaderRow(matrixWs,0);
+  addSheet(wb,matrixWs,'UPN Matrix',used,1);
+}
+/* QA scorecard + exceptions (spec §8.4): the acceptance-criteria KPIs computed
+   locally, so an upload arrives pre-green — or arrives with a precise list of
+   what is missing and which document unlocks it. */
+export function addQaSheets(wb,used){
+  const records=[...S.canonicalModel.values()].filter(record=>record.includeInRegister&&!record.isSyntheticRollup);
+  if(!records.length)return;
+  const total=records.length;
+  const withMel=records.filter(record=>record.mel).length;
+  const withParent=records.filter(record=>record.ssmParentTag).length;
+  const withDeps=records.filter(record=>record.dependencies.size).length;
+  const rungs=[1,2,3,4].map(rung=>records.filter(record=>record.milestone&&record.milestone.rung===rung).length);
+  const orphans=records.filter(record=>!record.ssmParentTag&&!record.dependencies.size);
+  const contradictions=[],cableMissing=[];
+  for(const row of S.melRows||[]){
+    const record=canonicalRecord(row.tag),asserted=clean(row.systemParent);
+    const derived=record&&record.ssmParentTag||'';
+    if(asserted&&derived&&tagKey(asserted)!==tagKey(derived))contradictions.push({tag:row.tag,asserted,derived});
+  }
+  for(const [loadLower,panel] of S.deps||[]){
+    const record=canonicalRecord(loadLower);
+    if(!record||!record.mel)cableMissing.push({load:loadLower,panel});
+  }
+  const cycles=S.upnPrecedence&&S.upnPrecedence.cycles||[];
+  const pct=count=>total?Math.round(count/total*1000)/10+'%':'—';
+  const scoreAoa=[['KPI','Value'],
+    ['Register rows (non-synthetic)',total],
+    ['Tag vs MEL validation',pct(withMel)],
+    ['Records with structural parent',pct(withParent)],
+    ['Records with dependencies',pct(withDeps)],
+    ['Milestone rung 1 (direct P6 equipment match)',rungs[0]],
+    ['Milestone rung 2 (explicit UPN column)',rungs[1]],
+    ['Milestone rung 3 (milestone-name pattern)',rungs[2]],
+    ['Milestone rung 4 (building-ready default)',rungs[3]],
+    ['Orphans (no parent, no dependencies)',orphans.length],
+    ['MEL assertions contradicting the wiring',contradictions.length],
+    ['Cable loads absent from the MEL',cableMissing.length],
+    ['UPN precedence cycles',cycles.length]];
+  const scoreWs=XLSX.utils.aoa_to_sheet(scoreAoa);
+  scoreWs['!cols']=[{wch:44},{wch:14}];styleHeaderRow(scoreWs,0);
+  addSheet(wb,scoreWs,'QA Scorecard',used,1);
+  const exceptionsAoa=[['Type','Subject','Detail']];
+  for(const upn of cycles)exceptionsAoa.push(['UPN cycle',upn,'Part of a precedence cycle — review dependencies']);
+  for(const record of orphans)exceptionsAoa.push(['Orphan',record.tag,'No parent and no dependencies resolved']);
+  for(const item of contradictions)exceptionsAoa.push(['MEL contradiction',item.tag,`wiring derives ${item.derived}; MEL asserts ${item.asserted}`]);
+  for(const item of cableMissing)exceptionsAoa.push(['Cable load absent from MEL',item.load,`fed from ${item.panel}`]);
+  if(exceptionsAoa.length>1){
+    const exWs=XLSX.utils.aoa_to_sheet(exceptionsAoa);
+    exWs['!cols']=[{wch:26},{wch:28},{wch:60}];styleHeaderRow(exWs,0);setFilter(exWs,0);
+    addSheet(wb,exWs,'QA Exceptions',used,1);
+  }
 }
 /* Completed MEL (spec §8.2) — the flywheel sheet: the MEL columns as imported,
    plus derived proposals with provenance. A blank System Parent cell gets the
@@ -248,7 +327,7 @@ export async function exportSSMXlsx(){
     const wb=XLSX.utils.book_new(),used=new Set();
     if(mode==='separate')S.sheets.forEach(sh=>addSsm3Sheet(wb,'SSM-'+sh.sheetName,resolvedRegisterRowsFor(sheetSsmRows(sh)),used));
     else addSsm3Sheet(wb,'SSM',S.ssmCombined,used);
-    addCompletedMelSheet(wb,used);
+    addCompletedMelSheet(wb,used);addPredecessorMatrixSheet(wb,used);addQaSheets(wb,used);
     addReviewSheet(wb,used);addPlacementReviewSheet(wb,used);addCompareSheet(wb,used);
     downloadBlob('ssm-export.xlsx',wbBlob(wb));
   }))toast(mode==='separate'?S.sheets.length+' SSM tabs exported':'SSM exported');

@@ -127,6 +127,9 @@ export function makeDefaultProfile(name){
          heuristic (top-down for electrical/LSS/security, bottom-up otherwise). */
       milestones:{upnPattern:'',buildingReadyLabel:'OP / Building Ready'},
       polarity:{},
+      /* EXTO upload column indexes (0-based). Defaults reproduce the
+         historical G/K/P/AM layout; milestone -1 = column not emitted. */
+      extoColumns:{upn:6,equipmentId:10,closestParent:15,dependencies:38,milestone:-1},
       roleParents:{LVS:'XFM',XFM:'GIS',GIS:'SYSTEM'},
       resolutionStrategy:isBuiltIn?'legacy-register':'source-priority',
       downstreamGapPolicy:isBuiltIn?'truncate':'bridge-review',

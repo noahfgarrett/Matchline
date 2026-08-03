@@ -23,7 +23,7 @@ function sheets(app) {
 test('register rows carry UPN, system, building, discipline', async () => {
   const app = await buildProjectApp(['easy-power.xlsx', 'compiler-cable.xlsx', 'compiler-mel.xlsx'])
   const { ssm } = sheets(app)
-  assert.deepEqual(ssm[0], ['Equipment ID', 'Closest Parent', 'Dependencies', 'UPN', 'System', 'Building', 'Discipline'])
+  assert.deepEqual(ssm[0], ['Equipment ID', 'Closest Parent', 'Dependencies', 'UPN', 'System', 'Building', 'Discipline', 'L2 Milestone', 'Sequence'])
   const rio = ssm.find(row => /RIO-6500/.test(row[0]))
   assert.ok(rio, 'seeded RIO row must be in the register')
   assert.equal(rio[1], 'N/A', 'RIO roots in its own system (register renders blank parents as N/A)')
