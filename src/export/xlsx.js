@@ -1,13 +1,13 @@
 import { clean, raf, sleep } from '../core/text.js'
 import { downloadBlob } from '../core/download.js'
-import { S } from '../state.js'
+import { S, tagKey } from '../state.js'
 import { ic } from '../ui/icons.js'
 import { activeProfile } from '../profile/schema.js'
 import { isSpaceName, isSpareName, kidsOf, nodeDep, nodeHidden } from '../profile/classify.js'
 import { hideOverlay, showOverlay, toast } from '../ui/progress.js'
 import { modeById } from '../hierarchy/modes.js'
 import { sheetRoots, sheetSsmRows } from '../hierarchy/tree.js'
-import { resolvedRegisterRowsFor } from '../hierarchy/projection.js'
+import { canonicalRecord, recordAttribute, resolvedRegisterRowsFor } from '../hierarchy/projection.js'
 import { activePlacements, melUpn, rawSubtreeCount, registerDisplayValue, sameWorkingDependencyValue, sameWorkingRegisterValue, ssmRegisterResolve, uniqueSsmRows } from '../hierarchy/build.js'
 import { placementState, sortReviewList } from '../review/panels.js'
 
@@ -116,14 +116,42 @@ export function addExtoSheet(wb,name,rows,used){
   styleHeaderRow(ws,1);                                     // only the G/K/P/AM header cells are non-empty
   addSheet(wb,ws,name,used,2);
 }
-/* Plain SSM: Equipment ID, Closest Parent, Dependencies, UPN side by side (A/B/C/D). */
+/* Plain SSM register: Equipment ID, Closest Parent, Dependencies, UPN, then the
+   partition columns the Compiler groups by (spec §8.1). */
 export function addSsm3Sheet(wb,name,rows,used){
-  const aoa=[['Equipment ID','Closest Parent','Dependencies','UPN']];
-  for(const r of filterSsm(rows)){const {equip,parent,dep}=ssmRegisterResolve(r);aoa.push([equip,registerDisplayValue(parent),registerDisplayValue(dep),melUpn(equip)]);}
+  const aoa=[['Equipment ID','Closest Parent','Dependencies','UPN','System','Building','Discipline']];
+  for(const r of filterSsm(rows)){
+    const {equip,parent,dep}=ssmRegisterResolve(r),record=canonicalRecord(equip);
+    aoa.push([equip,registerDisplayValue(parent),registerDisplayValue(dep),melUpn(equip),
+      record?recordAttribute(record,'system'):'',record?recordAttribute(record,'building'):'',record?recordAttribute(record,'discipline'):'']);
+  }
   const ws=XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols']=[{wch:28},{wch:28},{wch:24},{wch:12}];
+  ws['!cols']=[{wch:28},{wch:28},{wch:24},{wch:12},{wch:24},{wch:14},{wch:14}];
   styleHeaderRow(ws,0);setFilter(ws,0);
   addSheet(wb,ws,name,used,1);
+}
+/* Completed MEL (spec §8.2) — the flywheel sheet: the MEL columns as imported,
+   plus derived proposals with provenance. A blank System Parent cell gets the
+   derived parent proposed; a filled one is reproduced untouched, and a
+   disagreement with the wiring is flagged in the Contradiction column. */
+export function addCompletedMelSheet(wb,used){
+  if(!(S.melRows||[]).length)return;
+  const aoa=[['Equipment Tag','Equipment Description','Building','Discipline','UPN','System Description',
+    'System Parent Equipment Tag(s)','Proposed System Parent','Proposed Dependencies','Provenance','Contradiction']];
+  for(const row of S.melRows){
+    const record=canonicalRecord(row.tag),asserted=clean(row.systemParent);
+    const derived=record&&record.ssmParentTag||'';
+    const contradiction=asserted&&derived&&tagKey(asserted)!==tagKey(derived)
+      ?`wiring derives ${derived}; MEL asserts ${asserted}`:'';
+    aoa.push([row.tag,clean(row.description),clean(row.building),clean(row.discipline),clean(row.upn),clean(row.systemDescription),
+      asserted,asserted?'':derived,
+      record&&record.dependencies.size?[...record.dependencies].join('; '):'',
+      record&&record.provenance.length?record.provenance.join(' | '):'',contradiction]);
+  }
+  const ws=XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols']=[{wch:26},{wch:28},{wch:12},{wch:14},{wch:10},{wch:22},{wch:26},{wch:26},{wch:26},{wch:30},{wch:40}];
+  styleHeaderRow(ws,0);setFilter(ws,0);
+  addSheet(wb,ws,'Completed MEL',used,1);
 }
 /* Cross-Sheet Tag Review — Cable Schedule loads with no exact match in Easy Power. */
 export function addReviewSheet(wb,used){
@@ -220,6 +248,7 @@ export async function exportSSMXlsx(){
     const wb=XLSX.utils.book_new(),used=new Set();
     if(mode==='separate')S.sheets.forEach(sh=>addSsm3Sheet(wb,'SSM-'+sh.sheetName,resolvedRegisterRowsFor(sheetSsmRows(sh)),used));
     else addSsm3Sheet(wb,'SSM',S.ssmCombined,used);
+    addCompletedMelSheet(wb,used);
     addReviewSheet(wb,used);addPlacementReviewSheet(wb,used);addCompareSheet(wb,used);
     downloadBlob('ssm-export.xlsx',wbBlob(wb));
   }))toast(mode==='separate'?S.sheets.length+' SSM tabs exported':'SSM exported');

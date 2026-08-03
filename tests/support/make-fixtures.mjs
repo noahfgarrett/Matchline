@@ -53,7 +53,7 @@ const SHEETS = {
       ['Equipment Tag', 'Equipment Description', 'UPN', 'Bldg', 'System Parent Equipment Tag', 'Discipline', 'System Description', 'Project Phase'],
       ['B14-XFM-1234', 'Main transformer', '1234', 'B14', '', 'Electrical', 'Main Intake', 'New'],
       ['B14-LVS-1234', 'LV switchgear', '1234', 'B14', 'B14-XFM-1234', 'Electrical', 'Main Intake', 'New'],
-      ['MTR-9001', 'Supply fan motor', '2201', 'B14', '', 'Mechanical', 'Screening', 'New'],
+      ['MTR-9001', 'Supply fan motor', '2201', 'B14', 'B14-AHU-7002', 'Mechanical', 'Screening', 'New'],
       ['B14-AHU-7001', 'Air handler', '2201', 'B14', '', 'Mechanical', 'Screening', 'New'],
       ['B14-AHU-7002', 'Future air handler', '2201', 'B14', '', 'Mechanical', 'Screening', 'Future'],
       ['B14-RIO-6500', 'Remote IO panel', '650', 'B14', '', 'I&C', 'FMS Network', 'New'],
@@ -63,6 +63,7 @@ const SHEETS = {
     'Cable Schedule': [
       ['Load Name (To)', 'Panel (From)', 'Circuit_Number', 'Cable Tag'],
       ['B14-RIO-6500', 'B14-LVS-1234', '7', 'C-9001'],
+      ['MTR-9001', 'B14-AHU-7001', '8', 'C-9002'],
     ],
   },
   'pmd.xlsx': {

@@ -67,10 +67,14 @@ test('integration: cross-UPN cable feed roots the RIO with the panel as dependen
   assert.ok(rio.dependencies.some(d => /LVS-1234/.test(d)), `LVS feeder must be a dependency, got: ${rio.dependencies}`)
 })
 
-test('integration: mechanical load fed from electrical switchgear roots in its own system', async () => {
+test('integration: same-partition cable parent survives while the electrical feed demotes', async () => {
+  // MTR-9001: cable says AHU-7001 (same partition, wins the parent slot), Easy
+  // Power feeds it from LVS-1234 (Electrical / 1234 — demotes to dependency),
+  // and the MEL asserts AHU-7002 (loses to cable; surfaces as a contradiction
+  // in the Completed MEL export, not as a silent override).
   const app = await buildProjectApp(['easy-power.xlsx', 'compiler-cable.xlsx', 'compiler-mel.xlsx'])
   const mtr = canonicalRecordOf(app, 'MTR-9001')
-  assert.equal(mtr.ssmParentTag, '', 'MTR-9001 must root in 2201 Screening')
+  assert.equal(mtr.ssmParentTag, 'B14-AHU-7001', 'same-partition cable feed takes the parent slot')
   assert.ok(mtr.dependencies.some(d => /LVS-1234/.test(d)), `LVS feeder must be a dependency, got: ${mtr.dependencies}`)
 })
 
