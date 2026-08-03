@@ -45,6 +45,26 @@ const SHEETS = {
       ['B14-SCR-2201', 'UPN-2201', 'B14', '', 'I&C', 'Screening'],
     ],
   },
+  /* Compiler-fork fixtures: a MEL that is the seed universe (MEL-only rows,
+     Project Phase gating, cross-UPN feeds for the partition fold) plus the
+     cable row that feeds an I&C panel from an Electrical UPN. */
+  'compiler-mel.xlsx': {
+    Equipment_List: [
+      ['Equipment Tag', 'Equipment Description', 'UPN', 'Bldg', 'System Parent Equipment Tag', 'Discipline', 'System Description', 'Project Phase'],
+      ['B14-XFM-1234', 'Main transformer', '1234', 'B14', '', 'Electrical', 'Main Intake', 'New'],
+      ['B14-LVS-1234', 'LV switchgear', '1234', 'B14', 'B14-XFM-1234', 'Electrical', 'Main Intake', 'New'],
+      ['MTR-9001', 'Supply fan motor', '2201', 'B14', '', 'Mechanical', 'Screening', 'New'],
+      ['B14-AHU-7001', 'Air handler', '2201', 'B14', '', 'Mechanical', 'Screening', 'New'],
+      ['B14-AHU-7002', 'Future air handler', '2201', 'B14', '', 'Mechanical', 'Screening', 'Future'],
+      ['B14-RIO-6500', 'Remote IO panel', '650', 'B14', '', 'I&C', 'FMS Network', 'New'],
+    ],
+  },
+  'compiler-cable.xlsx': {
+    'Cable Schedule': [
+      ['Load Name (To)', 'Panel (From)', 'Circuit_Number', 'Cable Tag'],
+      ['B14-RIO-6500', 'B14-LVS-1234', '7', 'C-9001'],
+    ],
+  },
   'pmd.xlsx': {
     'INSTALL PMD': [
       ['PANEL', 'INSTRUMENT TAG', 'CARD', 'POINT TYPE', 'DESCRIPTION'],

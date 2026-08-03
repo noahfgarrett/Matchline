@@ -78,7 +78,7 @@ export function buildCanonicalModel(){
     if(!record){record={key,tag,sourceTags:new Set(),occurrences:[],flowParents:new Set(),registerParents:new Set(),dependencies:new Set(),
       isId:false,isLoad:false,isInstrument:false,pmdKey:'',pmdPanel:'',pmdBuilding:'',description:'',systemHint:'',sourceKind:'easyPower',
       mel:null,parentCandidates:{},context:null,attributes:{},ssmParentTag:'',provenance:[],resolution:null,
-      observed:false,hasRegisterRow:false,includeInHierarchy:false,includeInRegister:false};records.set(key,record);}
+      observed:false,hasRegisterRow:false,includeInHierarchy:false,includeInRegister:false,phaseExcluded:false};records.set(key,record);}
     if(preserved&&preserved!==normalized)record.tag=preserved;
     if(flags.observed)record.observed=true;
     if(flags.hierarchy)record.includeInHierarchy=true;
@@ -110,6 +110,20 @@ export function buildCanonicalModel(){
     const resolved=ssmResolve(row),record=ensure(resolved.equip,{observed:true,hierarchy:true,register:true});if(!record)continue;
     if(resolved.parent){record.registerParents.add(cleanRegisterTag(resolved.parent));ensure(resolved.parent);}
     if(resolved.dep)record.dependencies.add(cleanRegisterTag(resolved.dep));
+  }
+  /* Compiler fork — MEL-first seeding (spec §4): every MEL row is a
+     commissionable record, whether or not any electrical source mentions it.
+     Excluded phases stay out of the register but remain records so edges can
+     still attach and lint can still see them. */
+  const melSeed=activeProfile().hierarchy&&activeProfile().hierarchy.melSeed;
+  if(melSeed&&melSeed.enabled!==false){
+    const excludedPhases=new Set((melSeed.excludedPhases||['Future']).map(phase=>clean(phase).toLowerCase()));
+    for(const row of S.melRows||[]){
+      const record=ensure(row.tag,{observed:true});if(!record)continue;
+      const phase=clean(row.projectPhase).toLowerCase();
+      record.phaseExcluded=!!phase&&excludedPhases.has(phase);
+      if(!record.phaseExcluded){record.includeInRegister=true;record.includeInHierarchy=true;}
+    }
   }
   /* Trailing System Parent tags. The first became the structural parent claim
      in buildMel; these are additive, so they join the dependency set the cable

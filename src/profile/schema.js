@@ -119,6 +119,9 @@ export function makeDefaultProfile(name){
       disciplineFallbacks:{instrument:'I&C',default:'Electrical'},
       systemFallbacks:{Electrical:'602 Medium Voltage','I&C':'Instrumentation',default:'Unassigned System'},
       parentSourcePriority:['cable','mel','easyPower','pmd'],
+      /* Compiler fork: the MEL is the seed universe (spec §4). Off for Eagle,
+         which reproduces the frozen Easy-Power-seeded SSM Builder register. */
+      melSeed:{enabled:!isBuiltIn,excludedPhases:['Future']},
       roleParents:{LVS:'XFM',XFM:'GIS',GIS:'SYSTEM'},
       resolutionStrategy:isBuiltIn?'legacy-register':'source-priority',
       downstreamGapPolicy:isBuiltIn?'truncate':'bridge-review',
