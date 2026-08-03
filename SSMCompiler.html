@@ -4983,7 +4983,7 @@ function ic(name,cls){return `<svg class="ic ${cls||''}" viewBox="0 0 24 24" fil
 
 
 
-const S={screen:'upload',files:[],selected:new Set(),cableSel:new Set(),pmdSel:new Set(),melSel:new Set(),override:{},aoaCache:new Map(),
+const S={screen:'upload',files:[],selected:new Set(),cableSel:new Set(),pmdSel:new Set(),melSel:new Set(),p6Sel:new Set(),lineSel:new Set(),override:{},aoaCache:new Map(),
   roots:[],rawCombined:null,sheets:[],ssmCombined:[],nodeById:new Map(),stats:null,search:'',idOnly:false,
   showSpares:true,showSpaces:true,showDeps:true,showPmdMatches:true,deps:new Map(),depDetail:new Map(),hasCable:false,
   cableStruckTags:new Set(),
@@ -5486,6 +5486,11 @@ function makeDefaultProfile(name){
       /* Compiler fork: the MEL is the seed universe (spec §4). Off for Eagle,
          which reproduces the frozen Easy-Power-seeded SSM Builder register. */
       melSeed:{enabled:!isBuiltIn,excludedPhases:['Future']},
+      /* Milestone ladder (spec §6a): custom UPN pattern is optional — blank
+         uses the built-in default. Polarity map overrides the discipline-name
+         heuristic (top-down for electrical/LSS/security, bottom-up otherwise). */
+      milestones:{upnPattern:'',buildingReadyLabel:'OP / Building Ready'},
+      polarity:{},
       roleParents:{LVS:'XFM',XFM:'GIS',GIS:'SYSTEM'},
       resolutionStrategy:isBuiltIn?'legacy-register':'source-priority',
       downstreamGapPolicy:isBuiltIn?'truncate':'bridge-review',
@@ -7918,6 +7923,66 @@ async function collectLoadDescriptionTags(keys,tick){
   return tags;
 }
 
+/* ==== src/io/p6.js ==== */
+
+
+
+
+/* ---- P6 schedule ingestion (spec §3 input 5) ----
+   Strictly optional: nothing downstream may require P6 data. XER is P6's
+   native plain-text export — %T names a table, %F lists its fields, %R is a
+   row. Only TASK and TASKPRED matter here. */
+function parseXer(text){
+  const tasks=[],links=[];
+  let table='',fields=[];
+  for(const line of String(text||'').split(/\r?\n/)){
+    const cells=line.split('\t'),marker=cells[0];
+    if(marker==='%T'){table=clean(cells[1]).toUpperCase();fields=[];continue;}
+    if(marker==='%F'){fields=cells.slice(1).map(f=>clean(f).toLowerCase());continue;}
+    if(marker!=='%R')continue;
+    const row={};fields.forEach((field,i)=>{row[field]=clean(cells[i+1]);});
+    if(table==='TASK'){
+      tasks.push({id:row.task_id||'',code:row.task_code||'',name:row.task_name||'',
+        milestone:/^TT_(Mile|FinMile)$/i.test(row.task_type||'')});
+    }else if(table==='TASKPRED'){
+      links.push({taskId:row.task_id||'',predTaskId:row.pred_task_id||''});
+    }
+  }
+  return {tasks,links};
+}
+function p6NormHeader(value){return clean(value).toLowerCase().replace(/[^a-z0-9]+/g,'');}
+function detectP6(headers){
+  const norm=headers.map(p6NormHeader);
+  const activityId=norm.findIndex(h=>h==='activityid');
+  const activityName=norm.findIndex(h=>h==='activityname');
+  if(activityId<0||activityName<0)return null;
+  const equipmentId=norm.findIndex(h=>h==='equipmentid'||h==='equipmenttag');
+  const upn=norm.findIndex(h=>h==='upn'||h.startsWith('upn'));
+  return {activityId,activityName,equipmentId,upn};
+}
+const _p6Cache=new Map();
+function p6Info(key){
+  if(_p6Cache.has(key))return _p6Cache.get(key);
+  const {aoa}=getAoa(key),res=scanMappedHeader(aoa,detectP6,30);
+  _p6Cache.set(key,res);return res;
+}
+function isP6Sheet(key){return !!p6Info(key);}
+/* Rows from one selected P6 XLSX sheet, in parseXer's task shape. An activity
+   sheet has no task_type column, so milestone detection falls to the name
+   pattern in the ladder; an explicit equipment/UPN column rides along. */
+function p6SheetTasks(key){
+  const info=p6Info(key);if(!info)return [];
+  const {map,headerRow}=info,{aoa}=getAoa(key),tasks=[];
+  for(let i=headerRow+1;i<aoa.length;i++){
+    const row=aoa[i]||[],code=clean(row[map.activityId]),name=clean(row[map.activityName]);
+    if(!code&&!name)continue;
+    tasks.push({id:code,code,name,milestone:false,
+      equipmentId:map.equipmentId>=0?clean(row[map.equipmentId]):'',
+      upn:map.upn>=0?clean(row[map.upn]):''});
+  }
+  return tasks;
+}
+
 /* ==== src/legend/corpus.js ==== */
 
 /* cleanTagRaw, deliberately NOT cleanTag. cleanTag is
@@ -9813,7 +9878,145 @@ function recordCompilerCableEdges(records) {
   }
 }
 
+/* ==== src/compiler/ladders.js ==== */
+
+
+
+
+
+
+/* ---- Milestone fallback ladder (spec §6a) ----
+   Every record gets a milestone at every input maturity level:
+     rung 1 — a P6 activity carries this equipment ID explicitly
+     rung 2 — a P6 milestone carries this record's UPN in an explicit column
+     rung 3 — the UPN is extracted from a milestone name by pattern
+     rung 4 — no L2 found: the building-ready bucket (the SOP's own default)
+   An immature or absent P6 just lands more records on lower rungs; the next
+   recompile with a fuller schedule promotes them. */
+
+function collectP6(){
+  const tasks=[];
+  for(const file of S.files||[])if(file.p6)tasks.push(...file.p6.tasks);
+  for(const key of S.p6Sel||[])tasks.push(...p6SheetTasks(key));
+  return {tasks};
+}
+
+function assignMilestones(records){
+  const hierarchy=activeProfile().hierarchy||{},cfg=hierarchy.milestones||{};
+  const buildingReady=clean(cfg.buildingReadyLabel)||'OP / Building Ready';
+  const upnPattern=new RegExp(cfg.upnPattern||'\\bUPN\\s*[-#]?\\s*([A-Za-z0-9.-]+)','i');
+  const {tasks}=collectP6();
+  /* Milestone-flagged tasks claim a UPN first; unflagged activities only fill
+     gaps, so a task row never shadows a real L2 milestone. */
+  const byTag=new Map(),byUpn=new Map();
+  const claimUpn=(upnValue,task,rung)=>{
+    const key=melUpnKey(upnValue);if(!key||byUpn.has(key))return;
+    byUpn.set(key,{task,rung});
+  };
+  const ordered=[...tasks].sort((a,b)=>(b.milestone?1:0)-(a.milestone?1:0));
+  for(const task of ordered){
+    if(task.equipmentId){const key=tagKey(task.equipmentId);if(key&&!byTag.has(key))byTag.set(key,task);}
+    if(task.upn)claimUpn(task.upn,task,2);
+    const match=(task.name||'').match(upnPattern);
+    if(match)claimUpn(match[1],task,3);
+  }
+  for(const record of records.values()){
+    const direct=byTag.get(record.key);
+    if(direct){record.milestone={label:direct.name||direct.code,rung:1};continue;}
+    const upnKey=record.mel?melUpnKey(record.mel.upn||''):'';
+    const viaUpn=upnKey&&byUpn.get(upnKey);
+    if(viaUpn){record.milestone={label:viaUpn.task.name||viaUpn.task.code,rung:viaUpn.rung};continue;}
+    record.milestone={label:buildingReady,rung:4};
+  }
+}
+
+/* ==== src/compiler/sequence.js ==== */
+
+
+
+
+
+/* ---- Sequencing (spec §5 "Sequencing") ----
+   Within a system block: topological order of the structural tree, direction
+   set by discipline polarity — Electrical/LSS/Security commission top-down
+   (parents before children: LVSS → transformer → panelboard), Mechanical/I&C
+   bottom-up (children before parents: TETs before the MAH). Across systems:
+   cross-partition dependencies collapse to UPN precedence edges and a Kahn
+   topological sort gives the startup order; cycles are review items. */
+
+function disciplinePolarity(discipline,profile){
+  const hierarchy=(profile||activeProfile()).hierarchy||{},map=hierarchy.polarity||{};
+  const configured=map[discipline]||map[clean(discipline)];
+  if(configured==='top-down'||configured==='bottom-up')return configured;
+  return /elec|lss|security|fire/i.test(discipline||'')?'top-down':'bottom-up';
+}
+
+function groupKeyOf(record){return [record.building||'',record.discipline||'',record.system||''].join('');}
+
+function computeSequence(records,profile){
+  const groups=new Map();
+  for(const record of records.values()){
+    if(!record.includeInRegister)continue;
+    const key=groupKeyOf(record);
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push(record);
+  }
+  for(const members of groups.values()){
+    const byKey=new Map(members.map(record=>[record.key,record]));
+    const children=new Map(members.map(record=>[record.key,[]]));
+    const roots=[];
+    for(const record of members){
+      const parent=byKey.get(tagKey(record.ssmParentTag));
+      if(parent)children.get(parent.key).push(record);
+      else roots.push(record);
+    }
+    const sortRecords=list=>list.sort((a,b)=>natCmp(a.tag,b.tag));
+    sortRecords(roots);for(const list of children.values())sortRecords(list);
+    const polarity=disciplinePolarity(members[0].discipline,profile);
+    let index=0;
+    const walk=record=>{
+      if(polarity==='top-down')record.sequence=++index;
+      for(const child of children.get(record.key))walk(child);
+      if(polarity!=='top-down')record.sequence=++index;
+    };
+    roots.forEach(walk);
+  }
+}
+
+function upnPrecedence(records){
+  const edges=new Map(),nodes=new Set();
+  for(const record of records.values()){
+    const upn=record.mel?melUpnKey(record.mel.upn||''):'';
+    if(!upn)continue;
+    nodes.add(upn);
+    for(const dependency of record.dependencies){
+      const target=records.get(tagKey(dependency));
+      const depUpn=target&&target.mel?melUpnKey(target.mel.upn||''):'';
+      if(!depUpn||depUpn===upn)continue;
+      nodes.add(depUpn);
+      const edgeKey=depUpn+''+upn;
+      if(!edges.has(edgeKey))edges.set(edgeKey,{from:depUpn,to:upn,via:[]});
+      edges.get(edgeKey).via.push(`${clean(dependency)} → ${record.tag}`);
+    }
+  }
+  /* Kahn's algorithm; whatever cannot be scheduled is cyclic and goes to review. */
+  const inDegree=new Map([...nodes].map(node=>[node,0])),outbound=new Map([...nodes].map(node=>[node,[]]));
+  for(const {from,to} of edges.values()){inDegree.set(to,inDegree.get(to)+1);outbound.get(from).push(to);}
+  const queue=[...nodes].filter(node=>!inDegree.get(node)).sort(natCmp),order=[];
+  while(queue.length){
+    const node=queue.shift();order.push(node);
+    for(const next of outbound.get(node)){
+      inDegree.set(next,inDegree.get(next)-1);
+      if(!inDegree.get(next)){queue.push(next);queue.sort(natCmp);}
+    }
+  }
+  const cycles=[...nodes].filter(node=>!order.includes(node)).sort(natCmp);
+  return {edges:[...edges.values()],order,cycles};
+}
+
 /* ==== src/hierarchy/projection.js ==== */
+
+
 
 
 
@@ -10064,6 +10267,16 @@ function buildCanonicalModel(){
     inherited.add(record.key);
   };
   for(const record of records.values())inherit(record,new Set());
+  /* Compiler fork — milestone ladder + sequencing (spec §5/§6), after
+     attribute inheritance so grouping is final. P6 is strictly optional:
+     without it every record lands on the building-ready rung. */
+  if(melSeed&&melSeed.enabled!==false){
+    assignMilestones(records);
+    computeSequence(records,profile);
+    S.upnPrecedence=upnPrecedence(records);
+  }else{
+    S.upnPrecedence={edges:[],order:[],cycles:[]};
+  }
   if(profile.hierarchy&&profile.hierarchy.resolutionStrategy!=='legacy-register'){
     S.ssmCombined=resolvedRegisterRows(S.ssmCombined,records);
   }
@@ -12499,6 +12712,7 @@ function exportOutlineTxt(){
 
 
 
+
 /* ---- steps / routing ---- */
 function renderSteps(){
   const order=['upload','sheets','result'],labels={upload:'Files',sheets:'Sheets',result:'Hierarchy'};
@@ -12692,7 +12906,7 @@ function renderFileList(){
   const hint=$('#uphint');if(hint)hint.textContent=okFiles.length?`${okFiles.length} file${okFiles.length!==1?'s':''} · ${tabs} tab${tabs!==1?'s':''} ready`:'';
   const cont=$('#toSheets');if(cont)cont.disabled=okFiles.length===0;
   const clr=$('#clearall');if(clr)clr.style.display=S.files.length?'':'none';
-  $$('#filelist .xbtn').forEach(b=>b.onclick=()=>{const id=b.dataset.id;S.files=S.files.filter(f=>f.id!==id);[...S.selected,...S.cableSel,...S.pmdSel,...S.melSel].forEach(k=>{if(k.split(KEYSEP)[0]===id){S.selected.delete(k);S.cableSel.delete(k);S.pmdSel.delete(k);S.melSel.delete(k);}});invalidateHierarchyBuild();renderFileList();});
+  $$('#filelist .xbtn').forEach(b=>b.onclick=()=>{const id=b.dataset.id;S.files=S.files.filter(f=>f.id!==id);[...S.selected,...S.cableSel,...S.pmdSel,...S.melSel,...S.p6Sel,...S.lineSel].forEach(k=>{if(k.split(KEYSEP)[0]===id){S.selected.delete(k);S.cableSel.delete(k);S.pmdSel.delete(k);S.melSel.delete(k);S.p6Sel.delete(k);S.lineSel.delete(k);}});invalidateHierarchyBuild();renderFileList();});
 }
 function wireUpload(){
   const dz=$('#dz'),input=$('#file');
@@ -12704,7 +12918,7 @@ function wireUpload(){
   ['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('drag');}));
   ['dragleave','dragend'].forEach(ev=>dz.addEventListener(ev,e=>{if(e.target===dz)dz.classList.remove('drag');}));
   dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag');addFiles([...e.dataTransfer.files]);});
-  $('#clearall').onclick=()=>{S.files=[];S.aoaCache.clear();S.selected.clear();S.cableSel.clear();S.pmdSel.clear();S.melSel.clear();S.override={};S.workCopy=null;S.wcRows=null;invalidateHierarchyBuild();renderFileList();renderWorkCopy();};
+  $('#clearall').onclick=()=>{S.files=[];S.aoaCache.clear();S.selected.clear();S.cableSel.clear();S.pmdSel.clear();S.melSel.clear();S.p6Sel.clear();S.lineSel.clear();S.override={};S.workCopy=null;S.wcRows=null;invalidateHierarchyBuild();renderFileList();renderWorkCopy();};
   $('#toSheets').onclick=async()=>{if($('#toSheets').disabled)return;await prewarmSheets();go('sheets');};
 }
 async function addFiles(fileObjs){
@@ -12716,8 +12930,15 @@ async function addFiles(fileObjs){
       report(i/accepted.length,`File ${i+1} of ${accepted.length}`);await raf();
       const ext=(file.name.split('.').pop()||'').toLowerCase();
       const rec={id:'f'+(_uid++),name:file.name,ext,size:file.size,wb:null,sheets:[],strikes:new Map(),error:null};
-      try{const buf=await readArrayBuffer(file),bytes=new Uint8Array(buf),wb=XLSX.read(bytes,{type:'array'});
-        rec.wb=wb;rec.strikes=extractStrikeCells(bytes);rec.sheets=wb.SheetNames.slice();if(!rec.sheets.length)rec.error='No readable tabs found';
+      try{const buf=await readArrayBuffer(file),bytes=new Uint8Array(buf);
+        if(ext==='xer'){
+          /* P6's native export is plain tab-delimited text, not a workbook. */
+          rec.p6=parseXer(new TextDecoder().decode(bytes));
+          if(!rec.p6.tasks.length)rec.error='No TASK rows found in this XER file';
+        }else{
+          const wb=XLSX.read(bytes,{type:'array'});
+          rec.wb=wb;rec.strikes=extractStrikeCells(bytes);rec.sheets=wb.SheetNames.slice();if(!rec.sheets.length)rec.error='No readable tabs found';
+        }
       }catch(err){rec.error='Could not read this file';}
       S.files.push(rec);
     }
@@ -12740,6 +12961,7 @@ async function prewarmSheets(){
   allKeys().forEach(k=>{if(!isPmdSheet(k)&&!isMelSheet(k)&&isCableSheet(k))S.cableSel.add(k);});
   S.files.forEach(f=>{if(isPmdFile(f))f.sheets.forEach(s=>{const key=f.id+KEYSEP+s;if(normH(s)===PMD_SHEET_NAME)S.pmdSel.add(key);});});
   allKeys().forEach(k=>{if(isMelSheet(k))S.melSel.add(k);});
+  allKeys().forEach(k=>{if(!isMelSheet(k)&&!isCableSheet(k)&&!isPmdSheet(k)&&isP6Sheet(k))S.p6Sel.add(k);});
 }
 
 /* ---- sheets screen ---- */

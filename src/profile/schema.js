@@ -122,6 +122,11 @@ export function makeDefaultProfile(name){
       /* Compiler fork: the MEL is the seed universe (spec §4). Off for Eagle,
          which reproduces the frozen Easy-Power-seeded SSM Builder register. */
       melSeed:{enabled:!isBuiltIn,excludedPhases:['Future']},
+      /* Milestone ladder (spec §6a): custom UPN pattern is optional — blank
+         uses the built-in default. Polarity map overrides the discipline-name
+         heuristic (top-down for electrical/LSS/security, bottom-up otherwise). */
+      milestones:{upnPattern:'',buildingReadyLabel:'OP / Building Ready'},
+      polarity:{},
       roleParents:{LVS:'XFM',XFM:'GIS',GIS:'SYSTEM'},
       resolutionStrategy:isBuiltIn?'legacy-register':'source-priority',
       downstreamGapPolicy:isBuiltIn?'truncate':'bridge-review',

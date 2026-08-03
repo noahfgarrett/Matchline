@@ -17,10 +17,17 @@ export async function buildProjectApp(files) {
     PROFILE_STORE.activeId = SITE.id;
     setRuleProfile(activeProfile());
   `)
-  const payload = files.map(f => ({ name: f, bytes: [...readFileSync(resolve(rootDir, 'tests/fixtures', f))] }))
+  const payload = files.map(f => f.endsWith('.xer')
+    ? { name: f, text: readFileSync(resolve(rootDir, 'tests/fixtures', f), 'utf8') }
+    : { name: f, bytes: [...readFileSync(resolve(rootDir, 'tests/fixtures', f))] })
   app.eval(`globalThis.__fixtures = ${JSON.stringify(payload)}`)
   await app.evalAsync(`
     for (const fx of __fixtures) {
+      if (fx.text != null) {
+        S.files.push({ id: 'f' + S.files.length, name: fx.name, ext: 'xer', size: fx.text.length,
+          wb: null, sheets: [], strikes: new Map(), error: null, p6: parseXer(fx.text) });
+        continue;
+      }
       const bytes = new Uint8Array(fx.bytes);
       const wb = XLSX.read(bytes, { type: 'array' });
       S.files.push({ id: 'f' + S.files.length, name: fx.name, ext: 'xlsx', size: bytes.length, wb,
@@ -43,6 +50,7 @@ export function canonicalRecordOf(app, tag) {
         includeInHierarchy: r.includeInHierarchy, phaseExcluded: !!r.phaseExcluded,
         ssmParentTag: r.ssmParentTag, dependencies: [...r.dependencies],
         building: r.building, discipline: r.discipline, system: r.system,
+        milestone: r.milestone || null, sequence: r.sequence ?? null,
         explicit: r.context ? r.context.explicit : null } : null;
     })())
   `))

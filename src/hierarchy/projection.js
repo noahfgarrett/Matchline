@@ -10,6 +10,8 @@ import { createMemoryLookup } from '../rules/lookup.js'
 import { resolveHierarchyClaims, HIERARCHY_CLAIM_KIND } from './claims.js'
 import { foldClaimsByPartition, recordPartitionKey } from '../compiler/fold.js'
 import { recordCompilerCableEdges } from '../compiler/edges.js'
+import { assignMilestones } from '../compiler/ladders.js'
+import { computeSequence, upnPrecedence } from '../compiler/sequence.js'
 
 /* ---- canonical equipment model and projections ---- */
 const PROFILE_SOURCE_ORDER=['cable','mel','easyPower','pmd'];
@@ -248,6 +250,16 @@ export function buildCanonicalModel(){
     inherited.add(record.key);
   };
   for(const record of records.values())inherit(record,new Set());
+  /* Compiler fork — milestone ladder + sequencing (spec §5/§6), after
+     attribute inheritance so grouping is final. P6 is strictly optional:
+     without it every record lands on the building-ready rung. */
+  if(melSeed&&melSeed.enabled!==false){
+    assignMilestones(records);
+    computeSequence(records,profile);
+    S.upnPrecedence=upnPrecedence(records);
+  }else{
+    S.upnPrecedence={edges:[],order:[],cycles:[]};
+  }
   if(profile.hierarchy&&profile.hierarchy.resolutionStrategy!=='legacy-register'){
     S.ssmCombined=resolvedRegisterRows(S.ssmCombined,records);
   }

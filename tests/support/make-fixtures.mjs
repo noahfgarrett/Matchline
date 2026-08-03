@@ -59,6 +59,13 @@ const SHEETS = {
       ['B14-RIO-6500', 'Remote IO panel', '650', 'B14', '', 'I&C', 'FMS Network', 'New'],
     ],
   },
+  'compiler-p6.xlsx': {
+    Activities: [
+      ['Activity ID', 'Activity Name', 'Equipment ID', 'UPN'],
+      ['A2000', 'Commission RIO 6500 remote IO', 'B14-RIO-6500', '650'],
+      ['A2010', 'Terminate FMS network trunk', '', '650'],
+    ],
+  },
   'compiler-cable.xlsx': {
     'Cable Schedule': [
       ['Load Name (To)', 'Panel (From)', 'Circuit_Number', 'Cable Tag'],

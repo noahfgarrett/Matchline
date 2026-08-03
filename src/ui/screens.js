@@ -4,6 +4,7 @@ import { ic } from './icons.js'
 import { toast, withLoading } from './progress.js'
 import { PMD_SHEET_NAME, cableInfo, cableRowCount, isCableSheet, isMelSheet, isPmdFile, isPmdSheet, melInfo, melRowCount, normH, parseWorkCopy, pmdInfo, pmdRowCount, resolveCols } from '../io/detect.js'
 import { extractStrikeCells, getAoa, getAoaAsync, readArrayBuffer, sheetRowCount } from '../io/workbook.js'
+import { isP6Sheet, parseXer } from '../io/p6.js'
 import { buildHierarchy } from '../hierarchy/build.js'
 
 
@@ -203,7 +204,7 @@ export function renderFileList(){
   const hint=$('#uphint');if(hint)hint.textContent=okFiles.length?`${okFiles.length} file${okFiles.length!==1?'s':''} · ${tabs} tab${tabs!==1?'s':''} ready`:'';
   const cont=$('#toSheets');if(cont)cont.disabled=okFiles.length===0;
   const clr=$('#clearall');if(clr)clr.style.display=S.files.length?'':'none';
-  $$('#filelist .xbtn').forEach(b=>b.onclick=()=>{const id=b.dataset.id;S.files=S.files.filter(f=>f.id!==id);[...S.selected,...S.cableSel,...S.pmdSel,...S.melSel].forEach(k=>{if(k.split(KEYSEP)[0]===id){S.selected.delete(k);S.cableSel.delete(k);S.pmdSel.delete(k);S.melSel.delete(k);}});invalidateHierarchyBuild();renderFileList();});
+  $$('#filelist .xbtn').forEach(b=>b.onclick=()=>{const id=b.dataset.id;S.files=S.files.filter(f=>f.id!==id);[...S.selected,...S.cableSel,...S.pmdSel,...S.melSel,...S.p6Sel,...S.lineSel].forEach(k=>{if(k.split(KEYSEP)[0]===id){S.selected.delete(k);S.cableSel.delete(k);S.pmdSel.delete(k);S.melSel.delete(k);S.p6Sel.delete(k);S.lineSel.delete(k);}});invalidateHierarchyBuild();renderFileList();});
 }
 export function wireUpload(){
   const dz=$('#dz'),input=$('#file');
@@ -215,7 +216,7 @@ export function wireUpload(){
   ['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('drag');}));
   ['dragleave','dragend'].forEach(ev=>dz.addEventListener(ev,e=>{if(e.target===dz)dz.classList.remove('drag');}));
   dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag');addFiles([...e.dataTransfer.files]);});
-  $('#clearall').onclick=()=>{S.files=[];S.aoaCache.clear();S.selected.clear();S.cableSel.clear();S.pmdSel.clear();S.melSel.clear();S.override={};S.workCopy=null;S.wcRows=null;invalidateHierarchyBuild();renderFileList();renderWorkCopy();};
+  $('#clearall').onclick=()=>{S.files=[];S.aoaCache.clear();S.selected.clear();S.cableSel.clear();S.pmdSel.clear();S.melSel.clear();S.p6Sel.clear();S.lineSel.clear();S.override={};S.workCopy=null;S.wcRows=null;invalidateHierarchyBuild();renderFileList();renderWorkCopy();};
   $('#toSheets').onclick=async()=>{if($('#toSheets').disabled)return;await prewarmSheets();go('sheets');};
 }
 export async function addFiles(fileObjs){
@@ -227,8 +228,15 @@ export async function addFiles(fileObjs){
       report(i/accepted.length,`File ${i+1} of ${accepted.length}`);await raf();
       const ext=(file.name.split('.').pop()||'').toLowerCase();
       const rec={id:'f'+(_uid++),name:file.name,ext,size:file.size,wb:null,sheets:[],strikes:new Map(),error:null};
-      try{const buf=await readArrayBuffer(file),bytes=new Uint8Array(buf),wb=XLSX.read(bytes,{type:'array'});
-        rec.wb=wb;rec.strikes=extractStrikeCells(bytes);rec.sheets=wb.SheetNames.slice();if(!rec.sheets.length)rec.error='No readable tabs found';
+      try{const buf=await readArrayBuffer(file),bytes=new Uint8Array(buf);
+        if(ext==='xer'){
+          /* P6's native export is plain tab-delimited text, not a workbook. */
+          rec.p6=parseXer(new TextDecoder().decode(bytes));
+          if(!rec.p6.tasks.length)rec.error='No TASK rows found in this XER file';
+        }else{
+          const wb=XLSX.read(bytes,{type:'array'});
+          rec.wb=wb;rec.strikes=extractStrikeCells(bytes);rec.sheets=wb.SheetNames.slice();if(!rec.sheets.length)rec.error='No readable tabs found';
+        }
       }catch(err){rec.error='Could not read this file';}
       S.files.push(rec);
     }
@@ -251,6 +259,7 @@ export async function prewarmSheets(){
   allKeys().forEach(k=>{if(!isPmdSheet(k)&&!isMelSheet(k)&&isCableSheet(k))S.cableSel.add(k);});
   S.files.forEach(f=>{if(isPmdFile(f))f.sheets.forEach(s=>{const key=f.id+KEYSEP+s;if(normH(s)===PMD_SHEET_NAME)S.pmdSel.add(key);});});
   allKeys().forEach(k=>{if(isMelSheet(k))S.melSel.add(k);});
+  allKeys().forEach(k=>{if(!isMelSheet(k)&&!isCableSheet(k)&&!isPmdSheet(k)&&isP6Sheet(k))S.p6Sel.add(k);});
 }
 
 /* ---- sheets screen ---- */
