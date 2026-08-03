@@ -160,7 +160,9 @@ export function detectMel(headers){
   const systemParent=norm.findIndex(h=>h.startsWith('systemparent')&&h.includes('equipmenttag'));
   const discipline=norm.findIndex(h=>h==='discipline'||h.startsWith('discipline'));
   const systemDescription=norm.findIndex(h=>h==='systemdescription'||(h.startsWith('system')&&h.includes('description')));
-  return tag>=0?{tag,upn,building,systemParent,discipline,systemDescription}:null;
+  const projectPhase=norm.findIndex(h=>h==='projectphase'||h.startsWith('projectphase'));
+  const description=norm.findIndex(h=>h==='equipmentdescription'||h==='description');
+  return tag>=0?{tag,upn,building,systemParent,discipline,systemDescription,projectPhase,description}:null;
 }
 export function melInfo(key){
   if(_melCache.has(key))return _melCache.get(key);
@@ -169,7 +171,9 @@ export function melInfo(key){
   if(fields.equipmentTag!=null){
     res={map:{tag:+fields.equipmentTag,upn:fields.upn!=null?+fields.upn:-1,building:fields.building!=null?+fields.building:-1,
       systemParent:fields.systemParent!=null?+fields.systemParent:-1,discipline:fields.discipline!=null?+fields.discipline:-1,
-      systemDescription:fields.systemDescription!=null?+fields.systemDescription:-1},headerRow:profileMappedHeaderRow('mel',detected?detected.headerRow:findHeaderRow(aoa))};
+      systemDescription:fields.systemDescription!=null?+fields.systemDescription:-1,
+      projectPhase:fields.projectPhase!=null?+fields.projectPhase:-1,description:fields.description!=null?+fields.description:-1},
+      headerRow:profileMappedHeaderRow('mel',detected?detected.headerRow:findHeaderRow(aoa))};
   }
   _melCache.set(key,res);return res;
 }
@@ -209,7 +213,8 @@ export function profileFieldsFromHeaders(kind,headers){
        mapping silently loses the columns this map omits: melInfo switches to its
        manual-mapping branch as soon as fields.equipmentTag is set, and anything
        unmapped resolves to -1 even when the sheet plainly has the column. */
-    const labels={equipmentTag:'tag',upn:'upn',building:'building',systemParent:'systemParent',discipline:'discipline',systemDescription:'systemDescription'};
+    const labels={equipmentTag:'tag',upn:'upn',building:'building',systemParent:'systemParent',discipline:'discipline',systemDescription:'systemDescription',
+      projectPhase:'projectPhase',description:'description'};
     for(const [id,key] of Object.entries(labels))if(detected[key]!=null&&detected[key]>=0)fields[id]=detected[key];
     return fields;
   }

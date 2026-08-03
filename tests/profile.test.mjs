@@ -229,11 +229,11 @@ test('cableInfo, pmdInfo, and melInfo detect row-2 headers, and stale automatic 
 })
 
 test('detectMel finds Equipment Tag, UPN, building, system parent, discipline, and system description columns across header variants', () => {
-  assert.deepEqual(detectMel(['Description', 'Equipment Tag', 'UPN', 'Bldg', 'System Parent Equipment Tag(s)']), { tag: 1, upn: 2, building: 3, systemParent: 4, discipline: -1, systemDescription: -1 })
-  assert.deepEqual(detectMel(['Equipment Tag', 'UPN (Code)']), { tag: 0, upn: 1, building: -1, systemParent: -1, discipline: -1, systemDescription: -1 })
-  assert.deepEqual(detectMel(['Equipment Tag', 'UPN', 'System Parent Equipment Tag(s)']), { tag: 0, upn: 1, building: -1, systemParent: 2, discipline: -1, systemDescription: -1 })
+  assert.deepEqual(detectMel(['Description', 'Equipment Tag', 'UPN', 'Bldg', 'System Parent Equipment Tag(s)']), { tag: 1, upn: 2, building: 3, systemParent: 4, discipline: -1, systemDescription: -1, projectPhase: -1, description: 0 })
+  assert.deepEqual(detectMel(['Equipment Tag', 'UPN (Code)']), { tag: 0, upn: 1, building: -1, systemParent: -1, discipline: -1, systemDescription: -1, projectPhase: -1, description: -1 })
+  assert.deepEqual(detectMel(['Equipment Tag', 'UPN', 'System Parent Equipment Tag(s)']), { tag: 0, upn: 1, building: -1, systemParent: 2, discipline: -1, systemDescription: -1, projectPhase: -1, description: -1 })
   assert.deepEqual(detectMel(['Equipment Tag', 'System Parent Equipment Tag(s)', 'Discipline', 'System Description']),
-    { tag: 0, upn: -1, building: -1, systemParent: 1, discipline: 2, systemDescription: 3 },
+    { tag: 0, upn: -1, building: -1, systemParent: 1, discipline: 2, systemDescription: 3, projectPhase: -1, description: -1 },
     'the system-parent header must not be claimed as the system description')
   assert.equal(detectMel(['Equipment Tag', 'Description']).upn, -1, 'a missing UPN column is reported as -1, not absent')
   assert.equal(detectMel(['Equipment Tag', 'Description']).systemDescription, -1, 'a bare Description column is not a System Description column')

@@ -36,7 +36,7 @@ export const PROFILE_FIELD_SETS={
   ],
   mel:[
     ['equipmentTag','Equipment Tag'],['upn','UPN'],['building','Bldg / Building'],['systemParent','System Parent Equipment Tag(s)'],
-    ['discipline','Discipline'],['systemDescription','System Description']
+    ['discipline','Discipline'],['systemDescription','System Description'],['projectPhase','Project Phase'],['description','Equipment Description']
   ]
 };
 export const PROFILE_DETAIL_FIELDS=[

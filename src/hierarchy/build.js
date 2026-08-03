@@ -40,8 +40,9 @@ export async function buildMel(tick){
       const upn=map.upn>=0?clean(aoa[i][map.upn]):'',building=map.building>=0?clean(aoa[i][map.building]):'';
       const systemParent=map.systemParent>=0?clean(aoa[i][map.systemParent]):'',keyTag=tagKey(tag),existing=S.melByTag.get(keyTag);
       const discipline=map.discipline>=0?clean(aoa[i][map.discipline]):'',systemDescription=map.systemDescription>=0?clean(aoa[i][map.systemDescription]):'';
-      const rec={tag,upn,building,systemParent,discipline,systemDescription};S.melRows.push(rec);
-      if(existing){if(!existing.upn&&upn)existing.upn=upn;if(!existing.building&&building)existing.building=building;if(!existing.systemParent&&systemParent)existing.systemParent=systemParent;if(!existing.discipline&&discipline)existing.discipline=discipline;if(!existing.systemDescription&&systemDescription)existing.systemDescription=systemDescription;continue;}
+      const projectPhase=map.projectPhase>=0?clean(aoa[i][map.projectPhase]):'',description=map.description>=0?clean(aoa[i][map.description]):'';
+      const rec={tag,upn,building,systemParent,discipline,systemDescription,projectPhase,description};S.melRows.push(rec);
+      if(existing){if(!existing.upn&&upn)existing.upn=upn;if(!existing.building&&building)existing.building=building;if(!existing.systemParent&&systemParent)existing.systemParent=systemParent;if(!existing.discipline&&discipline)existing.discipline=discipline;if(!existing.systemDescription&&systemDescription)existing.systemDescription=systemDescription;if(!existing.projectPhase&&projectPhase)existing.projectPhase=projectPhase;if(!existing.description&&description)existing.description=description;continue;}
       S.melByTag.set(keyTag,rec);
       const normKey=normSep(tag);if(normKey&&!S.melByNorm.has(normKey))S.melByNorm.set(normKey,rec);
       indexMelLookupRecord(rec);
@@ -52,7 +53,7 @@ export async function buildMel(tick){
   }
   S.melLookup=createMemoryLookup(S.melRows.map(rec=>{
     const resolved=ruleEngine().resolve(cleanTag(rec.tag));
-    return {tag:rec.tag,columns:{Building:rec.building,UPN:rec.upn,SystemParent:rec.systemParent,Discipline:rec.discipline,SystemDescription:rec.systemDescription},
+    return {tag:rec.tag,columns:{Building:rec.building,UPN:rec.upn,SystemParent:rec.systemParent,Discipline:rec.discipline,SystemDescription:rec.systemDescription,ProjectPhase:rec.projectPhase,Description:rec.description},
       attributes:{equipmentType:resolved.attributes.equipmentType||'',matchKey:resolved.attributes.matchKey||''}};
   }));
 }
