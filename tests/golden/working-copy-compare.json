@@ -1,0 +1,465 @@
+{
+  "roots": [
+    {
+      "name": "602 Medium Voltage",
+      "isId": false,
+      "isLoad": false,
+      "isInstrument": false,
+      "dep": "",
+      "kids": [
+        {
+          "name": "GIS-01",
+          "isId": false,
+          "isLoad": false,
+          "isInstrument": false,
+          "dep": "",
+          "kids": [
+            {
+              "name": "B14-SCR-2201",
+              "isId": false,
+              "isLoad": false,
+              "isInstrument": false,
+              "dep": "",
+              "kids": []
+            },
+            {
+              "name": "B14-XFM-1234",
+              "isId": false,
+              "isLoad": false,
+              "isInstrument": false,
+              "dep": "",
+              "kids": [
+                {
+                  "name": "B14-LVS-1234",
+                  "isId": false,
+                  "isLoad": false,
+                  "isInstrument": false,
+                  "dep": "",
+                  "kids": [
+                    {
+                      "name": "MTR-9001",
+                      "isId": false,
+                      "isLoad": true,
+                      "isInstrument": false,
+                      "dep": "B14-LVS-1234",
+                      "kids": []
+                    },
+                    {
+                      "name": "MTR-9002",
+                      "isId": false,
+                      "isLoad": true,
+                      "isInstrument": false,
+                      "dep": "B14-LVS-1234",
+                      "kids": []
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "B14-XFM-5678",
+              "isId": false,
+              "isLoad": false,
+              "isInstrument": false,
+              "dep": "",
+              "kids": [
+                {
+                  "name": "B14-LVS-5678",
+                  "isId": false,
+                  "isLoad": false,
+                  "isInstrument": false,
+                  "dep": "",
+                  "kids": [
+                    {
+                      "name": "MTR-9003",
+                      "isId": false,
+                      "isLoad": true,
+                      "isInstrument": false,
+                      "dep": "B14-LVS-5678",
+                      "kids": []
+                    },
+                    {
+                      "name": "SPARE-1",
+                      "isId": false,
+                      "isLoad": true,
+                      "isInstrument": false,
+                      "dep": "B14-LVS-5678",
+                      "kids": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "register": [
+    [
+      "602 Medium Voltage",
+      "N/A",
+      "N/A"
+    ],
+    [
+      "GIS-01",
+      "602 Medium Voltage",
+      "N/A"
+    ],
+    [
+      "B14-XFM-1234",
+      "GIS-01",
+      "N/A"
+    ],
+    [
+      "B14-LVS-1234",
+      "B14-XFM-1234",
+      "N/A"
+    ],
+    [
+      "MTR-9001",
+      "B14-LVS-1234",
+      "B14-LVS-1234"
+    ],
+    [
+      "MTR-9002",
+      "B14-LVS-1234",
+      "B14-LVS-1234"
+    ],
+    [
+      "B14-XFM-5678",
+      "GIS-01",
+      "N/A"
+    ],
+    [
+      "B14-LVS-5678",
+      "B14-XFM-5678",
+      "N/A"
+    ],
+    [
+      "MTR-9003",
+      "B14-LVS-5678",
+      "B14-LVS-5678"
+    ],
+    [
+      "SPARE-1",
+      "B14-LVS-5678",
+      "B14-LVS-5678"
+    ],
+    [
+      "B14-SCR-2201",
+      "GIS-01",
+      "N/A"
+    ]
+  ],
+  "review": [],
+  "placements": [],
+  "compare": [
+    [
+      "B14-LVS-5678",
+      "off",
+      "B14-XFM-5678",
+      "",
+      "WRONG-PARENT",
+      "N/A",
+      true,
+      true,
+      false
+    ],
+    [
+      "SPARE-1",
+      "off",
+      "B14-LVS-5678",
+      "B14-LVS-5678",
+      "B14-LVS-5678",
+      "B14-LVS-9999",
+      true,
+      true,
+      false
+    ],
+    [
+      "602 Medium Voltage",
+      "nohit",
+      "",
+      "",
+      "",
+      "",
+      true,
+      false,
+      false
+    ],
+    [
+      "B14-SCR-2201",
+      "nohit",
+      "GIS-01",
+      "",
+      "",
+      "",
+      true,
+      false,
+      false
+    ],
+    [
+      "B14-XFM-5678",
+      "nohit",
+      "GIS-01",
+      "",
+      "",
+      "",
+      true,
+      false,
+      false
+    ],
+    [
+      "GIS-01",
+      "nohit",
+      "602 Medium Voltage",
+      "",
+      "",
+      "",
+      true,
+      false,
+      false
+    ],
+    [
+      "GONE-FROM-EXTRACT",
+      "nohit",
+      "",
+      "",
+      "B14-LVS-1234",
+      "N/A",
+      false,
+      true,
+      false
+    ],
+    [
+      "MTR-9002",
+      "nohit",
+      "B14-LVS-1234",
+      "B14-LVS-1234",
+      "",
+      "",
+      true,
+      false,
+      false
+    ],
+    [
+      "B14-LVS-1234",
+      "match",
+      "B14-XFM-1234",
+      "",
+      "B14-XFM-1234",
+      "N/A",
+      true,
+      true,
+      false
+    ],
+    [
+      "B14-XFM-1234",
+      "match",
+      "GIS-01",
+      "",
+      "GIS-01",
+      "N/A",
+      true,
+      true,
+      false
+    ],
+    [
+      "MTR-9001",
+      "match",
+      "B14-LVS-1234",
+      "B14-LVS-1234",
+      "B14-LVS-1234 [existing]",
+      "B14-LVS-1234",
+      true,
+      true,
+      false
+    ],
+    [
+      "MTR-9003",
+      "match",
+      "B14-LVS-5678",
+      "B14-LVS-5678",
+      "B14-LVS-5678",
+      "",
+      true,
+      true,
+      true
+    ]
+  ],
+  "ssm": {
+    "roots": [
+      {
+        "name": "Unassigned Building",
+        "kind": "building",
+        "isId": false,
+        "isLoad": false,
+        "isInstrument": false,
+        "isSpare": false,
+        "isSpace": false,
+        "dep": "",
+        "kids": [
+          {
+            "name": "Electrical",
+            "kind": "discipline",
+            "isId": false,
+            "isLoad": false,
+            "isInstrument": false,
+            "isSpare": false,
+            "isSpace": false,
+            "dep": "",
+            "kids": [
+              {
+                "name": "602 Medium Voltage",
+                "kind": "system",
+                "isId": false,
+                "isLoad": false,
+                "isInstrument": false,
+                "isSpare": false,
+                "isSpace": false,
+                "dep": "",
+                "kids": [
+                  {
+                    "name": "GIS-01",
+                    "kind": "equipment",
+                    "isId": false,
+                    "isLoad": false,
+                    "isInstrument": false,
+                    "isSpare": false,
+                    "isSpace": false,
+                    "dep": "",
+                    "kids": [
+                      {
+                        "name": "B14-SCR-2201",
+                        "kind": "equipment",
+                        "isId": false,
+                        "isLoad": false,
+                        "isInstrument": false,
+                        "isSpare": false,
+                        "isSpace": false,
+                        "dep": "",
+                        "kids": []
+                      },
+                      {
+                        "name": "B14-XFM-1234",
+                        "kind": "equipment",
+                        "isId": false,
+                        "isLoad": false,
+                        "isInstrument": false,
+                        "isSpare": false,
+                        "isSpace": false,
+                        "dep": "",
+                        "kids": [
+                          {
+                            "name": "B14-LVS-1234",
+                            "kind": "equipment",
+                            "isId": false,
+                            "isLoad": false,
+                            "isInstrument": false,
+                            "isSpare": false,
+                            "isSpace": false,
+                            "dep": "",
+                            "kids": [
+                              {
+                                "name": "MTR-9001",
+                                "kind": "equipment",
+                                "isId": false,
+                                "isLoad": true,
+                                "isInstrument": false,
+                                "isSpare": false,
+                                "isSpace": false,
+                                "dep": "B14-LVS-1234",
+                                "kids": []
+                              },
+                              {
+                                "name": "MTR-9002",
+                                "kind": "equipment",
+                                "isId": false,
+                                "isLoad": true,
+                                "isInstrument": false,
+                                "isSpare": false,
+                                "isSpace": false,
+                                "dep": "B14-LVS-1234",
+                                "kids": []
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "name": "B14-XFM-5678",
+                        "kind": "equipment",
+                        "isId": false,
+                        "isLoad": false,
+                        "isInstrument": false,
+                        "isSpare": false,
+                        "isSpace": false,
+                        "dep": "",
+                        "kids": [
+                          {
+                            "name": "B14-LVS-5678",
+                            "kind": "equipment",
+                            "isId": false,
+                            "isLoad": false,
+                            "isInstrument": false,
+                            "isSpare": false,
+                            "isSpace": false,
+                            "dep": "",
+                            "kids": [
+                              {
+                                "name": "MTR-9003",
+                                "kind": "equipment",
+                                "isId": false,
+                                "isLoad": true,
+                                "isInstrument": false,
+                                "isSpare": false,
+                                "isSpace": false,
+                                "dep": "B14-LVS-5678",
+                                "kids": []
+                              },
+                              {
+                                "name": "SPARE-1",
+                                "kind": "equipment",
+                                "isId": false,
+                                "isLoad": true,
+                                "isInstrument": false,
+                                "isSpare": true,
+                                "isSpace": false,
+                                "dep": "B14-LVS-5678",
+                                "kids": []
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "stats": {
+      "nodes": 13,
+      "leaves": 5,
+      "maxDepth": 7,
+      "idCount": 0,
+      "sources": 1,
+      "deps": 4,
+      "loads": 4,
+      "instruments": 0,
+      "review": 0
+    }
+  },
+  "stats": {
+    "nodes": 11,
+    "leaves": 5,
+    "maxDepth": 5,
+    "rowsRead": 5,
+    "loads": 4,
+    "instruments": 0
+  }
+}

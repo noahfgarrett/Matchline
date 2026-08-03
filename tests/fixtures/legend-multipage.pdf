@@ -1,0 +1,74 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>
+endobj
+5 0 obj
+<< /Length 114 >>
+stream
+BT /F1 12 Tf 1 0 0 1 40 740 Tm (COVER SHEET) Tj ET
+BT /F1 10 Tf 1 0 0 1 40 700 Tm (Issued for construction.) Tj ET
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 7 0 R >>
+endobj
+7 0 obj
+<< /Length 34 >>
+stream
+0.9 0.9 0.9 rg 60 500 480 200 re f
+endstream
+endobj
+8 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 9 0 R >>
+endobj
+9 0 obj
+<< /Length 1185 >>
+stream
+BT /F1 14 Tf 1 0 0 1 40 740 Tm (EQUIPMENT ABBREVIATIONS) Tj ET
+BT /F1 10 Tf 1 0 0 1 40 705 Tm (AAA) Tj ET
+BT /F1 10 Tf 1 0 0 1 120 705 Tm (Air Handling Assembly) Tj ET
+BT /F1 10 Tf 1 0 0 1 40 687 Tm (BBB) Tj ET
+BT /F1 10 Tf 1 0 0 1 120 687 Tm (Bus Bar Bank) Tj ET
+BT /F1 10 Tf 1 0 0 1 40 669 Tm (CCC) Tj ET
+BT /F1 10 Tf 1 0 0 1 120 669 Tm (Cooling Circuit) Tj ET
+BT /F1 10 Tf 1 0 0 1 40 651 Tm (DDD) Tj ET
+BT /F1 10 Tf 1 0 0 1 120 651 Tm (Discharge Damper) Tj ET
+BT /F1 14 Tf 1 0 0 1 340 740 Tm (DEVICE CODES) Tj ET
+BT /F1 10 Tf 1 0 0 1 340 705 Tm (QQQ) Tj ET
+BT /F1 10 Tf 1 0 0 1 420 705 Tm (Quench Panel) Tj ET
+BT /F1 10 Tf 1 0 0 1 340 687 Tm (RRR) Tj ET
+BT /F1 10 Tf 1 0 0 1 420 687 Tm (Return Riser) Tj ET
+BT /F1 14 Tf 1 0 0 1 40 600 Tm (TAG IDENTIFICATION) Tj ET
+BT /F1 10 Tf 1 0 0 1 40 575 Tm (ZZ9-QQQ-4321 = Building-Equipment Type-Unit) Tj ET
+BT /F1 10 Tf 1 0 0 1 40 557 Tm (Characters 1 through 3 indicate Building) Tj ET
+BT /F1 14 Tf 1 0 0 1 40 500 Tm (GENERAL NOTES) Tj ET
+BT /F1 10 Tf 1 0 0 1 40 475 Tm (All work shall conform to the project specification.) Tj ET
+BT /F1 10 Tf 1 0 0 1 40 457 Tm (Suffix A and B are panel sides and are not part of equipment identity.) Tj ET
+endstream
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000127 00000 n 
+0000000224 00000 n 
+0000000350 00000 n 
+0000000515 00000 n 
+0000000641 00000 n 
+0000000725 00000 n 
+0000000851 00000 n 
+trailer
+<< /Size 10 /Root 1 0 R >>
+startxref
+2088
+%%EOF
