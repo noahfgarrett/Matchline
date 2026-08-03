@@ -1,52 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { detectMel, profileFieldsFromHeaders } from '../src/io/detect.js'
-import { loadApp } from './support/harness.mjs'
+import { buildProjectApp, canonicalRecordOf } from './support/compiler-harness.mjs'
 
-const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-
-async function buildWith(files) {
-  const app = await loadApp()
-  /* The harness boots with the locked Eagle legacy profile active; the
-     Compiler's MEL-first behavior lives in project profiles, so activate one. */
-  app.eval(`
-    initProfiles();
-    const SITE = normalizeProfile(makeDefaultProfile('Compiler Site'));
-    PROFILE_STORE.profiles.push(SITE);
-    PROFILE_STORE.activeId = SITE.id;
-    setRuleProfile(activeProfile());
-  `)
-  const payload = files.map(f => ({ name: f, bytes: [...readFileSync(resolve(rootDir, 'tests/fixtures', f))] }))
-  app.eval(`globalThis.__fixtures = ${JSON.stringify(payload)}`)
-  await app.evalAsync(`
-    for (const fx of __fixtures) {
-      const bytes = new Uint8Array(fx.bytes);
-      const wb = XLSX.read(bytes, { type: 'array' });
-      S.files.push({ id: 'f' + S.files.length, name: fx.name, ext: 'xlsx', size: bytes.length, wb,
-        sheets: wb.SheetNames.slice(), strikes: extractStrikeCells(bytes), error: null });
-    }
-    await prewarmSheets();
-    for (const k of allHierKeys()) S.selected.add(k);
-    await buildHierarchy();
-    return '';
-  `)
-  return app
-}
-
-function record(app, tag) {
-  return JSON.parse(app.eval(`
-    JSON.stringify((function () {
-      const r = S.canonicalModel.get(tagKey(${JSON.stringify(tag)}));
-      return r ? { tag: r.tag, sourceKind: r.sourceKind, includeInRegister: r.includeInRegister,
-        includeInHierarchy: r.includeInHierarchy, phaseExcluded: !!r.phaseExcluded,
-        ssmParentTag: r.ssmParentTag, dependencies: [...r.dependencies],
-        building: r.building, discipline: r.discipline, system: r.system } : null;
-    })())
-  `))
-}
 
 /* Compiler fork: the MEL is the seed universe (spec §4), so its detector must
    carry the columns the seeding and register logic read — Project Phase gates
@@ -70,19 +26,19 @@ test('MEL auto-mapping enumerates the new columns so saved mappings keep them', 
 })
 
 test('MEL rows seed canonical records even when absent from every other source', async () => {
-  const app = await buildWith(['easy-power.xlsx', 'compiler-cable.xlsx', 'compiler-mel.xlsx'])
-  const ahu = record(app, 'B14-AHU-7001')
+  const app = await buildProjectApp(['easy-power.xlsx', 'compiler-cable.xlsx', 'compiler-mel.xlsx'])
+  const ahu = canonicalRecordOf(app, 'B14-AHU-7001')
   assert.ok(ahu, 'MEL-only tag must exist in the canonical model')
   assert.equal(ahu.sourceKind, 'mel')
   assert.equal(ahu.includeInRegister, true, 'seeded rows belong in the register')
-  const future = record(app, 'B14-AHU-7002')
+  const future = canonicalRecordOf(app, 'B14-AHU-7002')
   assert.ok(future, 'excluded-phase rows are still records so edges can attach')
   assert.equal(future.phaseExcluded, true)
   assert.equal(future.includeInRegister, false, 'Future-phase rows stay out of the register')
 })
 
 test('seeded MEL-only rows land in the exported register exactly once', async () => {
-  const app = await buildWith(['easy-power.xlsx', 'compiler-cable.xlsx', 'compiler-mel.xlsx'])
+  const app = await buildProjectApp(['easy-power.xlsx', 'compiler-cable.xlsx', 'compiler-mel.xlsx'])
   const rows = JSON.parse(app.eval(`
     JSON.stringify(S.ssmCombined.filter(row => tagKey(row[0]) === tagKey('B14-AHU-7001')))
   `))

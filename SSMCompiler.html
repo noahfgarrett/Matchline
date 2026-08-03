@@ -9777,13 +9777,21 @@ function resolveRecordContext(record,profile){
   const attributeOverride=profileAttributeOverride(record.tag,p),overrideValues=attributeOverride&&attributeOverride.values||{};
   const equipmentType=overrideValues.equipmentType||assign.values.equipmentType||legacyEquipmentRole(record.tag)||(record.isInstrument?'Instrument':record.isLoad?'Load':record.isId?'Equipment ID':'Equipment');
   const building=overrideValues.building||assign.values.building||clean(mel&&mel.building)||clean(record.pmdBuilding)||clean(h.unassignedBuilding)||'Unassigned Building';
-  const discipline=overrideValues.discipline||assign.values.discipline||(record.isInstrument?clean(h.disciplineFallbacks.instrument):clean(h.disciplineFallbacks.default))||'Unassigned Discipline';
-  const system=overrideValues.system||assign.values.system||record.systemHint||clean(h.systemFallbacks[discipline])||clean(h.systemFallbacks.default)||'Unassigned System';
+  /* Compiler fork (spec §4): under a MEL-first profile the MEL is the attribute
+     authority. Discipline reads straight from the MEL column; System composes
+     as "{UPN} {System Description}". Rules and manual overrides still outrank
+     both; Eagle (melSeed off) keeps the frozen fallback-only behavior. */
+  const melFirst=h.melSeed&&h.melSeed.enabled!==false;
+  const melDiscipline=melFirst?clean(mel&&mel.discipline):'';
+  const melUpnValue=melFirst?clean(mel&&mel.upn):'',melSystemDescription=melFirst?clean(mel&&mel.systemDescription):'';
+  const melSystem=melUpnValue&&melSystemDescription?`${melUpnValue} ${melSystemDescription}`:melSystemDescription;
+  const discipline=overrideValues.discipline||assign.values.discipline||melDiscipline||(record.isInstrument?clean(h.disciplineFallbacks.instrument):clean(h.disciplineFallbacks.default))||'Unassigned Discipline';
+  const system=overrideValues.system||assign.values.system||melSystem||record.systemHint||clean(h.systemFallbacks[discipline])||clean(h.systemFallbacks.default)||'Unassigned System';
   const attributes={...assign.values,building,discipline,system,equipmentType,matchKey:overrideValues.matchKey||assign.values.matchKey||normSep(record.tag),...overrideValues};
   const explicit=Object.fromEntries(Object.keys(assign.values).map(key=>[key,true]));
   explicit.building=!!(assign.values.building||clean(mel&&mel.building)||clean(record.pmdBuilding));
-  explicit.discipline=!!assign.values.discipline||record.isInstrument;
-  explicit.system=!!assign.values.system||isSystemName(record.tag);
+  explicit.discipline=!!(assign.values.discipline||melDiscipline)||record.isInstrument;
+  explicit.system=!!(assign.values.system||melSystem)||isSystemName(record.tag);
   explicit.equipmentType=!!assign.values.equipmentType;
   for(const key of Object.keys(overrideValues))explicit[key]=true;
   return {...attributes,attributes,rules:assign.rules,explicit,attributeOverride};
