@@ -9757,7 +9757,65 @@ function resolveHierarchyClaims({
   })
 }
 
+/* ==== src/compiler/fold.js ==== */
+
+
+/* The partition fold (spec §5): a structural-parent claim whose subject and
+   target live in different partition buckets is demoted to a dependency claim
+   with the crossing recorded in provenance. Unknown buckets never demote — a
+   boundary crossing must be proven, not assumed. Pure: claims in, claims out. */
+function foldClaimsByPartition(claims, partitionOf) {
+  return claims.map(claim => {
+    if (claim.kind !== HIERARCHY_CLAIM_KIND.STRUCTURAL_PARENT) return claim
+    const subject = partitionOf(claim.subjectId), target = partitionOf(claim.targetId)
+    if (!subject || !target || subject === target) return claim
+    return {
+      ...claim,
+      id: 'fold:' + claim.id,
+      kind: HIERARCHY_CLAIM_KIND.DEPENDENCY,
+      provenance: { ...claim.provenance, demoted: `crosses ${subject} → ${target}` },
+    }
+  })
+}
+
+/* Partition key for a resolved record: the SSM grouping tuple. Null unless
+   every component is EXPLICIT (MEL / rule / override derived) — profile
+   fallback values like the default system name would otherwise manufacture
+   phantom partitions and demote parents that were never proven to cross a
+   boundary. Unassigned placeholders are unknown for the same reason. */
+function recordPartitionKey(record) {
+  const explicit = record && record.context && record.context.explicit
+  if (!explicit || !explicit.building || !explicit.discipline || !explicit.system) return null
+  const parts = [record.building, record.discipline, record.system]
+  if (parts.some(part => !part || /^unassigned/i.test(part))) return null
+  return parts.join('|')
+}
+
+/* ==== src/compiler/edges.js ==== */
+
+
+
+/* Compiler edge assembly (spec §5.1): the raw-tree cable stage only records
+   claims for loads that already hold an Easy Power register row, so a cable
+   row feeding a MEL-seeded record never produced an edge. Walk the raw cable
+   map (S.deps: lowercased load → panel, first feed kept) and record the
+   missing load→panel claims for records the canonical model knows. Existing
+   cable claims are left alone — the validated-chain stage outranks this pass
+   by getting there first. */
+function recordCompilerCableEdges(records) {
+  const cableClaims = S.sourceParentClaims && S.sourceParentClaims.cable
+  for (const [loadLower, panel] of S.deps || []) {
+    const key = tagKey(loadLower)
+    if (!key || !records.has(key)) continue
+    if (cableClaims && cableClaims.has(key)) continue
+    if (tagKey(panel) === key) continue
+    recordSourceParentClaim('cable', records.get(key).tag, panel, { status: 'compiler-edge' })
+  }
+}
+
 /* ==== src/hierarchy/projection.js ==== */
+
+
 
 
 
@@ -9893,6 +9951,11 @@ function buildCanonicalModel(){
       if(!record.phaseExcluded){record.includeInRegister=true;record.includeInHierarchy=true;}
     }
   }
+  /* Cable evidence honors the same workflow switch as the raw-tree cable
+     stage: a profile that disables cable parent chains gets no cable claims
+     from the compiler edge pass either. */
+  const cableWorkflow=activeProfile().hierarchy&&activeProfile().hierarchy.workflow;
+  if(!cableWorkflow||cableWorkflow.cableParentChains!==false)recordCompilerCableEdges(records);
   /* Trailing System Parent tags. The first became the structural parent claim
      in buildMel; these are additive, so they join the dependency set the cable
      schedule also writes into rather than competing with it. */
@@ -9975,7 +10038,13 @@ function buildCanonicalModel(){
     record.mel=melResolvedRecord(record.tag);record.context=resolveRecordContext(record,profile);Object.assign(record,record.context);
     record.attributes={...record.context.attributes};
   }
-  const snapshot=resolveHierarchyClaims({observations,candidates,manualOverrides});S.resolvedSnapshot=snapshot;
+  /* Compiler fork — the partition fold (spec §5). Record contexts are already
+     resolved above, so partition keys are available. Manual overrides bypass
+     the fold on purpose: a human placement wins, and contradictions surface in
+     review rather than being silently reclassified. */
+  const partitionOf=id=>{const partitionRecord=records.get(id);return partitionRecord?recordPartitionKey(partitionRecord):null;};
+  const foldedCandidates=foldClaimsByPartition(candidates,partitionOf);
+  const snapshot=resolveHierarchyClaims({observations,candidates:foldedCandidates,manualOverrides});S.resolvedSnapshot=snapshot;
   S.resolutionIssues=[...S.resolutionIssues,...snapshot.issues];
   for(const entity of snapshot.entities){
     const record=records.get(entity.id);if(!record)continue;

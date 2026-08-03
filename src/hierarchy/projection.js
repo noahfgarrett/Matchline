@@ -8,6 +8,8 @@ import { groupingLevels, activeModes } from './modes.js'
 import { ruleEngine } from '../rules/provider.js'
 import { createMemoryLookup } from '../rules/lookup.js'
 import { resolveHierarchyClaims, HIERARCHY_CLAIM_KIND } from './claims.js'
+import { foldClaimsByPartition, recordPartitionKey } from '../compiler/fold.js'
+import { recordCompilerCableEdges } from '../compiler/edges.js'
 
 /* ---- canonical equipment model and projections ---- */
 const PROFILE_SOURCE_ORDER=['cable','mel','easyPower','pmd'];
@@ -133,6 +135,11 @@ export function buildCanonicalModel(){
       if(!record.phaseExcluded){record.includeInRegister=true;record.includeInHierarchy=true;}
     }
   }
+  /* Cable evidence honors the same workflow switch as the raw-tree cable
+     stage: a profile that disables cable parent chains gets no cable claims
+     from the compiler edge pass either. */
+  const cableWorkflow=activeProfile().hierarchy&&activeProfile().hierarchy.workflow;
+  if(!cableWorkflow||cableWorkflow.cableParentChains!==false)recordCompilerCableEdges(records);
   /* Trailing System Parent tags. The first became the structural parent claim
      in buildMel; these are additive, so they join the dependency set the cable
      schedule also writes into rather than competing with it. */
@@ -215,7 +222,13 @@ export function buildCanonicalModel(){
     record.mel=melResolvedRecord(record.tag);record.context=resolveRecordContext(record,profile);Object.assign(record,record.context);
     record.attributes={...record.context.attributes};
   }
-  const snapshot=resolveHierarchyClaims({observations,candidates,manualOverrides});S.resolvedSnapshot=snapshot;
+  /* Compiler fork — the partition fold (spec §5). Record contexts are already
+     resolved above, so partition keys are available. Manual overrides bypass
+     the fold on purpose: a human placement wins, and contradictions surface in
+     review rather than being silently reclassified. */
+  const partitionOf=id=>{const partitionRecord=records.get(id);return partitionRecord?recordPartitionKey(partitionRecord):null;};
+  const foldedCandidates=foldClaimsByPartition(candidates,partitionOf);
+  const snapshot=resolveHierarchyClaims({observations,candidates:foldedCandidates,manualOverrides});S.resolvedSnapshot=snapshot;
   S.resolutionIssues=[...S.resolutionIssues,...snapshot.issues];
   for(const entity of snapshot.entities){
     const record=records.get(entity.id);if(!record)continue;

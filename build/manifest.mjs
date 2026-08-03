@@ -38,6 +38,8 @@ export const APP_MODULES = [
   'src/hierarchy/modes.js',
   'src/hierarchy/tree.js',
   'src/hierarchy/claims.js',
+  'src/compiler/fold.js',
+  'src/compiler/edges.js',
   'src/hierarchy/projection.js',
   'src/hierarchy/build.js',
   'src/profile/visual-trainer.js',
