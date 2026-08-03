@@ -1287,6 +1287,12 @@ const LEGEND_PDFJS_WORKER="/**\n * @licstart The following is the entire license
 "use strict";
 const CHANGELOG = [
   {
+    "version": "0.3.0",
+    "date": "2026-08-03T00:00:00Z",
+    "type": "feature",
+    "notes": "- Added P6 schedule ingestion (XER and XLSX activity exports), strictly optional\n- Added the milestone fallback ladder: direct equipment match, UPN column, milestone-name pattern, building-ready default\n- Added discipline-polarity sequencing (electrical top-down, mechanical/I&C bottom-up) and the derived UPN predecessor matrix\n- Added the QA scorecard and exceptions sheets with coverage KPIs and milestone rung distribution\n- Added P&ID line-list ingestion with per-UPN distribution-piping roll-up rows\n- Added the Change Control sheet with broken-dependency callouts against an imported working copy\n- Added a profile-configurable EXTO upload column map with an optional milestone column"
+  },
+  {
     "version": "0.1.0",
     "date": "2026-08-03T00:00:00Z",
     "type": "major",
@@ -4699,7 +4705,7 @@ function createDurableProfileStorage(options = {}) {
 
 
 
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '0.3.0';
 const UPDATE_REPOSITORY = 'noahfgarrett/SSMCompiler-Releases';
 const UPDATE_RELEASE_API = 'https://api.github.com/repos/'+UPDATE_REPOSITORY+'/releases/latest';
 const UPDATE_API_VERSION = '2026-03-10';
@@ -4983,7 +4989,7 @@ function ic(name,cls){return `<svg class="ic ${cls||''}" viewBox="0 0 24 24" fil
 
 
 
-const S={screen:'upload',files:[],selected:new Set(),cableSel:new Set(),pmdSel:new Set(),melSel:new Set(),override:{},aoaCache:new Map(),
+const S={screen:'upload',files:[],selected:new Set(),cableSel:new Set(),pmdSel:new Set(),melSel:new Set(),p6Sel:new Set(),lineSel:new Set(),override:{},aoaCache:new Map(),
   roots:[],rawCombined:null,sheets:[],ssmCombined:[],nodeById:new Map(),stats:null,search:'',idOnly:false,
   showSpares:true,showSpaces:true,showDeps:true,showPmdMatches:true,deps:new Map(),depDetail:new Map(),hasCable:false,
   cableStruckTags:new Set(),
@@ -5486,6 +5492,14 @@ function makeDefaultProfile(name){
       /* Compiler fork: the MEL is the seed universe (spec §4). Off for Eagle,
          which reproduces the frozen Easy-Power-seeded SSM Builder register. */
       melSeed:{enabled:!isBuiltIn,excludedPhases:['Future']},
+      /* Milestone ladder (spec §6a): custom UPN pattern is optional — blank
+         uses the built-in default. Polarity map overrides the discipline-name
+         heuristic (top-down for electrical/LSS/security, bottom-up otherwise). */
+      milestones:{upnPattern:'',buildingReadyLabel:'OP / Building Ready'},
+      polarity:{},
+      /* EXTO upload column indexes (0-based). Defaults reproduce the
+         historical G/K/P/AM layout; milestone -1 = column not emitted. */
+      extoColumns:{upn:6,equipmentId:10,closestParent:15,dependencies:38,milestone:-1},
       roleParents:{LVS:'XFM',XFM:'GIS',GIS:'SYSTEM'},
       resolutionStrategy:isBuiltIn?'legacy-register':'source-priority',
       downstreamGapPolicy:isBuiltIn?'truncate':'bridge-review',
@@ -7918,6 +7932,100 @@ async function collectLoadDescriptionTags(keys,tick){
   return tags;
 }
 
+/* ==== src/io/p6.js ==== */
+
+
+
+
+/* ---- P6 schedule ingestion (spec §3 input 5) ----
+   Strictly optional: nothing downstream may require P6 data. XER is P6's
+   native plain-text export — %T names a table, %F lists its fields, %R is a
+   row. Only TASK and TASKPRED matter here. */
+function parseXer(text){
+  const tasks=[],links=[];
+  let table='',fields=[];
+  for(const line of String(text||'').split(/\r?\n/)){
+    const cells=line.split('\t'),marker=cells[0];
+    if(marker==='%T'){table=clean(cells[1]).toUpperCase();fields=[];continue;}
+    if(marker==='%F'){fields=cells.slice(1).map(f=>clean(f).toLowerCase());continue;}
+    if(marker!=='%R')continue;
+    const row={};fields.forEach((field,i)=>{row[field]=clean(cells[i+1]);});
+    if(table==='TASK'){
+      tasks.push({id:row.task_id||'',code:row.task_code||'',name:row.task_name||'',
+        milestone:/^TT_(Mile|FinMile)$/i.test(row.task_type||'')});
+    }else if(table==='TASKPRED'){
+      links.push({taskId:row.task_id||'',predTaskId:row.pred_task_id||''});
+    }
+  }
+  return {tasks,links};
+}
+function p6NormHeader(value){return clean(value).toLowerCase().replace(/[^a-z0-9]+/g,'');}
+function detectP6(headers){
+  const norm=headers.map(p6NormHeader);
+  const activityId=norm.findIndex(h=>h==='activityid');
+  const activityName=norm.findIndex(h=>h==='activityname');
+  if(activityId<0||activityName<0)return null;
+  const equipmentId=norm.findIndex(h=>h==='equipmentid'||h==='equipmenttag');
+  const upn=norm.findIndex(h=>h==='upn'||h.startsWith('upn'));
+  return {activityId,activityName,equipmentId,upn};
+}
+const _p6Cache=new Map();
+function p6Info(key){
+  if(_p6Cache.has(key))return _p6Cache.get(key);
+  const {aoa}=getAoa(key),res=scanMappedHeader(aoa,detectP6,30);
+  _p6Cache.set(key,res);return res;
+}
+function isP6Sheet(key){return !!p6Info(key);}
+/* Rows from one selected P6 XLSX sheet, in parseXer's task shape. An activity
+   sheet has no task_type column, so milestone detection falls to the name
+   pattern in the ladder; an explicit equipment/UPN column rides along. */
+function p6SheetTasks(key){
+  const info=p6Info(key);if(!info)return [];
+  const {map,headerRow}=info,{aoa}=getAoa(key),tasks=[];
+  for(let i=headerRow+1;i<aoa.length;i++){
+    const row=aoa[i]||[],code=clean(row[map.activityId]),name=clean(row[map.activityName]);
+    if(!code&&!name)continue;
+    tasks.push({id:code,code,name,milestone:false,
+      equipmentId:map.equipmentId>=0?clean(row[map.equipmentId]):'',
+      upn:map.upn>=0?clean(row[map.upn]):''});
+  }
+  return tasks;
+}
+
+/* ==== src/io/linelist.js ==== */
+
+
+
+
+/* ---- P&ID line list (spec §3 input 6, optional) ----
+   Feeds the piping/duct roll-up rows: each UPN's line segments collapse to one
+   "UPN {upn} Distribution Piping" register row, per the SOP's roll-up rule. */
+function lineNormHeader(value){return clean(value).toLowerCase().replace(/[^a-z0-9]+/g,'');}
+function detectLineList(headers){
+  const norm=headers.map(lineNormHeader);
+  if(norm.some(h=>h==='equipmenttag'||h.endsWith('equipmenttag')))return null; // that's a MEL
+  const lineId=norm.findIndex(h=>h==='lineid'||h==='linenumber'||h==='lineno');
+  const upn=norm.findIndex(h=>h==='upn'||h.startsWith('upn'));
+  if(lineId<0||upn<0)return null;
+  return {lineId,upn};
+}
+const _lineListCache=new Map();
+function lineListInfo(key){
+  if(_lineListCache.has(key))return _lineListCache.get(key);
+  const {aoa}=getAoa(key),res=scanMappedHeader(aoa,detectLineList,30);
+  _lineListCache.set(key,res);return res;
+}
+function isLineListSheet(key){return !!lineListInfo(key);}
+function lineListRows(key){
+  const info=lineListInfo(key);if(!info)return [];
+  const {map,headerRow}=info,{aoa}=getAoa(key),rows=[];
+  for(let i=headerRow+1;i<aoa.length;i++){
+    const row=aoa[i]||[],lineId=clean(row[map.lineId]),upn=clean(row[map.upn]);
+    if(lineId&&upn)rows.push({lineId,upn});
+  }
+  return rows;
+}
+
 /* ==== src/legend/corpus.js ==== */
 
 /* cleanTagRaw, deliberately NOT cleanTag. cleanTag is
@@ -9813,7 +9921,201 @@ function recordCompilerCableEdges(records) {
   }
 }
 
+/* ==== src/compiler/ladders.js ==== */
+
+
+
+
+
+
+/* ---- Milestone fallback ladder (spec §6a) ----
+   Every record gets a milestone at every input maturity level:
+     rung 1 — a P6 activity carries this equipment ID explicitly
+     rung 2 — a P6 milestone carries this record's UPN in an explicit column
+     rung 3 — the UPN is extracted from a milestone name by pattern
+     rung 4 — no L2 found: the building-ready bucket (the SOP's own default)
+   An immature or absent P6 just lands more records on lower rungs; the next
+   recompile with a fuller schedule promotes them. */
+
+function collectP6(){
+  const tasks=[];
+  for(const file of S.files||[])if(file.p6)tasks.push(...file.p6.tasks);
+  for(const key of S.p6Sel||[])tasks.push(...p6SheetTasks(key));
+  return {tasks};
+}
+
+function assignMilestones(records){
+  const hierarchy=activeProfile().hierarchy||{},cfg=hierarchy.milestones||{};
+  const buildingReady=clean(cfg.buildingReadyLabel)||'OP / Building Ready';
+  const upnPattern=new RegExp(cfg.upnPattern||'\\bUPN\\s*[-#]?\\s*([A-Za-z0-9.-]+)','i');
+  const {tasks}=collectP6();
+  /* Milestone-flagged tasks claim a UPN first; unflagged activities only fill
+     gaps, so a task row never shadows a real L2 milestone. */
+  const byTag=new Map(),byUpn=new Map();
+  const claimUpn=(upnValue,task,rung)=>{
+    const key=melUpnKey(upnValue);if(!key||byUpn.has(key))return;
+    byUpn.set(key,{task,rung});
+  };
+  const ordered=[...tasks].sort((a,b)=>(b.milestone?1:0)-(a.milestone?1:0));
+  for(const task of ordered){
+    if(task.equipmentId){const key=tagKey(task.equipmentId);if(key&&!byTag.has(key))byTag.set(key,task);}
+    if(task.upn)claimUpn(task.upn,task,2);
+    const match=(task.name||'').match(upnPattern);
+    if(match)claimUpn(match[1],task,3);
+  }
+  for(const record of records.values()){
+    const direct=byTag.get(record.key);
+    if(direct){record.milestone={label:direct.name||direct.code,rung:1};continue;}
+    const upnKey=record.mel?melUpnKey(record.mel.upn||''):'';
+    const viaUpn=upnKey&&byUpn.get(upnKey);
+    if(viaUpn){record.milestone={label:viaUpn.task.name||viaUpn.task.code,rung:viaUpn.rung};continue;}
+    record.milestone={label:buildingReady,rung:4};
+  }
+}
+
+/* ==== src/compiler/sequence.js ==== */
+
+
+
+
+
+/* ---- Sequencing (spec §5 "Sequencing") ----
+   Within a system block: topological order of the structural tree, direction
+   set by discipline polarity — Electrical/LSS/Security commission top-down
+   (parents before children: LVSS → transformer → panelboard), Mechanical/I&C
+   bottom-up (children before parents: TETs before the MAH). Across systems:
+   cross-partition dependencies collapse to UPN precedence edges and a Kahn
+   topological sort gives the startup order; cycles are review items. */
+
+function disciplinePolarity(discipline,profile){
+  const hierarchy=(profile||activeProfile()).hierarchy||{},map=hierarchy.polarity||{};
+  const configured=map[discipline]||map[clean(discipline)];
+  if(configured==='top-down'||configured==='bottom-up')return configured;
+  return /elec|lss|security|fire/i.test(discipline||'')?'top-down':'bottom-up';
+}
+
+function groupKeyOf(record){return [record.building||'',record.discipline||'',record.system||''].join('');}
+
+function computeSequence(records,profile){
+  const groups=new Map();
+  for(const record of records.values()){
+    if(!record.includeInRegister)continue;
+    const key=groupKeyOf(record);
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push(record);
+  }
+  for(const members of groups.values()){
+    const byKey=new Map(members.map(record=>[record.key,record]));
+    const children=new Map(members.map(record=>[record.key,[]]));
+    const roots=[];
+    for(const record of members){
+      const parent=byKey.get(tagKey(record.ssmParentTag));
+      if(parent)children.get(parent.key).push(record);
+      else roots.push(record);
+    }
+    const sortRecords=list=>list.sort((a,b)=>natCmp(a.tag,b.tag));
+    sortRecords(roots);for(const list of children.values())sortRecords(list);
+    const polarity=disciplinePolarity(members[0].discipline,profile);
+    let index=0;
+    const walk=record=>{
+      if(polarity==='top-down')record.sequence=++index;
+      for(const child of children.get(record.key))walk(child);
+      if(polarity!=='top-down')record.sequence=++index;
+    };
+    roots.forEach(walk);
+  }
+}
+
+function upnPrecedence(records){
+  const edges=new Map(),nodes=new Set();
+  for(const record of records.values()){
+    const upn=record.mel?melUpnKey(record.mel.upn||''):'';
+    if(!upn)continue;
+    nodes.add(upn);
+    for(const dependency of record.dependencies){
+      const target=records.get(tagKey(dependency));
+      const depUpn=target&&target.mel?melUpnKey(target.mel.upn||''):'';
+      if(!depUpn||depUpn===upn)continue;
+      nodes.add(depUpn);
+      const edgeKey=depUpn+''+upn;
+      if(!edges.has(edgeKey))edges.set(edgeKey,{from:depUpn,to:upn,via:[]});
+      edges.get(edgeKey).via.push(`${clean(dependency)} → ${record.tag}`);
+    }
+  }
+  /* Kahn's algorithm; whatever cannot be scheduled is cyclic and goes to review. */
+  const inDegree=new Map([...nodes].map(node=>[node,0])),outbound=new Map([...nodes].map(node=>[node,[]]));
+  for(const {from,to} of edges.values()){inDegree.set(to,inDegree.get(to)+1);outbound.get(from).push(to);}
+  const queue=[...nodes].filter(node=>!inDegree.get(node)).sort(natCmp),order=[];
+  while(queue.length){
+    const node=queue.shift();order.push(node);
+    for(const next of outbound.get(node)){
+      inDegree.set(next,inDegree.get(next)-1);
+      if(!inDegree.get(next)){queue.push(next);queue.sort(natCmp);}
+    }
+  }
+  const cycles=[...nodes].filter(node=>!order.includes(node)).sort(natCmp);
+  return {edges:[...edges.values()],order,cycles};
+}
+
+/* ==== src/compiler/rollups.js ==== */
+
+
+
+
+
+/* ---- Piping roll-ups (spec §5.9) ----
+   Line-list segments collapse to one synthetic register row per UPN. Partition
+   attributes come from the majority of that UPN's MEL members, so the roll-up
+   lands inside the system block it serves. Synthetic rows are excluded from
+   tag-vs-MEL validation. */
+
+function majority(values){
+  const counts=new Map();
+  for(const value of values){const v=clean(value);if(!v)continue;counts.set(v,(counts.get(v)||0)+1);}
+  let best='';for(const [value,count] of counts)if(!best||count>counts.get(best))best=value;
+  return best;
+}
+
+function synthesizeLineRollups(records,ensure){
+  const byUpn=new Map();
+  for(const key of S.lineSel||[])for(const row of lineListRows(key)){
+    const upnKey=melUpnKey(row.upn);if(!upnKey)continue;
+    if(!byUpn.has(upnKey))byUpn.set(upnKey,{upn:clean(row.upn),lines:[]});
+    byUpn.get(upnKey).lines.push(row.lineId);
+  }
+  for(const {upn,lines} of byUpn.values()){
+    const record=ensure(`UPN ${upn} Distribution Piping`,{observed:true});
+    if(!record)continue;
+    record.isSyntheticRollup=true;record.includeInRegister=true;record.includeInHierarchy=true;
+    record.description=`${lines.length} line segment${lines.length===1?'':'s'}: ${lines.join(', ')}`;
+    const members=(S.melRows||[]).filter(row=>melUpnKey(row.upn)===melUpnKey(upn));
+    record._rollupAttrs={
+      building:majority(members.map(row=>row.building)),
+      discipline:majority(members.map(row=>row.discipline)),
+      systemDescription:majority(members.map(row=>row.systemDescription)),
+      upn,
+    };
+  }
+}
+
+/* Applied after resolveRecordContext, which only knows MEL/rule sources —
+   roll-ups override the fallback attributes with the UPN-majority partition
+   and mark them explicit so grouping and the fold treat them as proven. */
+function finalizeLineRollups(records){
+  for(const record of records.values()){
+    if(!record.isSyntheticRollup||!record._rollupAttrs||!record.context)continue;
+    const attrs=record._rollupAttrs;
+    const system=attrs.upn&&attrs.systemDescription?`${attrs.upn} ${attrs.systemDescription}`:(attrs.systemDescription||record.system);
+    if(attrs.building){record.building=attrs.building;record.attributes.building=attrs.building;record.context.explicit.building=true;}
+    if(attrs.discipline){record.discipline=attrs.discipline;record.attributes.discipline=attrs.discipline;record.context.explicit.discipline=true;}
+    if(system){record.system=system;record.attributes.system=system;record.context.explicit.system=true;}
+  }
+}
+
 /* ==== src/hierarchy/projection.js ==== */
+
+
+
 
 
 
@@ -9950,6 +10252,7 @@ function buildCanonicalModel(){
       record.phaseExcluded=!!phase&&excludedPhases.has(phase);
       if(!record.phaseExcluded){record.includeInRegister=true;record.includeInHierarchy=true;}
     }
+    synthesizeLineRollups(records,ensure);
   }
   /* Cable evidence honors the same workflow switch as the raw-tree cable
      stage: a profile that disables cable parent chains gets no cable claims
@@ -10064,6 +10367,17 @@ function buildCanonicalModel(){
     inherited.add(record.key);
   };
   for(const record of records.values())inherit(record,new Set());
+  /* Compiler fork — milestone ladder + sequencing (spec §5/§6), after
+     attribute inheritance so grouping is final. P6 is strictly optional:
+     without it every record lands on the building-ready rung. */
+  if(melSeed&&melSeed.enabled!==false){
+    finalizeLineRollups(records);
+    assignMilestones(records);
+    computeSequence(records,profile);
+    S.upnPrecedence=upnPrecedence(records);
+  }else{
+    S.upnPrecedence={edges:[],order:[],cycles:[]};
+  }
   if(profile.hierarchy&&profile.hierarchy.resolutionStrategy!=='legacy-register'){
     S.ssmCombined=resolvedRegisterRows(S.ssmCombined,records);
   }
@@ -12324,28 +12638,107 @@ function addHierSheet(wb,name,roots,used){
 /* Exto SSM: UPN -> G, Equipment ID -> K, Closest Parent -> P, Dependencies -> AM (header row 2, data row 3).
    Load Description rows: Closest Parent blank, Dependency = equipment above. */
 function addExtoSheet(wb,name,rows,used){
-  const G=6,K=10,P=15,AM=38,W=39,aoa=[];
+  /* Column layout is profile data (spec §8.1) so an upload-template revision
+     never requires code — the defaults reproduce the historical G/K/P/AM
+     layout, and a milestone column is emitted only when the map places one. */
+  const cfg=activeProfile().hierarchy&&activeProfile().hierarchy.extoColumns||{};
+  const G=cfg.upn??6,K=cfg.equipmentId??10,P=cfg.closestParent??15,AM=cfg.dependencies??38,MS=cfg.milestone??-1;
+  const W=Math.max(G,K,P,AM,MS)+1,aoa=[];
   aoa.push(new Array(W).fill(''));
-  const head=new Array(W).fill('');head[G]='UPN';head[K]='Equipment ID';head[P]='Closest Parent';head[AM]='Dependencies';aoa.push(head);
-  for(const r of filterSsm(rows)){const {equip,parent,dep}=ssmRegisterResolve(r);const row=new Array(W).fill('');row[G]=melUpn(equip);row[K]=equip;row[P]=registerDisplayValue(parent);row[AM]=registerDisplayValue(dep);aoa.push(row);}
+  const head=new Array(W).fill('');head[G]='UPN';head[K]='Equipment ID';head[P]='Closest Parent';head[AM]='Dependencies';if(MS>=0)head[MS]='L2 Milestone';aoa.push(head);
+  for(const r of filterSsm(rows)){
+    const {equip,parent,dep}=ssmRegisterResolve(r),record=MS>=0?canonicalRecord(equip):null;
+    const row=new Array(W).fill('');row[G]=melUpn(equip);row[K]=equip;row[P]=registerDisplayValue(parent);row[AM]=registerDisplayValue(dep);
+    if(MS>=0)row[MS]=record&&record.milestone?record.milestone.label:'';
+    aoa.push(row);
+  }
   const ws=XLSX.utils.aoa_to_sheet(aoa);
-  const cols=new Array(W).fill(0).map(()=>({wch:9}));cols[G]={wch:12};cols[K]={wch:26};cols[P]={wch:26};cols[AM]={wch:24};ws['!cols']=cols;
-  styleHeaderRow(ws,1);                                     // only the G/K/P/AM header cells are non-empty
+  const cols=new Array(W).fill(0).map(()=>({wch:9}));cols[G]={wch:12};cols[K]={wch:26};cols[P]={wch:26};cols[AM]={wch:24};if(MS>=0)cols[MS]={wch:34};ws['!cols']=cols;
+  styleHeaderRow(ws,1);                                     // only the mapped header cells are non-empty
   addSheet(wb,ws,name,used,2);
 }
 /* Plain SSM register: Equipment ID, Closest Parent, Dependencies, UPN, then the
    partition columns the Compiler groups by (spec §8.1). */
 function addSsm3Sheet(wb,name,rows,used){
-  const aoa=[['Equipment ID','Closest Parent','Dependencies','UPN','System','Building','Discipline']];
+  const aoa=[['Equipment ID','Closest Parent','Dependencies','UPN','System','Building','Discipline','L2 Milestone','Sequence']];
   for(const r of filterSsm(rows)){
     const {equip,parent,dep}=ssmRegisterResolve(r),record=canonicalRecord(equip);
     aoa.push([equip,registerDisplayValue(parent),registerDisplayValue(dep),melUpn(equip),
-      record?recordAttribute(record,'system'):'',record?recordAttribute(record,'building'):'',record?recordAttribute(record,'discipline'):'']);
+      record?recordAttribute(record,'system'):'',record?recordAttribute(record,'building'):'',record?recordAttribute(record,'discipline'):'',
+      record&&record.milestone?record.milestone.label:'',record&&record.sequence!=null?record.sequence:'']);
   }
   const ws=XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols']=[{wch:28},{wch:28},{wch:24},{wch:12},{wch:24},{wch:14},{wch:14}];
+  ws['!cols']=[{wch:28},{wch:28},{wch:24},{wch:12},{wch:24},{wch:14},{wch:14},{wch:34},{wch:10}];
   styleHeaderRow(ws,0);setFilter(ws,0);
   addSheet(wb,ws,name,used,1);
+}
+/* UPN predecessor matrix (spec §8.3) — the contract "one pager", derived. */
+function addPredecessorMatrixSheet(wb,used){
+  const precedence=S.upnPrecedence;
+  if(!precedence||(!precedence.edges.length&&!precedence.order.length))return;
+  const edgeAoa=[['Predecessor UPN','Successor UPN','Via']];
+  for(const edge of precedence.edges)edgeAoa.push([edge.from,edge.to,edge.via.join('; ')]);
+  if(precedence.cycles.length)edgeAoa.push(['CYCLE — review required',precedence.cycles.join(', '),'']);
+  const edgeWs=XLSX.utils.aoa_to_sheet(edgeAoa);
+  edgeWs['!cols']=[{wch:18},{wch:18},{wch:60}];styleHeaderRow(edgeWs,0);setFilter(edgeWs,0);
+  addSheet(wb,edgeWs,'UPN Predecessors',used,1);
+  const upns=[...new Set([...precedence.order,...precedence.cycles])];
+  const matrixAoa=[['Pred \\ Succ',...upns]];
+  for(const from of upns)matrixAoa.push([from,...upns.map(to=>precedence.edges.some(e=>e.from===from&&e.to===to)?'X':'')]);
+  const matrixWs=XLSX.utils.aoa_to_sheet(matrixAoa);
+  matrixWs['!cols']=[{wch:14},...upns.map(()=>({wch:8}))];styleHeaderRow(matrixWs,0);
+  addSheet(wb,matrixWs,'UPN Matrix',used,1);
+}
+/* QA scorecard + exceptions (spec §8.4): the acceptance-criteria KPIs computed
+   locally, so an upload arrives pre-green — or arrives with a precise list of
+   what is missing and which document unlocks it. */
+function addQaSheets(wb,used){
+  const records=[...S.canonicalModel.values()].filter(record=>record.includeInRegister&&!record.isSyntheticRollup);
+  if(!records.length)return;
+  const total=records.length;
+  const withMel=records.filter(record=>record.mel).length;
+  const withParent=records.filter(record=>record.ssmParentTag).length;
+  const withDeps=records.filter(record=>record.dependencies.size).length;
+  const rungs=[1,2,3,4].map(rung=>records.filter(record=>record.milestone&&record.milestone.rung===rung).length);
+  const orphans=records.filter(record=>!record.ssmParentTag&&!record.dependencies.size);
+  const contradictions=[],cableMissing=[];
+  for(const row of S.melRows||[]){
+    const record=canonicalRecord(row.tag),asserted=clean(row.systemParent);
+    const derived=record&&record.ssmParentTag||'';
+    if(asserted&&derived&&tagKey(asserted)!==tagKey(derived))contradictions.push({tag:row.tag,asserted,derived});
+  }
+  for(const [loadLower,panel] of S.deps||[]){
+    const record=canonicalRecord(loadLower);
+    if(!record||!record.mel)cableMissing.push({load:loadLower,panel});
+  }
+  const cycles=S.upnPrecedence&&S.upnPrecedence.cycles||[];
+  const pct=count=>total?Math.round(count/total*1000)/10+'%':'—';
+  const scoreAoa=[['KPI','Value'],
+    ['Register rows (non-synthetic)',total],
+    ['Tag vs MEL validation',pct(withMel)],
+    ['Records with structural parent',pct(withParent)],
+    ['Records with dependencies',pct(withDeps)],
+    ['Milestone rung 1 (direct P6 equipment match)',rungs[0]],
+    ['Milestone rung 2 (explicit UPN column)',rungs[1]],
+    ['Milestone rung 3 (milestone-name pattern)',rungs[2]],
+    ['Milestone rung 4 (building-ready default)',rungs[3]],
+    ['Orphans (no parent, no dependencies)',orphans.length],
+    ['MEL assertions contradicting the wiring',contradictions.length],
+    ['Cable loads absent from the MEL',cableMissing.length],
+    ['UPN precedence cycles',cycles.length]];
+  const scoreWs=XLSX.utils.aoa_to_sheet(scoreAoa);
+  scoreWs['!cols']=[{wch:44},{wch:14}];styleHeaderRow(scoreWs,0);
+  addSheet(wb,scoreWs,'QA Scorecard',used,1);
+  const exceptionsAoa=[['Type','Subject','Detail']];
+  for(const upn of cycles)exceptionsAoa.push(['UPN cycle',upn,'Part of a precedence cycle — review dependencies']);
+  for(const record of orphans)exceptionsAoa.push(['Orphan',record.tag,'No parent and no dependencies resolved']);
+  for(const item of contradictions)exceptionsAoa.push(['MEL contradiction',item.tag,`wiring derives ${item.derived}; MEL asserts ${item.asserted}`]);
+  for(const item of cableMissing)exceptionsAoa.push(['Cable load absent from MEL',item.load,`fed from ${item.panel}`]);
+  if(exceptionsAoa.length>1){
+    const exWs=XLSX.utils.aoa_to_sheet(exceptionsAoa);
+    exWs['!cols']=[{wch:26},{wch:28},{wch:60}];styleHeaderRow(exWs,0);setFilter(exWs,0);
+    addSheet(wb,exWs,'QA Exceptions',used,1);
+  }
 }
 /* Completed MEL (spec §8.2) — the flywheel sheet: the MEL columns as imported,
    plus derived proposals with provenance. A blank System Parent cell gets the
@@ -12369,6 +12762,32 @@ function addCompletedMelSheet(wb,used){
   ws['!cols']=[{wch:26},{wch:28},{wch:12},{wch:14},{wch:10},{wch:22},{wch:26},{wch:26},{wch:26},{wch:30},{wch:40}];
   styleHeaderRow(ws,0);setFilter(ws,0);
   addSheet(wb,ws,'Completed MEL',used,1);
+}
+/* Change control (spec §8.5): the SOP requires approval to break a dependency,
+   so a compile is diffed against the imported working copy and every broken
+   dependency is called out separately from ordinary moves. */
+function addChangeControlSheet(wb,used){
+  if(!S.wcRows||!S.wcRows.length)return;
+  const splitList=value=>clean(value)?clean(value).split(/[;,]/).map(clean).filter(v=>v&&v.toLowerCase()!=='n/a'):[];
+  const current=new Map();
+  for(const r of S.ssmCombined){
+    const {equip,parent,dep}=ssmRegisterResolve(r),key=tagKey(equip);
+    if(!current.has(key))current.set(key,{parent:clean(parent),deps:new Set(splitList(dep).map(tagKey))});
+  }
+  const rows=[['Change','Equipment','Detail']];
+  for(const wc of S.wcRows){
+    const key=tagKey(wc.equip),now=current.get(key);
+    if(!now){rows.push(['Removed from register',wc.equip,'Present in the working copy, absent from this compile']);continue;}
+    for(const dep of splitList(wc.dep))if(!now.deps.has(tagKey(dep)))
+      rows.push(['Broken dependency (requires approval)',wc.equip,`working copy depends on ${dep}; this compile does not`]);
+    const wcParent=clean(wc.parent),nowParent=clean(now.parent);
+    if(wcParent&&wcParent.toLowerCase()!=='n/a'&&tagKey(wcParent)!==tagKey(nowParent))
+      rows.push(['Parent moved',wc.equip,`working copy under ${wcParent}; this compile under ${nowParent||'(root)'}`]);
+  }
+  if(rows.length===1)return;
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols']=[{wch:34},{wch:28},{wch:60}];styleHeaderRow(ws,0);setFilter(ws,0);
+  addSheet(wb,ws,'Change Control',used,1);
 }
 /* Cross-Sheet Tag Review — Cable Schedule loads with no exact match in Easy Power. */
 function addReviewSheet(wb,used){
@@ -12465,7 +12884,7 @@ async function exportSSMXlsx(){
     const wb=XLSX.utils.book_new(),used=new Set();
     if(mode==='separate')S.sheets.forEach(sh=>addSsm3Sheet(wb,'SSM-'+sh.sheetName,resolvedRegisterRowsFor(sheetSsmRows(sh)),used));
     else addSsm3Sheet(wb,'SSM',S.ssmCombined,used);
-    addCompletedMelSheet(wb,used);
+    addCompletedMelSheet(wb,used);addPredecessorMatrixSheet(wb,used);addQaSheets(wb,used);addChangeControlSheet(wb,used);
     addReviewSheet(wb,used);addPlacementReviewSheet(wb,used);addCompareSheet(wb,used);
     downloadBlob('ssm-export.xlsx',wbBlob(wb));
   }))toast(mode==='separate'?S.sheets.length+' SSM tabs exported':'SSM exported');
@@ -12487,6 +12906,8 @@ function exportOutlineTxt(){
 }
 
 /* ==== src/ui/screens.js ==== */
+
+
 
 
 
@@ -12692,7 +13113,7 @@ function renderFileList(){
   const hint=$('#uphint');if(hint)hint.textContent=okFiles.length?`${okFiles.length} file${okFiles.length!==1?'s':''} · ${tabs} tab${tabs!==1?'s':''} ready`:'';
   const cont=$('#toSheets');if(cont)cont.disabled=okFiles.length===0;
   const clr=$('#clearall');if(clr)clr.style.display=S.files.length?'':'none';
-  $$('#filelist .xbtn').forEach(b=>b.onclick=()=>{const id=b.dataset.id;S.files=S.files.filter(f=>f.id!==id);[...S.selected,...S.cableSel,...S.pmdSel,...S.melSel].forEach(k=>{if(k.split(KEYSEP)[0]===id){S.selected.delete(k);S.cableSel.delete(k);S.pmdSel.delete(k);S.melSel.delete(k);}});invalidateHierarchyBuild();renderFileList();});
+  $$('#filelist .xbtn').forEach(b=>b.onclick=()=>{const id=b.dataset.id;S.files=S.files.filter(f=>f.id!==id);[...S.selected,...S.cableSel,...S.pmdSel,...S.melSel,...S.p6Sel,...S.lineSel].forEach(k=>{if(k.split(KEYSEP)[0]===id){S.selected.delete(k);S.cableSel.delete(k);S.pmdSel.delete(k);S.melSel.delete(k);S.p6Sel.delete(k);S.lineSel.delete(k);}});invalidateHierarchyBuild();renderFileList();});
 }
 function wireUpload(){
   const dz=$('#dz'),input=$('#file');
@@ -12704,7 +13125,7 @@ function wireUpload(){
   ['dragenter','dragover'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('drag');}));
   ['dragleave','dragend'].forEach(ev=>dz.addEventListener(ev,e=>{if(e.target===dz)dz.classList.remove('drag');}));
   dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag');addFiles([...e.dataTransfer.files]);});
-  $('#clearall').onclick=()=>{S.files=[];S.aoaCache.clear();S.selected.clear();S.cableSel.clear();S.pmdSel.clear();S.melSel.clear();S.override={};S.workCopy=null;S.wcRows=null;invalidateHierarchyBuild();renderFileList();renderWorkCopy();};
+  $('#clearall').onclick=()=>{S.files=[];S.aoaCache.clear();S.selected.clear();S.cableSel.clear();S.pmdSel.clear();S.melSel.clear();S.p6Sel.clear();S.lineSel.clear();S.override={};S.workCopy=null;S.wcRows=null;invalidateHierarchyBuild();renderFileList();renderWorkCopy();};
   $('#toSheets').onclick=async()=>{if($('#toSheets').disabled)return;await prewarmSheets();go('sheets');};
 }
 async function addFiles(fileObjs){
@@ -12716,8 +13137,15 @@ async function addFiles(fileObjs){
       report(i/accepted.length,`File ${i+1} of ${accepted.length}`);await raf();
       const ext=(file.name.split('.').pop()||'').toLowerCase();
       const rec={id:'f'+(_uid++),name:file.name,ext,size:file.size,wb:null,sheets:[],strikes:new Map(),error:null};
-      try{const buf=await readArrayBuffer(file),bytes=new Uint8Array(buf),wb=XLSX.read(bytes,{type:'array'});
-        rec.wb=wb;rec.strikes=extractStrikeCells(bytes);rec.sheets=wb.SheetNames.slice();if(!rec.sheets.length)rec.error='No readable tabs found';
+      try{const buf=await readArrayBuffer(file),bytes=new Uint8Array(buf);
+        if(ext==='xer'){
+          /* P6's native export is plain tab-delimited text, not a workbook. */
+          rec.p6=parseXer(new TextDecoder().decode(bytes));
+          if(!rec.p6.tasks.length)rec.error='No TASK rows found in this XER file';
+        }else{
+          const wb=XLSX.read(bytes,{type:'array'});
+          rec.wb=wb;rec.strikes=extractStrikeCells(bytes);rec.sheets=wb.SheetNames.slice();if(!rec.sheets.length)rec.error='No readable tabs found';
+        }
       }catch(err){rec.error='Could not read this file';}
       S.files.push(rec);
     }
@@ -12740,6 +13168,8 @@ async function prewarmSheets(){
   allKeys().forEach(k=>{if(!isPmdSheet(k)&&!isMelSheet(k)&&isCableSheet(k))S.cableSel.add(k);});
   S.files.forEach(f=>{if(isPmdFile(f))f.sheets.forEach(s=>{const key=f.id+KEYSEP+s;if(normH(s)===PMD_SHEET_NAME)S.pmdSel.add(key);});});
   allKeys().forEach(k=>{if(isMelSheet(k))S.melSel.add(k);});
+  allKeys().forEach(k=>{if(!isMelSheet(k)&&!isCableSheet(k)&&!isPmdSheet(k)&&isP6Sheet(k))S.p6Sel.add(k);});
+  allKeys().forEach(k=>{if(!isMelSheet(k)&&!isCableSheet(k)&&!isPmdSheet(k)&&!S.p6Sel.has(k)&&isLineListSheet(k))S.lineSel.add(k);});
 }
 
 /* ---- sheets screen ---- */

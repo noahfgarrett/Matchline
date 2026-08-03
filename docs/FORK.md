@@ -29,3 +29,16 @@ Phase 3 — see docs/specs/2026-08-03-ssm-compiler-design.md §11.
 - The register keeps its existing convention of rendering rooted (blank)
   parents as `N/A`.
 - `tests/profile.test.mjs`'s pinned `detectMel` shape gained the two new keys.
+
+## Phase 2+3 deviations and deferrals
+
+- P6 rung-1 (direct equipment) matching uses explicit equipment-ID columns only
+  (XLSX activity exports); no fuzzy activity-text scanning.
+- Milestone/sequence/precedence computation is gated on the same MEL-first
+  switch (`hierarchy.melSeed.enabled`) as everything else — Eagle stays frozen.
+- Line-list roll-up partition attributes come from the UPN's MEL majority; a
+  manual piping-add UI is deferred.
+- Deferred intentionally: fork surface trim (legend trainer, update UI, etc.),
+  rule-pack authoring polish, review-queue UX. The SOP-baseline equipment-type
+  relate rules (VFD→major equipment with PLC/panel deps, etc.) remain profile
+  authoring work, not code.
