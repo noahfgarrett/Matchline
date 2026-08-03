@@ -1287,6 +1287,12 @@ const LEGEND_PDFJS_WORKER="/**\n * @licstart The following is the entire license
 "use strict";
 const CHANGELOG = [
   {
+    "version": "0.3.0",
+    "date": "2026-08-03T00:00:00Z",
+    "type": "feature",
+    "notes": "- Added P6 schedule ingestion (XER and XLSX activity exports), strictly optional\n- Added the milestone fallback ladder: direct equipment match, UPN column, milestone-name pattern, building-ready default\n- Added discipline-polarity sequencing (electrical top-down, mechanical/I&C bottom-up) and the derived UPN predecessor matrix\n- Added the QA scorecard and exceptions sheets with coverage KPIs and milestone rung distribution\n- Added P&ID line-list ingestion with per-UPN distribution-piping roll-up rows\n- Added the Change Control sheet with broken-dependency callouts against an imported working copy\n- Added a profile-configurable EXTO upload column map with an optional milestone column"
+  },
+  {
     "version": "0.1.0",
     "date": "2026-08-03T00:00:00Z",
     "type": "major",
@@ -4699,7 +4705,7 @@ function createDurableProfileStorage(options = {}) {
 
 
 
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '0.3.0';
 const UPDATE_REPOSITORY = 'noahfgarrett/SSMCompiler-Releases';
 const UPDATE_RELEASE_API = 'https://api.github.com/repos/'+UPDATE_REPOSITORY+'/releases/latest';
 const UPDATE_API_VERSION = '2026-03-10';
@@ -7986,6 +7992,40 @@ function p6SheetTasks(key){
   return tasks;
 }
 
+/* ==== src/io/linelist.js ==== */
+
+
+
+
+/* ---- P&ID line list (spec §3 input 6, optional) ----
+   Feeds the piping/duct roll-up rows: each UPN's line segments collapse to one
+   "UPN {upn} Distribution Piping" register row, per the SOP's roll-up rule. */
+function lineNormHeader(value){return clean(value).toLowerCase().replace(/[^a-z0-9]+/g,'');}
+function detectLineList(headers){
+  const norm=headers.map(lineNormHeader);
+  if(norm.some(h=>h==='equipmenttag'||h.endsWith('equipmenttag')))return null; // that's a MEL
+  const lineId=norm.findIndex(h=>h==='lineid'||h==='linenumber'||h==='lineno');
+  const upn=norm.findIndex(h=>h==='upn'||h.startsWith('upn'));
+  if(lineId<0||upn<0)return null;
+  return {lineId,upn};
+}
+const _lineListCache=new Map();
+function lineListInfo(key){
+  if(_lineListCache.has(key))return _lineListCache.get(key);
+  const {aoa}=getAoa(key),res=scanMappedHeader(aoa,detectLineList,30);
+  _lineListCache.set(key,res);return res;
+}
+function isLineListSheet(key){return !!lineListInfo(key);}
+function lineListRows(key){
+  const info=lineListInfo(key);if(!info)return [];
+  const {map,headerRow}=info,{aoa}=getAoa(key),rows=[];
+  for(let i=headerRow+1;i<aoa.length;i++){
+    const row=aoa[i]||[],lineId=clean(row[map.lineId]),upn=clean(row[map.upn]);
+    if(lineId&&upn)rows.push({lineId,upn});
+  }
+  return rows;
+}
+
 /* ==== src/legend/corpus.js ==== */
 
 /* cleanTagRaw, deliberately NOT cleanTag. cleanTag is
@@ -10017,7 +10057,63 @@ function upnPrecedence(records){
   return {edges:[...edges.values()],order,cycles};
 }
 
+/* ==== src/compiler/rollups.js ==== */
+
+
+
+
+
+/* ---- Piping roll-ups (spec §5.9) ----
+   Line-list segments collapse to one synthetic register row per UPN. Partition
+   attributes come from the majority of that UPN's MEL members, so the roll-up
+   lands inside the system block it serves. Synthetic rows are excluded from
+   tag-vs-MEL validation. */
+
+function majority(values){
+  const counts=new Map();
+  for(const value of values){const v=clean(value);if(!v)continue;counts.set(v,(counts.get(v)||0)+1);}
+  let best='';for(const [value,count] of counts)if(!best||count>counts.get(best))best=value;
+  return best;
+}
+
+function synthesizeLineRollups(records,ensure){
+  const byUpn=new Map();
+  for(const key of S.lineSel||[])for(const row of lineListRows(key)){
+    const upnKey=melUpnKey(row.upn);if(!upnKey)continue;
+    if(!byUpn.has(upnKey))byUpn.set(upnKey,{upn:clean(row.upn),lines:[]});
+    byUpn.get(upnKey).lines.push(row.lineId);
+  }
+  for(const {upn,lines} of byUpn.values()){
+    const record=ensure(`UPN ${upn} Distribution Piping`,{observed:true});
+    if(!record)continue;
+    record.isSyntheticRollup=true;record.includeInRegister=true;record.includeInHierarchy=true;
+    record.description=`${lines.length} line segment${lines.length===1?'':'s'}: ${lines.join(', ')}`;
+    const members=(S.melRows||[]).filter(row=>melUpnKey(row.upn)===melUpnKey(upn));
+    record._rollupAttrs={
+      building:majority(members.map(row=>row.building)),
+      discipline:majority(members.map(row=>row.discipline)),
+      systemDescription:majority(members.map(row=>row.systemDescription)),
+      upn,
+    };
+  }
+}
+
+/* Applied after resolveRecordContext, which only knows MEL/rule sources —
+   roll-ups override the fallback attributes with the UPN-majority partition
+   and mark them explicit so grouping and the fold treat them as proven. */
+function finalizeLineRollups(records){
+  for(const record of records.values()){
+    if(!record.isSyntheticRollup||!record._rollupAttrs||!record.context)continue;
+    const attrs=record._rollupAttrs;
+    const system=attrs.upn&&attrs.systemDescription?`${attrs.upn} ${attrs.systemDescription}`:(attrs.systemDescription||record.system);
+    if(attrs.building){record.building=attrs.building;record.attributes.building=attrs.building;record.context.explicit.building=true;}
+    if(attrs.discipline){record.discipline=attrs.discipline;record.attributes.discipline=attrs.discipline;record.context.explicit.discipline=true;}
+    if(system){record.system=system;record.attributes.system=system;record.context.explicit.system=true;}
+  }
+}
+
 /* ==== src/hierarchy/projection.js ==== */
+
 
 
 
@@ -10156,6 +10252,7 @@ function buildCanonicalModel(){
       record.phaseExcluded=!!phase&&excludedPhases.has(phase);
       if(!record.phaseExcluded){record.includeInRegister=true;record.includeInHierarchy=true;}
     }
+    synthesizeLineRollups(records,ensure);
   }
   /* Cable evidence honors the same workflow switch as the raw-tree cable
      stage: a profile that disables cable parent chains gets no cable claims
@@ -10274,6 +10371,7 @@ function buildCanonicalModel(){
      attribute inheritance so grouping is final. P6 is strictly optional:
      without it every record lands on the building-ready rung. */
   if(melSeed&&melSeed.enabled!==false){
+    finalizeLineRollups(records);
     assignMilestones(records);
     computeSequence(records,profile);
     S.upnPrecedence=upnPrecedence(records);
@@ -12665,6 +12763,32 @@ function addCompletedMelSheet(wb,used){
   styleHeaderRow(ws,0);setFilter(ws,0);
   addSheet(wb,ws,'Completed MEL',used,1);
 }
+/* Change control (spec §8.5): the SOP requires approval to break a dependency,
+   so a compile is diffed against the imported working copy and every broken
+   dependency is called out separately from ordinary moves. */
+function addChangeControlSheet(wb,used){
+  if(!S.wcRows||!S.wcRows.length)return;
+  const splitList=value=>clean(value)?clean(value).split(/[;,]/).map(clean).filter(v=>v&&v.toLowerCase()!=='n/a'):[];
+  const current=new Map();
+  for(const r of S.ssmCombined){
+    const {equip,parent,dep}=ssmRegisterResolve(r),key=tagKey(equip);
+    if(!current.has(key))current.set(key,{parent:clean(parent),deps:new Set(splitList(dep).map(tagKey))});
+  }
+  const rows=[['Change','Equipment','Detail']];
+  for(const wc of S.wcRows){
+    const key=tagKey(wc.equip),now=current.get(key);
+    if(!now){rows.push(['Removed from register',wc.equip,'Present in the working copy, absent from this compile']);continue;}
+    for(const dep of splitList(wc.dep))if(!now.deps.has(tagKey(dep)))
+      rows.push(['Broken dependency (requires approval)',wc.equip,`working copy depends on ${dep}; this compile does not`]);
+    const wcParent=clean(wc.parent),nowParent=clean(now.parent);
+    if(wcParent&&wcParent.toLowerCase()!=='n/a'&&tagKey(wcParent)!==tagKey(nowParent))
+      rows.push(['Parent moved',wc.equip,`working copy under ${wcParent}; this compile under ${nowParent||'(root)'}`]);
+  }
+  if(rows.length===1)return;
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols']=[{wch:34},{wch:28},{wch:60}];styleHeaderRow(ws,0);setFilter(ws,0);
+  addSheet(wb,ws,'Change Control',used,1);
+}
 /* Cross-Sheet Tag Review — Cable Schedule loads with no exact match in Easy Power. */
 function addReviewSheet(wb,used){
   if(!S.review.length)return;
@@ -12760,7 +12884,7 @@ async function exportSSMXlsx(){
     const wb=XLSX.utils.book_new(),used=new Set();
     if(mode==='separate')S.sheets.forEach(sh=>addSsm3Sheet(wb,'SSM-'+sh.sheetName,resolvedRegisterRowsFor(sheetSsmRows(sh)),used));
     else addSsm3Sheet(wb,'SSM',S.ssmCombined,used);
-    addCompletedMelSheet(wb,used);addPredecessorMatrixSheet(wb,used);addQaSheets(wb,used);
+    addCompletedMelSheet(wb,used);addPredecessorMatrixSheet(wb,used);addQaSheets(wb,used);addChangeControlSheet(wb,used);
     addReviewSheet(wb,used);addPlacementReviewSheet(wb,used);addCompareSheet(wb,used);
     downloadBlob('ssm-export.xlsx',wbBlob(wb));
   }))toast(mode==='separate'?S.sheets.length+' SSM tabs exported':'SSM exported');
@@ -12782,6 +12906,7 @@ function exportOutlineTxt(){
 }
 
 /* ==== src/ui/screens.js ==== */
+
 
 
 
@@ -13044,6 +13169,7 @@ async function prewarmSheets(){
   S.files.forEach(f=>{if(isPmdFile(f))f.sheets.forEach(s=>{const key=f.id+KEYSEP+s;if(normH(s)===PMD_SHEET_NAME)S.pmdSel.add(key);});});
   allKeys().forEach(k=>{if(isMelSheet(k))S.melSel.add(k);});
   allKeys().forEach(k=>{if(!isMelSheet(k)&&!isCableSheet(k)&&!isPmdSheet(k)&&isP6Sheet(k))S.p6Sel.add(k);});
+  allKeys().forEach(k=>{if(!isMelSheet(k)&&!isCableSheet(k)&&!isPmdSheet(k)&&!S.p6Sel.has(k)&&isLineListSheet(k))S.lineSel.add(k);});
 }
 
 /* ---- sheets screen ---- */

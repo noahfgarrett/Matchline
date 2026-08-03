@@ -1,5 +1,11 @@
 [
   {
+    "version": "0.3.0",
+    "date": "2026-08-03T00:00:00Z",
+    "type": "feature",
+    "notes": "- Added P6 schedule ingestion (XER and XLSX activity exports), strictly optional\n- Added the milestone fallback ladder: direct equipment match, UPN column, milestone-name pattern, building-ready default\n- Added discipline-polarity sequencing (electrical top-down, mechanical/I&C bottom-up) and the derived UPN predecessor matrix\n- Added the QA scorecard and exceptions sheets with coverage KPIs and milestone rung distribution\n- Added P&ID line-list ingestion with per-UPN distribution-piping roll-up rows\n- Added the Change Control sheet with broken-dependency callouts against an imported working copy\n- Added a profile-configurable EXTO upload column map with an optional milestone column"
+  },
+  {
     "version": "0.1.0",
     "date": "2026-08-03T00:00:00Z",
     "type": "major",

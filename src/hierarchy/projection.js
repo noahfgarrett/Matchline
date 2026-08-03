@@ -11,6 +11,7 @@ import { resolveHierarchyClaims, HIERARCHY_CLAIM_KIND } from './claims.js'
 import { foldClaimsByPartition, recordPartitionKey } from '../compiler/fold.js'
 import { recordCompilerCableEdges } from '../compiler/edges.js'
 import { assignMilestones } from '../compiler/ladders.js'
+import { synthesizeLineRollups, finalizeLineRollups } from '../compiler/rollups.js'
 import { computeSequence, upnPrecedence } from '../compiler/sequence.js'
 
 /* ---- canonical equipment model and projections ---- */
@@ -136,6 +137,7 @@ export function buildCanonicalModel(){
       record.phaseExcluded=!!phase&&excludedPhases.has(phase);
       if(!record.phaseExcluded){record.includeInRegister=true;record.includeInHierarchy=true;}
     }
+    synthesizeLineRollups(records,ensure);
   }
   /* Cable evidence honors the same workflow switch as the raw-tree cable
      stage: a profile that disables cable parent chains gets no cable claims
@@ -254,6 +256,7 @@ export function buildCanonicalModel(){
      attribute inheritance so grouping is final. P6 is strictly optional:
      without it every record lands on the building-ready rung. */
   if(melSeed&&melSeed.enabled!==false){
+    finalizeLineRollups(records);
     assignMilestones(records);
     computeSequence(records,profile);
     S.upnPrecedence=upnPrecedence(records);

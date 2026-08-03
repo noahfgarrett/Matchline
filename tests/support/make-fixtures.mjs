@@ -59,6 +59,21 @@ const SHEETS = {
       ['B14-RIO-6500', 'Remote IO panel', '650', 'B14', '', 'I&C', 'FMS Network', 'New'],
     ],
   },
+  'compiler-wc.xlsx': {
+    SSM: [
+      ['Equipment ID', 'Closest Parent', 'Dependencies'],
+      ['B14-RIO-6500', 'B14-LVS-1234', 'B14-XFM-9999'],
+      ['GONE-1', 'B14-LVS-1234', ''],
+    ],
+  },
+  'compiler-linelist.xlsx': {
+    Line_List: [
+      ['Line ID', 'UPN', 'Service'],
+      ['2201-SCW-L2-M1-1001', '2201', 'Screening chilled water'],
+      ['2201-SCW-L2-M1-1002', '2201', 'Screening chilled water'],
+      ['650-FMS-TRAY-01', '650', 'FMS cable tray'],
+    ],
+  },
   'compiler-p6.xlsx': {
     Activities: [
       ['Activity ID', 'Activity Name', 'Equipment ID', 'UPN'],

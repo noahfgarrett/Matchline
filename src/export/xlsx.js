@@ -232,6 +232,32 @@ export function addCompletedMelSheet(wb,used){
   styleHeaderRow(ws,0);setFilter(ws,0);
   addSheet(wb,ws,'Completed MEL',used,1);
 }
+/* Change control (spec §8.5): the SOP requires approval to break a dependency,
+   so a compile is diffed against the imported working copy and every broken
+   dependency is called out separately from ordinary moves. */
+export function addChangeControlSheet(wb,used){
+  if(!S.wcRows||!S.wcRows.length)return;
+  const splitList=value=>clean(value)?clean(value).split(/[;,]/).map(clean).filter(v=>v&&v.toLowerCase()!=='n/a'):[];
+  const current=new Map();
+  for(const r of S.ssmCombined){
+    const {equip,parent,dep}=ssmRegisterResolve(r),key=tagKey(equip);
+    if(!current.has(key))current.set(key,{parent:clean(parent),deps:new Set(splitList(dep).map(tagKey))});
+  }
+  const rows=[['Change','Equipment','Detail']];
+  for(const wc of S.wcRows){
+    const key=tagKey(wc.equip),now=current.get(key);
+    if(!now){rows.push(['Removed from register',wc.equip,'Present in the working copy, absent from this compile']);continue;}
+    for(const dep of splitList(wc.dep))if(!now.deps.has(tagKey(dep)))
+      rows.push(['Broken dependency (requires approval)',wc.equip,`working copy depends on ${dep}; this compile does not`]);
+    const wcParent=clean(wc.parent),nowParent=clean(now.parent);
+    if(wcParent&&wcParent.toLowerCase()!=='n/a'&&tagKey(wcParent)!==tagKey(nowParent))
+      rows.push(['Parent moved',wc.equip,`working copy under ${wcParent}; this compile under ${nowParent||'(root)'}`]);
+  }
+  if(rows.length===1)return;
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols']=[{wch:34},{wch:28},{wch:60}];styleHeaderRow(ws,0);setFilter(ws,0);
+  addSheet(wb,ws,'Change Control',used,1);
+}
 /* Cross-Sheet Tag Review — Cable Schedule loads with no exact match in Easy Power. */
 export function addReviewSheet(wb,used){
   if(!S.review.length)return;
@@ -327,7 +353,7 @@ export async function exportSSMXlsx(){
     const wb=XLSX.utils.book_new(),used=new Set();
     if(mode==='separate')S.sheets.forEach(sh=>addSsm3Sheet(wb,'SSM-'+sh.sheetName,resolvedRegisterRowsFor(sheetSsmRows(sh)),used));
     else addSsm3Sheet(wb,'SSM',S.ssmCombined,used);
-    addCompletedMelSheet(wb,used);addPredecessorMatrixSheet(wb,used);addQaSheets(wb,used);
+    addCompletedMelSheet(wb,used);addPredecessorMatrixSheet(wb,used);addQaSheets(wb,used);addChangeControlSheet(wb,used);
     addReviewSheet(wb,used);addPlacementReviewSheet(wb,used);addCompareSheet(wb,used);
     downloadBlob('ssm-export.xlsx',wbBlob(wb));
   }))toast(mode==='separate'?S.sheets.length+' SSM tabs exported':'SSM exported');

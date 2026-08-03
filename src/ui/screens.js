@@ -5,6 +5,7 @@ import { toast, withLoading } from './progress.js'
 import { PMD_SHEET_NAME, cableInfo, cableRowCount, isCableSheet, isMelSheet, isPmdFile, isPmdSheet, melInfo, melRowCount, normH, parseWorkCopy, pmdInfo, pmdRowCount, resolveCols } from '../io/detect.js'
 import { extractStrikeCells, getAoa, getAoaAsync, readArrayBuffer, sheetRowCount } from '../io/workbook.js'
 import { isP6Sheet, parseXer } from '../io/p6.js'
+import { isLineListSheet } from '../io/linelist.js'
 import { buildHierarchy } from '../hierarchy/build.js'
 
 
@@ -260,6 +261,7 @@ export async function prewarmSheets(){
   S.files.forEach(f=>{if(isPmdFile(f))f.sheets.forEach(s=>{const key=f.id+KEYSEP+s;if(normH(s)===PMD_SHEET_NAME)S.pmdSel.add(key);});});
   allKeys().forEach(k=>{if(isMelSheet(k))S.melSel.add(k);});
   allKeys().forEach(k=>{if(!isMelSheet(k)&&!isCableSheet(k)&&!isPmdSheet(k)&&isP6Sheet(k))S.p6Sel.add(k);});
+  allKeys().forEach(k=>{if(!isMelSheet(k)&&!isCableSheet(k)&&!isPmdSheet(k)&&!S.p6Sel.has(k)&&isLineListSheet(k))S.lineSel.add(k);});
 }
 
 /* ---- sheets screen ---- */
