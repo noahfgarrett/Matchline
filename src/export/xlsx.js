@@ -8,7 +8,7 @@ import { hideOverlay, showOverlay, toast } from '../ui/progress.js'
 import { modeById } from '../hierarchy/modes.js'
 import { sheetRoots, sheetSsmRows } from '../hierarchy/tree.js'
 import { canonicalRecord, recordAttribute, resolvedRegisterRowsFor } from '../hierarchy/projection.js'
-import { activePlacements, melUpn, rawSubtreeCount, registerDisplayValue, sameWorkingDependencyValue, sameWorkingRegisterValue, ssmRegisterResolve, uniqueSsmRows } from '../hierarchy/build.js'
+import { activePlacements, isSystemName, melUpn, rawSubtreeCount, registerDisplayValue, sameWorkingDependencyValue, sameWorkingRegisterValue, ssmRegisterResolve, uniqueSsmRows } from '../hierarchy/build.js'
 import { placementState, sortReviewList } from '../review/panels.js'
 
 /* ---- exports ---- */
@@ -169,7 +169,11 @@ export function addQaSheets(wb,used){
   const withParent=records.filter(record=>record.ssmParentTag).length;
   const withDeps=records.filter(record=>record.dependencies.size).length;
   const rungs=[1,2,3,4].map(rung=>records.filter(record=>record.milestone&&record.milestone.rung===rung).length);
-  const orphans=records.filter(record=>!record.ssmParentTag&&!record.dependencies.size);
+  /* An orphan is disconnected, not merely a root: system roots with children
+     (a GIS, an MAH with its VFDs) are legitimate tops of their blocks. */
+  const parentTags=new Set(records.map(record=>tagKey(record.ssmParentTag)).filter(Boolean));
+  const orphans=records.filter(record=>!record.ssmParentTag&&!record.dependencies.size
+    &&!parentTags.has(record.key)&&!isSystemName(record.tag));
   const contradictions=[],cableMissing=[];
   for(const row of S.melRows||[]){
     const record=canonicalRecord(row.tag),asserted=clean(row.systemParent);
