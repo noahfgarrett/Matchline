@@ -9,7 +9,7 @@ import { ruleEngine } from '../rules/provider.js'
 import { createMemoryLookup } from '../rules/lookup.js'
 import { resolveHierarchyClaims, HIERARCHY_CLAIM_KIND } from './claims.js'
 import { foldClaimsByPartition, recordPartitionKey } from '../compiler/fold.js'
-import { recordCompilerCableEdges } from '../compiler/edges.js'
+import { recordCompilerCableEdges, recordCompilerMelClaims } from '../compiler/edges.js'
 import { assignMilestones } from '../compiler/ladders.js'
 import { synthesizeLineRollups, finalizeLineRollups } from '../compiler/rollups.js'
 import { computeSequence, upnPrecedence } from '../compiler/sequence.js'
@@ -144,6 +144,7 @@ export function buildCanonicalModel(){
      from the compiler edge pass either. */
   const cableWorkflow=activeProfile().hierarchy&&activeProfile().hierarchy.workflow;
   if(!cableWorkflow||cableWorkflow.cableParentChains!==false)recordCompilerCableEdges(records);
+  if(!cableWorkflow||cableWorkflow.melSystemParentClaims!==false)recordCompilerMelClaims(records);
   /* Trailing System Parent tags. The first became the structural parent claim
      in buildMel; these are additive, so they join the dependency set the cable
      schedule also writes into rather than competing with it. */
@@ -238,7 +239,11 @@ export function buildCanonicalModel(){
     const record=records.get(entity.id);if(!record)continue;
     record.resolution=entity;const parent=entity.parentId&&records.get(entity.parentId);
     record.ssmParentTag=parent?parent.tag:'';
-    record.dependencies=new Set(entity.dependencyIds.map(id=>records.get(id)&&records.get(id).tag||id));
+    /* SOP: a child of a parent does not also list that parent as a dependency.
+       The frozen legacy register deliberately writes the feeder into both
+       columns for load rows, so the dedup applies to MEL-first profiles only. */
+    const dependencyIds=melSeed&&melSeed.enabled!==false?entity.dependencyIds.filter(id=>id!==entity.parentId):entity.dependencyIds;
+    record.dependencies=new Set(dependencyIds.map(id=>records.get(id)&&records.get(id).tag||id));
     if(parent){parent.includeInHierarchy=true;parent.includeInRegister=true;}
   }
   const groupingAttributes=[...new Set(activeModes(profile).flatMap(mode=>groupingLevels(mode).map(level=>level.attribute)))],inherited=new Set();

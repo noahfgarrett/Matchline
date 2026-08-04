@@ -383,7 +383,7 @@ export function wireSheets(){
     cb.addEventListener('change',()=>set(cb.checked));
   });
 }
-export function allHierKeys(){return S.files.filter(f=>!f.error).flatMap(f=>f.sheets.map(s=>f.id+KEYSEP+s)).filter(k=>!isMelSheet(k)&&!isPmdSheet(k)&&!isCableSheet(k));}
+export function allHierKeys(){return S.files.filter(f=>!f.error).flatMap(f=>f.sheets.map(s=>f.id+KEYSEP+s)).filter(k=>!isMelSheet(k)&&!isPmdSheet(k)&&!isCableSheet(k)&&!isP6Sheet(k)&&!isLineListSheet(k));}
 export function allKeys(){return S.files.filter(f=>!f.error).flatMap(f=>f.sheets.map(s=>f.id+KEYSEP+s));}
 export function toggleEditPanel(key,row){
   const panel=row.nextElementSibling;

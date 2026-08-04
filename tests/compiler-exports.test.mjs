@@ -56,5 +56,5 @@ test('every non-excluded MEL row appears in the completed MEL exactly once', asy
   const { mel } = sheets(app)
   const tags = mel.slice(1).map(row => row[0])
   assert.equal(new Set(tags).size, tags.length, 'no duplicate rows')
-  assert.equal(tags.length, 6, 'all six MEL rows are present, including the Future one')
+  assert.equal(tags.length, 7, 'all seven MEL rows are present, including the Future one')
 })
