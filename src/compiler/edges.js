@@ -1,6 +1,6 @@
 import { S, tagKey } from '../state.js'
 import { cleanRegisterTag } from '../core/tags.js'
-import { melSystemParentTags, recordSourceParentClaim } from '../hierarchy/build.js'
+import { melSystemParentTags, melTagLookup, recordSourceParentClaim } from '../hierarchy/build.js'
 
 /* Compiler edge assembly (spec §5.1): the raw-tree cable stage only records
    claims for loads that already hold an Easy Power register row, so a cable
@@ -13,10 +13,19 @@ export function recordCompilerCableEdges(records) {
   const cableClaims = S.sourceParentClaims && S.sourceParentClaims.cable
   for (const [loadLower, panel] of S.deps || []) {
     const key = tagKey(loadLower)
-    if (!key || !records.has(key)) continue
-    if (cableClaims && cableClaims.has(key)) continue
-    if (tagKey(panel) === key) continue
-    recordSourceParentClaim('cable', records.get(key).tag, panel, { status: 'compiler-edge' })
+    if (!key) continue
+    let record = records.get(key)
+    if (!record) {
+      /* The cable schedule may spell the load without the building prefix the
+         MEL uses — resolve through the same unambiguous suffix lookup that
+         unifies record identity. */
+      const lookup = melTagLookup(loadLower)
+      if (lookup.record && lookup.candidates.length === 1) record = records.get(tagKey(lookup.record.tag))
+    }
+    if (!record) continue
+    if (cableClaims && (cableClaims.has(key) || cableClaims.has(record.key))) continue
+    if (tagKey(panel) === record.key) continue
+    recordSourceParentClaim('cable', record.tag, panel, { status: 'compiler-edge' })
   }
 }
 

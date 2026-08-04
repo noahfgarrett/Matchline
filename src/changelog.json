@@ -1,5 +1,11 @@
 [
   {
+    "version": "0.6.0",
+    "date": "2026-08-04T00:00:00Z",
+    "type": "feature",
+    "notes": "- Suffix identity unification is now default wiring: when Easy Power, the cable schedule, or PMD spell a tag without the building prefix the MEL carries, an unambiguous back-of-tag match unifies them into one record and the MEL spelling wins\n- Claims recorded under any absorbed spelling follow the unified record; ambiguous matches stay separate and surface in review instead of being guessed\n- Unification only engages when MEL data is loaded, keeping large no-MEL imports inside the performance budget"
+  },
+  {
     "version": "0.5.1",
     "date": "2026-08-04T00:00:00Z",
     "type": "fix",
