@@ -83,3 +83,20 @@ test('integration: records without MEL partitions keep their flow parents', asyn
   const mtr = canonicalRecordOf(app, 'MTR-9002')
   assert.ok(mtr.ssmParentTag, 'MTR-9002 has no MEL row, so its electrical parent must survive the fold')
 })
+
+test('integration: a parent never repeats as its own dependency (SOP rule)', async () => {
+  const app = await buildProjectApp(['easy-power.xlsx', 'compiler-cable.xlsx', 'compiler-mel.xlsx'])
+  const duplicates = JSON.parse(app.eval(`
+    JSON.stringify([...S.canonicalModel.values()]
+      .filter(r => r.ssmParentTag && [...r.dependencies].some(d => tagKey(d) === tagKey(r.ssmParentTag)))
+      .map(r => r.tag))
+  `))
+  assert.deepEqual(duplicates, [], 'no record lists its structural parent as a dependency')
+})
+
+test('integration: a MEL-only asset nests under its asserted same-partition System Parent', async () => {
+  const app = await buildProjectApp(['easy-power.xlsx', 'compiler-cable.xlsx', 'compiler-mel.xlsx'])
+  const fcu = canonicalRecordOf(app, 'B14-FCU-7101')
+  assert.ok(fcu, 'MEL-only FCU exists')
+  assert.equal(fcu.ssmParentTag, 'B14-AHU-7001', 'the MEL System Parent assertion becomes a claim even with no electrical source')
+})

@@ -57,6 +57,7 @@ const SHEETS = {
       ['B14-AHU-7001', 'Air handler', '2201', 'B14', '', 'Mechanical', 'Screening', 'New'],
       ['B14-AHU-7002', 'Future air handler', '2201', 'B14', '', 'Mechanical', 'Screening', 'Future'],
       ['B14-RIO-6500', 'Remote IO panel', '650', 'B14', '', 'I&C', 'FMS Network', 'New'],
+      ['B14-FCU-7101', 'Fan coil unit', '2201', 'B14', 'B14-AHU-7001', 'Mechanical', 'Screening', 'New'],
     ],
   },
   'compiler-wc.xlsx': {

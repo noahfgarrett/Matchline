@@ -1,5 +1,6 @@
 import { S, tagKey } from '../state.js'
-import { recordSourceParentClaim } from '../hierarchy/build.js'
+import { cleanRegisterTag } from '../core/tags.js'
+import { melSystemParentTags, recordSourceParentClaim } from '../hierarchy/build.js'
 
 /* Compiler edge assembly (spec §5.1): the raw-tree cable stage only records
    claims for loads that already hold an Easy Power register row, so a cable
@@ -16,5 +17,25 @@ export function recordCompilerCableEdges(records) {
     if (cableClaims && cableClaims.has(key)) continue
     if (tagKey(panel) === key) continue
     recordSourceParentClaim('cable', records.get(key).tag, panel, { status: 'compiler-edge' })
+  }
+}
+
+/* Same gap for MEL assertions: the raw-tree stage records System Parent claims
+   only for tags the Easy Power register knows, so a MEL-only asset's asserted
+   parent never became a claim. First tag is the structural-parent assertion,
+   trailing tags are additive dependencies (matching the raw-tree semantics). */
+export function recordCompilerMelClaims(records) {
+  const melClaims = S.sourceParentClaims && S.sourceParentClaims.mel
+  for (const row of S.melRows || []) {
+    const key = tagKey(row.tag)
+    if (!key || !records.has(key)) continue
+    if (melClaims && melClaims.has(key)) continue
+    const tags = melSystemParentTags(row.systemParent)
+    if (!tags.length) continue
+    if (tagKey(tags[0]) !== key) recordSourceParentClaim('mel', records.get(key).tag, tags[0], { status: 'system-parent-column', compiler: true })
+    for (const extra of tags.slice(1)) {
+      const target = cleanRegisterTag(extra)
+      if (target && tagKey(target) !== key) records.get(key).dependencies.add(target)
+    }
   }
 }

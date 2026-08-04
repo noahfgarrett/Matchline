@@ -9903,6 +9903,7 @@ function recordPartitionKey(record) {
 
 
 
+
 /* Compiler edge assembly (spec §5.1): the raw-tree cable stage only records
    claims for loads that already hold an Easy Power register row, so a cable
    row feeding a MEL-seeded record never produced an edge. Walk the raw cable
@@ -9918,6 +9919,26 @@ function recordCompilerCableEdges(records) {
     if (cableClaims && cableClaims.has(key)) continue
     if (tagKey(panel) === key) continue
     recordSourceParentClaim('cable', records.get(key).tag, panel, { status: 'compiler-edge' })
+  }
+}
+
+/* Same gap for MEL assertions: the raw-tree stage records System Parent claims
+   only for tags the Easy Power register knows, so a MEL-only asset's asserted
+   parent never became a claim. First tag is the structural-parent assertion,
+   trailing tags are additive dependencies (matching the raw-tree semantics). */
+function recordCompilerMelClaims(records) {
+  const melClaims = S.sourceParentClaims && S.sourceParentClaims.mel
+  for (const row of S.melRows || []) {
+    const key = tagKey(row.tag)
+    if (!key || !records.has(key)) continue
+    if (melClaims && melClaims.has(key)) continue
+    const tags = melSystemParentTags(row.systemParent)
+    if (!tags.length) continue
+    if (tagKey(tags[0]) !== key) recordSourceParentClaim('mel', records.get(key).tag, tags[0], { status: 'system-parent-column', compiler: true })
+    for (const extra of tags.slice(1)) {
+      const target = cleanRegisterTag(extra)
+      if (target && tagKey(target) !== key) records.get(key).dependencies.add(target)
+    }
   }
 }
 
@@ -10259,6 +10280,7 @@ function buildCanonicalModel(){
      from the compiler edge pass either. */
   const cableWorkflow=activeProfile().hierarchy&&activeProfile().hierarchy.workflow;
   if(!cableWorkflow||cableWorkflow.cableParentChains!==false)recordCompilerCableEdges(records);
+  if(!cableWorkflow||cableWorkflow.melSystemParentClaims!==false)recordCompilerMelClaims(records);
   /* Trailing System Parent tags. The first became the structural parent claim
      in buildMel; these are additive, so they join the dependency set the cable
      schedule also writes into rather than competing with it. */
@@ -10353,7 +10375,11 @@ function buildCanonicalModel(){
     const record=records.get(entity.id);if(!record)continue;
     record.resolution=entity;const parent=entity.parentId&&records.get(entity.parentId);
     record.ssmParentTag=parent?parent.tag:'';
-    record.dependencies=new Set(entity.dependencyIds.map(id=>records.get(id)&&records.get(id).tag||id));
+    /* SOP: a child of a parent does not also list that parent as a dependency.
+       The frozen legacy register deliberately writes the feeder into both
+       columns for load rows, so the dedup applies to MEL-first profiles only. */
+    const dependencyIds=melSeed&&melSeed.enabled!==false?entity.dependencyIds.filter(id=>id!==entity.parentId):entity.dependencyIds;
+    record.dependencies=new Set(dependencyIds.map(id=>records.get(id)&&records.get(id).tag||id));
     if(parent){parent.includeInHierarchy=true;parent.includeInRegister=true;}
   }
   const groupingAttributes=[...new Set(activeModes(profile).flatMap(mode=>groupingLevels(mode).map(level=>level.attribute)))],inherited=new Set();
@@ -13291,7 +13317,7 @@ function wireSheets(){
     cb.addEventListener('change',()=>set(cb.checked));
   });
 }
-function allHierKeys(){return S.files.filter(f=>!f.error).flatMap(f=>f.sheets.map(s=>f.id+KEYSEP+s)).filter(k=>!isMelSheet(k)&&!isPmdSheet(k)&&!isCableSheet(k));}
+function allHierKeys(){return S.files.filter(f=>!f.error).flatMap(f=>f.sheets.map(s=>f.id+KEYSEP+s)).filter(k=>!isMelSheet(k)&&!isPmdSheet(k)&&!isCableSheet(k)&&!isP6Sheet(k)&&!isLineListSheet(k));}
 function allKeys(){return S.files.filter(f=>!f.error).flatMap(f=>f.sheets.map(s=>f.id+KEYSEP+s));}
 function toggleEditPanel(key,row){
   const panel=row.nextElementSibling;

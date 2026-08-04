@@ -35,6 +35,11 @@ test('a P6 sheet with explicit equipment and UPN columns promotes to rungs 1 and
   const rio = canonicalRecordOf(app, 'B14-RIO-6500')
   assert.equal(rio.milestone.rung, 1, 'explicit Equipment ID column is a direct association')
   assert.match(rio.milestone.label, /RIO 6500/)
+  assert.equal(rio.ssmParentTag, '', 'a P6 sheet must never be parsed as a hierarchy source — no phantom activity parents')
+  const phantom = JSON.parse(app.eval(`
+    JSON.stringify(!!S.canonicalModel.get(tagKey('Commission RIO 6500 remote IO')))
+  `))
+  assert.equal(phantom, false, 'activity names must not become records')
 })
 
 test('sequencing follows polarity: electrical top-down, mechanical bottom-up', async () => {
