@@ -58,6 +58,7 @@ const SHEETS = {
       ['B14-AHU-7002', 'Future air handler', '2201', 'B14', '', 'Mechanical', 'Screening', 'Future'],
       ['B14-RIO-6500', 'Remote IO panel', '650', 'B14', '', 'I&C', 'FMS Network', 'New'],
       ['B14-FCU-7101', 'Fan coil unit', '2201', 'B14', 'B14-AHU-7001', 'Mechanical', 'Screening', 'New'],
+      ['B14-DDC-7301', 'DDC controller', '650', 'B14', '', 'I&C', 'FMS Network', 'New'],
     ],
   },
   /* Optional EXTO-layer fixtures: a prior registry export (item-master
@@ -110,6 +111,7 @@ const SHEETS = {
       ['Load Name (To)', 'Panel (From)', 'Circuit_Number', 'Cable Tag'],
       ['B14-RIO-6500', 'B14-LVS-1234', '7', 'C-9001'],
       ['MTR-9001', 'B14-AHU-7001', '8', 'C-9002'],
+      ['DDC-7301', 'B14-LVS-1234', '9', 'C-9003'],
     ],
   },
   'pmd.xlsx': {

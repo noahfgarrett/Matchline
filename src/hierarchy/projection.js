@@ -3,7 +3,7 @@ import { cleanRegisterTag, normSep } from '../core/tags.js'
 import { S, tagKey, clearResultCache } from '../state.js'
 import { profileTrimmedTag, activeProfile, profileAssignments, profileAttributeOverride } from '../profile/schema.js'
 import { isSpareName, isSpaceName, nodeDep } from '../profile/classify.js'
-import { isSystemName, legacyEquipmentRole, melResolvedRecord, melSources, pmdExportTag, ssmResolve, activePlacements } from './build.js'
+import { isSystemName, legacyEquipmentRole, melResolvedRecord, melSources, melTagLookup, pmdExportTag, ssmResolve, activePlacements } from './build.js'
 import { groupingLevels, activeModes } from './modes.js'
 import { ruleEngine } from '../rules/provider.js'
 import { createMemoryLookup } from '../rules/lookup.js'
@@ -55,8 +55,22 @@ function relationshipRulePriority(profile,ruleId){
   return 2000-(index<0?rules.length:index);
 }
 function sourceClaims(record,source){
-  const sourceMap=S.sourceParentClaims&&S.sourceParentClaims[source],parents=sourceMap&&sourceMap.get(record.key);
-  return parents?[...parents.values()]:[];
+  const sourceMap=S.sourceParentClaims&&S.sourceParentClaims[source];
+  if(!sourceMap)return [];
+  /* Claims are recorded under the spelling the source document used. A record
+     unified across documents (suffix identity, spec §5) collects claims from
+     every spelling it has absorbed. */
+  const merged=new Map();
+  const collect=claimKey=>{
+    const parents=claimKey&&sourceMap.get(claimKey);
+    if(parents)for(const [targetKey,claim] of parents)if(!merged.has(targetKey))merged.set(targetKey,claim);
+  };
+  collect(record.key);
+  for(const variant of record.sourceTags){
+    const variantKey=tagKey(profileTrimmedTag(variant));
+    if(variantKey&&variantKey!==record.key)collect(variantKey);
+  }
+  return [...merged.values()];
 }
 function relationshipCurrentParent(record,profile){
   for(const source of profile.hierarchy&&profile.hierarchy.parentSourcePriority||PROFILE_SOURCE_ORDER){
@@ -86,14 +100,30 @@ export function resolvedRegisterRowsFor(rows){
 }
 export function buildCanonicalModel(){
   const records=new Map();
+  const melSeed=activeProfile().hierarchy&&activeProfile().hierarchy.melSeed;
+  const melFirst=!!(melSeed&&melSeed.enabled!==false);
   const ensure=(value,flags={})=>{
-    const normalized=profileTrimmedTag(value),preserved=cleanRegisterTag(value),tag=preserved||normalized,key=tagKey(normalized||tag);if(!key)return null;
+    const normalized=profileTrimmedTag(value),preserved=cleanRegisterTag(value),rawTag=preserved||normalized;
+    let key=tagKey(normalized||rawTag);if(!key)return null;
+    let tag=rawTag,unified=false;
+    /* Default identity wiring (spec §5): documents spell the same asset
+       differently — the MEL carries the building prefix, Easy Power/cable/PMD
+       often only the back end. An unambiguous suffix match unifies them into
+       one record, and the MEL spelling wins. Ambiguous matches stay separate
+       and surface in review rather than being guessed. */
+    if(melFirst&&S.melByTag.size&&!S.melByTag.has(key)){
+      const lookup=melTagLookup(rawTag);
+      if(lookup.record&&lookup.candidates.length===1){
+        const melKey=tagKey(lookup.record.tag);
+        if(melKey&&melKey!==key){key=melKey;tag=cleanRegisterTag(lookup.record.tag)||lookup.record.tag;unified=true;}
+      }
+    }
     let record=records.get(key);
     if(!record){record={key,tag,sourceTags:new Set(),occurrences:[],flowParents:new Set(),registerParents:new Set(),dependencies:new Set(),
       isId:false,isLoad:false,isInstrument:false,pmdKey:'',pmdPanel:'',pmdBuilding:'',description:'',systemHint:'',sourceKind:'easyPower',
       mel:null,parentCandidates:{},context:null,attributes:{},ssmParentTag:'',provenance:[],resolution:null,
       observed:false,hasRegisterRow:false,includeInHierarchy:false,includeInRegister:false,phaseExcluded:false};records.set(key,record);}
-    if(preserved&&preserved!==normalized)record.tag=preserved;
+    if(!unified&&preserved&&preserved!==normalized)record.tag=preserved;
     if(flags.observed)record.observed=true;
     if(flags.hierarchy)record.includeInHierarchy=true;
     if(flags.register)record.hasRegisterRow=true;
@@ -129,8 +159,7 @@ export function buildCanonicalModel(){
      commissionable record, whether or not any electrical source mentions it.
      Excluded phases stay out of the register but remain records so edges can
      still attach and lint can still see them. */
-  const melSeed=activeProfile().hierarchy&&activeProfile().hierarchy.melSeed;
-  if(melSeed&&melSeed.enabled!==false){
+  if(melFirst){
     const excludedPhases=new Set((melSeed.excludedPhases||['Future']).map(phase=>clean(phase).toLowerCase()));
     for(const row of S.melRows||[]){
       const record=ensure(row.tag,{observed:true});if(!record)continue;

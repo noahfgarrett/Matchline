@@ -45,6 +45,26 @@ test('seeded MEL-only rows land in the exported register exactly once', async ()
   assert.equal(rows.length, 1, 'exactly one register row for a seeded MEL-only tag')
 })
 
+test('evidence tags unify with MEL tags by suffix — one record, MEL spelling wins', async () => {
+  // The cable schedule writes "DDC-7301"; the MEL writes "B14-DDC-7301". They
+  // are the same asset, matched on the back end of the tag (spec §5 identity
+  // tiers). One record, cable evidence attached, no duplicate register row.
+  const app = await buildProjectApp(['easy-power.xlsx', 'compiler-cable.xlsx', 'compiler-mel.xlsx'])
+  const ddc = canonicalRecordOf(app, 'B14-DDC-7301')
+  assert.ok(ddc, 'the MEL spelling is the canonical record')
+  assert.equal(ddc.ssmParentTag, '', 'cross-partition cable feed cannot be a parent')
+  assert.ok(ddc.dependencies.some(d => /LVS-1234/.test(d)),
+    `the cable claim from the suffix variant must attach here, got deps: ${ddc.dependencies}`)
+  const counts = JSON.parse(app.eval(`
+    JSON.stringify({
+      bare: !!S.canonicalModel.get(tagKey('DDC-7301')) && S.canonicalModel.get(tagKey('DDC-7301')) !== S.canonicalModel.get(tagKey('B14-DDC-7301')),
+      registerRows: S.ssmCombined.filter(row => /DDC-7301/i.test(String(row[0]))).length,
+    })
+  `))
+  assert.equal(counts.bare, false, 'no separate record for the bare cable spelling')
+  assert.equal(counts.registerRows, 1, 'exactly one register row for the asset')
+})
+
 test('a MEL without the new columns still detects, with the new fields absent', () => {
   const info = detectMel(['Equipment Tag', 'UPN', 'Bldg'])
   assert.ok(info)

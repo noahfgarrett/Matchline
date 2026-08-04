@@ -51,11 +51,15 @@ test('Cable Schedule parent-chain switch preserves the Easy Power parent when di
 })
 
 test('MEL UPN parent switch controls System Parent Equipment Tag replacement',async()=>{
+  /* Suffix identity unification means the register now carries the MEL
+     spelling (F15-EQUIPMENT-133) even though Easy Power wrote EQUIPMENT-133,
+     and the MEL System Parent claims path covers what the raw-tree repair used
+     to do alone — so isolating the repair switch also turns the claims off. */
   const files=['easy-power-upn-repair.csv','mel-row2-upn-repair.csv']
   const enabled=await buildWithWorkflow(files)
-  const disabled=await buildWithWorkflow(files,{melUpnParents:false})
-  const relation=app=>JSON.parse(app.eval(`JSON.stringify(ssmResolve(S.ssmCombined.find(row=>row[0]==='EQUIPMENT-133')))`))
+  const disabled=await buildWithWorkflow(files,{melUpnParents:false,melSystemParentClaims:false})
+  const relation=app=>JSON.parse(app.eval(`JSON.stringify(ssmResolve(S.ssmCombined.find(row=>/EQUIPMENT-133/.test(row[0]))))`))
   assert.equal(relation(enabled).parent,'F15-SYSTEM-PARENT-133')
-  assert.equal(relation(enabled).dep,'OLD-PARENT-603')
-  assert.equal(relation(disabled).parent,'OLD-PARENT-603')
+  assert.equal(relation(enabled).dep,'F15-OLD-PARENT-603')
+  assert.equal(relation(disabled).parent,'F15-OLD-PARENT-603')
 })
