@@ -1,5 +1,11 @@
 [
   {
+    "version": "0.5.0",
+    "date": "2026-08-04T00:00:00Z",
+    "type": "feature",
+    "notes": "- Added equipment classification learned from registry descriptions (digit-masked, 0.9 confidence gate; validated ~94% on an 18k-row registry)\n- Classification feeds the item-master (discipline, classification, UPN) rung and the Rev21 Equipment Classification column (AJ)\n- Provenance records each learned classification with its confidence"
+  },
+  {
     "version": "0.4.0",
     "date": "2026-08-04T00:00:00Z",
     "type": "feature",

@@ -12,7 +12,7 @@ import { foldClaimsByPartition, recordPartitionKey } from '../compiler/fold.js'
 import { recordCompilerCableEdges, recordCompilerMelClaims } from '../compiler/edges.js'
 import { assignMilestones } from '../compiler/ladders.js'
 import { synthesizeLineRollups, finalizeLineRollups } from '../compiler/rollups.js'
-import { learnItemMasterTable, assignItemMasters } from '../compiler/itemmasters.js'
+import { learnItemMasterTable, assignItemMasters, assignClassifications } from '../compiler/itemmasters.js'
 import { computeSequence, upnPrecedence } from '../compiler/sequence.js'
 
 /* ---- canonical equipment model and projections ---- */
@@ -273,6 +273,7 @@ export function buildCanonicalModel(){
     if((!exto||exto.enabled!==false)&&(!exto||exto.itemMasters!==false)){
       const imTable=learnItemMasterTable();
       S.imAudit=imTable.audit;
+      assignClassifications(records,imTable);
       assignItemMasters(records,imTable);
     }else{
       S.imAudit=[];

@@ -43,15 +43,18 @@ test('detectors anchor on registry and item-master template shapes without claim
   assert.equal(detectItemMasterTemplate(['Site', 'Discipline']), null)
 })
 
-test('integration: item masters auto-assign from the registry with VF normalization', async () => {
+test('integration: descriptions classify equipment, and item masters auto-assign with VF normalization', async () => {
   const app = await buildProjectApp(EXTO)
   const rio = canonicalRecordOf(app, 'B14-RIO-6500')
-  assert.ok(rio.itemMaster, 'RIO gets an item master from the description rung')
+  assert.equal(rio.equipmentClassification, 'RIO', 'description "Remote IO panel" classifies as RIO')
+  assert.ok(rio.itemMaster, 'RIO gets an item master')
   assert.equal(rio.itemMaster.name, 'VF_IC_RIO', 'CA_NB_IC_RIO normalized to the VF vocabulary')
   const ahu = canonicalRecordOf(app, 'B14-AHU-7001')
+  assert.equal(ahu.equipmentClassification, 'AHU')
   assert.equal(ahu.itemMaster.name, 'VF_MECH_AHU')
   const mtr = canonicalRecordOf(app, 'MTR-9001')
-  assert.equal(mtr.itemMaster, null, 'ambiguous key must not auto-assign')
+  assert.equal(mtr.equipmentClassification, 'MTR', 'classification still resolves for ambiguous item masters')
+  assert.equal(mtr.itemMaster, null, 'ambiguous item-master key must not auto-assign')
   assert.ok(mtr.itemMasterReview, 'ambiguous key goes to review with candidates')
 })
 

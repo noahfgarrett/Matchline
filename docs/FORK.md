@@ -54,3 +54,14 @@ Phase 3 — see docs/specs/2026-08-03-ssm-compiler-design.md §11.
   a real 18k-row registry at ~81% auto-assignment, ~99% accuracy.
 - Registry rows with placeholder masters or electrical-gear masters on
   non-electrical equipment are excluded from learning and audited instead.
+
+## 2026-08-04 description-classification batch
+
+- Descriptions predict Equipment Classification at ~94% (digit-masked key) —
+  shipped as a learned, confidence-gated attribute.
+- Statistical parent GUESSING was evaluated and rejected: six policy iterations
+  against 15,951 real same-system parent links topped out near 50% precision
+  (coordinate families are real — 87% share a number — but which family member
+  is the parent is site-anatomy-specific). Nesting conventions should be
+  authored as profile relate rules keyed on the classification attribute and
+  validated against a registry export, not guessed.

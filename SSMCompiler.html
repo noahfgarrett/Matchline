@@ -1287,6 +1287,12 @@ const LEGEND_PDFJS_WORKER="/**\n * @licstart The following is the entire license
 "use strict";
 const CHANGELOG = [
   {
+    "version": "0.5.0",
+    "date": "2026-08-04T00:00:00Z",
+    "type": "feature",
+    "notes": "- Added equipment classification learned from registry descriptions (digit-masked, 0.9 confidence gate; validated ~94% on an 18k-row registry)\n- Classification feeds the item-master (discipline, classification, UPN) rung and the Rev21 Equipment Classification column (AJ)\n- Provenance records each learned classification with its confidence"
+  },
+  {
     "version": "0.4.0",
     "date": "2026-08-04T00:00:00Z",
     "type": "feature",
@@ -4711,7 +4717,7 @@ function createDurableProfileStorage(options = {}) {
 
 
 
-const APP_VERSION = '0.4.0';
+const APP_VERSION = '0.5.0';
 const UPDATE_REPOSITORY = 'noahfgarrett/SSMCompiler-Releases';
 const UPDATE_RELEASE_API = 'https://api.github.com/repos/'+UPDATE_REPOSITORY+'/releases/latest';
 const UPDATE_API_VERSION = '2026-03-10';
@@ -5513,8 +5519,8 @@ function makeDefaultProfile(name){
          Closest Parent=P, Milestone=Y, Item Master UID=AA, Dependencies=AN);
          Eagle keeps the frozen historical G/K/P/AM layout. -1 = not emitted. */
       extoColumns:isBuiltIn
-        ?{upn:6,equipmentId:10,closestParent:15,dependencies:38,milestone:-1,itemMaster:-1}
-        :{upn:6,equipmentId:10,closestParent:15,milestone:24,itemMaster:26,dependencies:39},
+        ?{upn:6,equipmentId:10,closestParent:15,dependencies:38,milestone:-1,itemMaster:-1,classification:-1}
+        :{upn:6,equipmentId:10,closestParent:15,milestone:24,itemMaster:26,classification:35,dependencies:39},
       roleParents:{LVS:'XFM',XFM:'GIS',GIS:'SYSTEM'},
       resolutionStrategy:isBuiltIn?'legacy-register':'source-priority',
       downstreamGapPolicy:isBuiltIn?'truncate':'bridge-review',
@@ -10269,23 +10275,51 @@ function suspectRegistryRow(row){
 const IM_KEYSEP='';
 function firstWord(value){return clean(value).split(/\s+/)[0]||'';}
 function normPart(value){return clean(value).toLowerCase();}
+/* Digits are masked so "450KVA TPC" and "300KVA TPC" share a key — measured on
+   a real 18k-row registry, (discipline, masked description) predicts the
+   Equipment Classification at ~94%. */
+function maskedDescription(value){return normPart(value).replace(/\d+/g,'#');}
 
 function learnItemMasterTable(){
   const vocabulary=new Set();
   for(const key of S.imSel||[])for(const entry of itemMasterNames(key))vocabulary.add(entry.name);
-  const byClass=new Map(),byDesc=new Map(),audit=[];
+  const byClass=new Map(),byDesc=new Map(),descClass=new Map(),audit=[];
   const tally=(map,key,name)=>{
     if(!map.has(key))map.set(key,new Map());
     const counts=map.get(key);counts.set(name,(counts.get(name)||0)+1);
   };
   for(const key of S.extoSel||[])for(const row of extoRegistryRows(key)){
+    /* Description → classification learning uses every row (a wrong item
+       master does not make the description wrong). */
+    if(row.classification&&row.description)
+      tally(descClass,[normPart(row.discipline),maskedDescription(row.description)].join(IM_KEYSEP),clean(row.classification));
     const reason=suspectRegistryRow(row);
     if(reason){audit.push({equipmentId:row.equipmentId,itemMaster:row.itemMaster,discipline:row.discipline,reason});continue;}
     const name=normalizeItemMasterName(row.itemMaster,vocabulary);
     if(row.classification)tally(byClass,[normPart(row.discipline),normPart(row.classification),normPart(row.upn)].join(IM_KEYSEP),name);
     if(row.description)tally(byDesc,[normPart(row.discipline),normPart(row.upn),normPart(firstWord(row.description))].join(IM_KEYSEP),name);
   }
-  return {byClass,byDesc,vocabulary,audit,learned:byClass.size+byDesc.size>0};
+  return {byClass,byDesc,descClass,vocabulary,audit,learned:byClass.size+byDesc.size+descClass.size>0};
+}
+
+/* Equipment Classification from the description (validated ~94% on real data;
+   0.9 confidence gate). Explicit values — from rules, overrides, or a future
+   MEL column — are never overwritten. Runs before item-master assignment so
+   the (discipline, classification, UPN) rung can fire on fresh compiles. */
+function assignClassifications(records,table,minConfidence=0.9){
+  if(!table||!table.descClass.size)return;
+  for(const record of records.values()){
+    if(!record.includeInRegister||record.isSyntheticRollup)continue;
+    if(record.attributes&&clean(record.attributes.equipmentClassification))continue;
+    const description=record.description||(record.mel&&record.mel.description)||'';
+    if(!description)continue;
+    const hit=lookup(table.descClass,[normPart(record.discipline),maskedDescription(description)].join(IM_KEYSEP),minConfidence);
+    if(hit&&hit.name){
+      record.attributes.equipmentClassification=hit.name;
+      record.equipmentClassification=hit.name;
+      record.provenance.push(`Classification · learned from registry (${Math.round(hit.confidence*100)}%)`);
+    }
+  }
 }
 
 function lookup(map,key,minConfidence){
@@ -10590,6 +10624,7 @@ function buildCanonicalModel(){
     if((!exto||exto.enabled!==false)&&(!exto||exto.itemMasters!==false)){
       const imTable=learnItemMasterTable();
       S.imAudit=imTable.audit;
+      assignClassifications(records,imTable);
       assignItemMasters(records,imTable);
     }else{
       S.imAudit=[];
@@ -12869,11 +12904,11 @@ function addExtoSheet(wb,name,rows,used){
      System Name (not blank), and header names match the template exactly. */
   if(!extoLayerEnabled())return;
   const cfg=activeProfile().hierarchy&&activeProfile().hierarchy.extoColumns||{};
-  const G=cfg.upn??6,K=cfg.equipmentId??10,P=cfg.closestParent??15,AN=cfg.dependencies??39,MS=cfg.milestone??24,IM=cfg.itemMaster??26;
-  const W=Math.max(G,K,P,AN,MS,IM)+1,aoa=[];
+  const G=cfg.upn??6,K=cfg.equipmentId??10,P=cfg.closestParent??15,AN=cfg.dependencies??39,MS=cfg.milestone??24,IM=cfg.itemMaster??26,CL=cfg.classification??35;
+  const W=Math.max(G,K,P,AN,MS,IM,CL)+1,aoa=[];
   aoa.push(new Array(W).fill(''));
   const head=new Array(W).fill('');head[G]='UPN';head[K]='Equipment ID';head[P]='Closest Parent';head[AN]='Dependencies';
-  if(MS>=0)head[MS]='Milestone';if(IM>=0)head[IM]='Item Master Unique Identifier';aoa.push(head);
+  if(MS>=0)head[MS]='Milestone';if(IM>=0)head[IM]='Item Master Unique Identifier';if(CL>=0)head[CL]='Equipment Classification';aoa.push(head);
   const hierarchyCfg=activeProfile().hierarchy||{};
   const rootsAttachToSystem=hierarchyCfg.melSeed&&hierarchyCfg.melSeed.enabled!==false;
   for(const r of filterSsm(rows)){
@@ -12887,6 +12922,7 @@ function addExtoSheet(wb,name,rows,used){
     row[AN]=registerDisplayValue(dep);
     if(MS>=0)row[MS]=record&&record.milestone?record.milestone.label:'';
     if(IM>=0)row[IM]=record&&record.itemMaster?record.itemMaster.name:'';
+    if(CL>=0)row[CL]=record&&record.attributes&&record.attributes.equipmentClassification||'';
     aoa.push(row);
   }
   const ws=XLSX.utils.aoa_to_sheet(aoa);
