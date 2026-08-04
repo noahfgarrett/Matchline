@@ -1,5 +1,11 @@
 [
   {
+    "version": "0.5.1",
+    "date": "2026-08-04T00:00:00Z",
+    "type": "fix",
+    "notes": "- Fixed the corrupted header brand block: the v0.1.0 rebrand had re-injected the old SSManagement title four times inside the tagline, overlapping the page at desktop widths\n- Added a build-time regression guard pinning the brand block to exactly one title and one tagline"
+  },
+  {
     "version": "0.5.0",
     "date": "2026-08-04T00:00:00Z",
     "type": "feature",
