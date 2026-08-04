@@ -16,6 +16,12 @@ const changelog = JSON.parse(readFileSync(resolve(rootDir, 'src/changelog.json')
 
 test('the built artifact is a self-contained, offline single file with a public release channel', () => {
   assert.match(html, /<title>SSM Compiler<\/title>/)
+  /* Regression guard for the v0.1.0 rebrand corruption: an unescaped `&` in a
+     sed replacement re-injected the old SSManagement header four times inside
+     the tagline span. The brand block must be exactly one h1 + one tag span. */
+  assert.match(html, /<div><h1>SSM Compiler<\/h1><span class="tag">documents&nbsp;in&nbsp;&rarr;&nbsp;ssm&nbsp;out<\/span><\/div>/)
+  assert.doesNotMatch(html, /<h1>SSManagement<\/h1>/)
+  assert.doesNotMatch(html, /<span class="tag">[^<]*<h1>/, 'no h1 may nest inside the tagline span')
   assert.match(html, /const UPDATE_REPOSITORY = 'noahfgarrett\/SSMCompiler-Releases';/)
   assert.match(html, new RegExp(`const APP_VERSION = '${pkg.version.replaceAll('.', '\\.')}'`))
   /* No service worker and no PWA manifest. A bare `register\(` used to stand in
