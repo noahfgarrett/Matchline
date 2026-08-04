@@ -118,11 +118,11 @@ export function addExtoSheet(wb,name,rows,used){
      System Name (not blank), and header names match the template exactly. */
   if(!extoLayerEnabled())return;
   const cfg=activeProfile().hierarchy&&activeProfile().hierarchy.extoColumns||{};
-  const G=cfg.upn??6,K=cfg.equipmentId??10,P=cfg.closestParent??15,AN=cfg.dependencies??39,MS=cfg.milestone??24,IM=cfg.itemMaster??26;
-  const W=Math.max(G,K,P,AN,MS,IM)+1,aoa=[];
+  const G=cfg.upn??6,K=cfg.equipmentId??10,P=cfg.closestParent??15,AN=cfg.dependencies??39,MS=cfg.milestone??24,IM=cfg.itemMaster??26,CL=cfg.classification??35;
+  const W=Math.max(G,K,P,AN,MS,IM,CL)+1,aoa=[];
   aoa.push(new Array(W).fill(''));
   const head=new Array(W).fill('');head[G]='UPN';head[K]='Equipment ID';head[P]='Closest Parent';head[AN]='Dependencies';
-  if(MS>=0)head[MS]='Milestone';if(IM>=0)head[IM]='Item Master Unique Identifier';aoa.push(head);
+  if(MS>=0)head[MS]='Milestone';if(IM>=0)head[IM]='Item Master Unique Identifier';if(CL>=0)head[CL]='Equipment Classification';aoa.push(head);
   const hierarchyCfg=activeProfile().hierarchy||{};
   const rootsAttachToSystem=hierarchyCfg.melSeed&&hierarchyCfg.melSeed.enabled!==false;
   for(const r of filterSsm(rows)){
@@ -136,6 +136,7 @@ export function addExtoSheet(wb,name,rows,used){
     row[AN]=registerDisplayValue(dep);
     if(MS>=0)row[MS]=record&&record.milestone?record.milestone.label:'';
     if(IM>=0)row[IM]=record&&record.itemMaster?record.itemMaster.name:'';
+    if(CL>=0)row[CL]=record&&record.attributes&&record.attributes.equipmentClassification||'';
     aoa.push(row);
   }
   const ws=XLSX.utils.aoa_to_sheet(aoa);

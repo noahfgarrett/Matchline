@@ -137,8 +137,8 @@ export function makeDefaultProfile(name){
          Closest Parent=P, Milestone=Y, Item Master UID=AA, Dependencies=AN);
          Eagle keeps the frozen historical G/K/P/AM layout. -1 = not emitted. */
       extoColumns:isBuiltIn
-        ?{upn:6,equipmentId:10,closestParent:15,dependencies:38,milestone:-1,itemMaster:-1}
-        :{upn:6,equipmentId:10,closestParent:15,milestone:24,itemMaster:26,dependencies:39},
+        ?{upn:6,equipmentId:10,closestParent:15,dependencies:38,milestone:-1,itemMaster:-1,classification:-1}
+        :{upn:6,equipmentId:10,closestParent:15,milestone:24,itemMaster:26,classification:35,dependencies:39},
       roleParents:{LVS:'XFM',XFM:'GIS',GIS:'SYSTEM'},
       resolutionStrategy:isBuiltIn?'legacy-register':'source-priority',
       downstreamGapPolicy:isBuiltIn?'truncate':'bridge-review',

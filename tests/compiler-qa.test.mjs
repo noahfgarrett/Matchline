@@ -56,8 +56,9 @@ test('the EXTO sheet follows the Rev21 layout and attaches roots to their System
   assert.equal(byDefault[1][39], 'Dependencies', 'Rev21 moved Dependencies to AN')
   const rioDefault = byDefault.find(row => /RIO-6500/.test(row[10]))
   assert.equal(rioDefault[15], '650 FMS Network', 'a root attaches to its own System Name, not N/A')
+  assert.equal(byDefault[1][35], 'Equipment Classification')
   const custom = exportSheets(app, `
-    activeProfile().hierarchy.extoColumns = { upn: 0, equipmentId: 1, closestParent: 2, dependencies: 3, milestone: 4, itemMaster: -1 };
+    activeProfile().hierarchy.extoColumns = { upn: 0, equipmentId: 1, closestParent: 2, dependencies: 3, milestone: 4, itemMaster: -1, classification: -1 };
     addExtoSheet(wb, 'Exto SSM', S.ssmCombined, used);
   `)['Exto SSM']
   assert.deepEqual(custom[1], ['UPN', 'Equipment ID', 'Closest Parent', 'Dependencies', 'Milestone'])

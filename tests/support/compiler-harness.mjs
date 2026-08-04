@@ -52,6 +52,7 @@ export function canonicalRecordOf(app, tag) {
         building: r.building, discipline: r.discipline, system: r.system,
         milestone: r.milestone || null, sequence: r.sequence ?? null,
         itemMaster: r.itemMaster || null, itemMasterReview: r.itemMasterReview || null,
+        equipmentClassification: (r.attributes && r.attributes.equipmentClassification) || null,
         explicit: r.context ? r.context.explicit : null } : null;
     })())
   `))
