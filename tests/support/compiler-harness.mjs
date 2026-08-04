@@ -51,6 +51,7 @@ export function canonicalRecordOf(app, tag) {
         ssmParentTag: r.ssmParentTag, dependencies: [...r.dependencies],
         building: r.building, discipline: r.discipline, system: r.system,
         milestone: r.milestone || null, sequence: r.sequence ?? null,
+        itemMaster: r.itemMaster || null, itemMasterReview: r.itemMasterReview || null,
         explicit: r.context ? r.context.explicit : null } : null;
     })())
   `))

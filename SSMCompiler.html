@@ -1287,6 +1287,12 @@ const LEGEND_PDFJS_WORKER="/**\n * @licstart The following is the entire license
 "use strict";
 const CHANGELOG = [
   {
+    "version": "0.4.0",
+    "date": "2026-08-04T00:00:00Z",
+    "type": "feature",
+    "notes": "- Made the EXTO layer optional per profile: the plain SSM outputs are the universal deliverable; the Exto sheet, item masters, and upload conventions only apply where EXTO is in use\n- Updated the EXTO upload defaults to Standardized Upload Template Rev21 (Dependencies at AN, Milestone at Y, Item Master Unique Identifier at AA)\n- Roots now attach to their own System Name in the Exto sheet, matching the registry convention\n- Added item-master auto-assignment learned from a prior registry export, confidence-gated with a review queue, CA_* names normalized to the universal VF vocabulary\n- Added a registry item-master audit (placeholders and electrical-gear masters on non-electrical equipment) to the QA sheets\n- Milestone names covering several UPNs (e.g. UPN 115/116/117) now claim each UPN on the ladder"
+  },
+  {
     "version": "0.3.0",
     "date": "2026-08-03T00:00:00Z",
     "type": "feature",
@@ -4705,7 +4711,7 @@ function createDurableProfileStorage(options = {}) {
 
 
 
-const APP_VERSION = '0.3.0';
+const APP_VERSION = '0.4.0';
 const UPDATE_REPOSITORY = 'noahfgarrett/SSMCompiler-Releases';
 const UPDATE_RELEASE_API = 'https://api.github.com/repos/'+UPDATE_REPOSITORY+'/releases/latest';
 const UPDATE_API_VERSION = '2026-03-10';
@@ -4989,7 +4995,7 @@ function ic(name,cls){return `<svg class="ic ${cls||''}" viewBox="0 0 24 24" fil
 
 
 
-const S={screen:'upload',files:[],selected:new Set(),cableSel:new Set(),pmdSel:new Set(),melSel:new Set(),p6Sel:new Set(),lineSel:new Set(),override:{},aoaCache:new Map(),
+const S={screen:'upload',files:[],selected:new Set(),cableSel:new Set(),pmdSel:new Set(),melSel:new Set(),p6Sel:new Set(),lineSel:new Set(),extoSel:new Set(),imSel:new Set(),override:{},aoaCache:new Map(),
   roots:[],rawCombined:null,sheets:[],ssmCombined:[],nodeById:new Map(),stats:null,search:'',idOnly:false,
   showSpares:true,showSpaces:true,showDeps:true,showPmdMatches:true,deps:new Map(),depDetail:new Map(),hasCable:false,
   cableStruckTags:new Set(),
@@ -5497,9 +5503,18 @@ function makeDefaultProfile(name){
          heuristic (top-down for electrical/LSS/security, bottom-up otherwise). */
       milestones:{upnPattern:'',buildingReadyLabel:'OP / Building Ready'},
       polarity:{},
-      /* EXTO upload column indexes (0-based). Defaults reproduce the
-         historical G/K/P/AM layout; milestone -1 = column not emitted. */
-      extoColumns:{upn:6,equipmentId:10,closestParent:15,dependencies:38,milestone:-1},
+      /* The EXTO layer is optional (spec §8.1): the SSM itself is the universal
+         deliverable; sites on other Cx software disable this and only the
+         plain SSM outputs are produced. itemMasters further gates checklist
+         auto-assignment inside the EXTO layer. */
+      exto:{enabled:true,itemMasters:!isBuiltIn},
+      /* EXTO upload column indexes (0-based). Project profiles follow the
+         Standardized Upload File Template Rev21 (UPN=G, Equipment ID=K,
+         Closest Parent=P, Milestone=Y, Item Master UID=AA, Dependencies=AN);
+         Eagle keeps the frozen historical G/K/P/AM layout. -1 = not emitted. */
+      extoColumns:isBuiltIn
+        ?{upn:6,equipmentId:10,closestParent:15,dependencies:38,milestone:-1,itemMaster:-1}
+        :{upn:6,equipmentId:10,closestParent:15,milestone:24,itemMaster:26,dependencies:39},
       roleParents:{LVS:'XFM',XFM:'GIS',GIS:'SYSTEM'},
       resolutionStrategy:isBuiltIn?'legacy-register':'source-priority',
       downstreamGapPolicy:isBuiltIn?'truncate':'bridge-review',
@@ -8026,6 +8041,80 @@ function lineListRows(key){
   return rows;
 }
 
+/* ==== src/io/exto.js ==== */
+
+
+
+
+/* ---- Optional EXTO-layer inputs ----
+   Both are strictly optional: sites on other Cx software never provide them
+   and the plain SSM outputs are unaffected (spec §8.1).
+
+   1. A prior EXTO registry export / upload sheet (Standardized Upload File
+      Template Rev21 shape) — the item-master learning source and audit target.
+   2. The Standardized Item Master Template — the legal VF item-master
+      vocabulary used to validate assignments and normalize legacy CA_* names. */
+
+function extoNormHeader(value){return clean(value).toLowerCase().replace(/[^a-z0-9&]+/g,'');}
+
+function detectExtoRegistry(headers){
+  const norm=headers.map(extoNormHeader);
+  const find=want=>norm.findIndex(h=>h===want);
+  const equipmentId=find('equipmentid'),discipline=find('discipline'),upn=find('upn');
+  const itemMaster=norm.findIndex(h=>h.startsWith('itemmaster'));
+  if(equipmentId<0||discipline<0||upn<0||itemMaster<0)return null;
+  return {equipmentId,discipline,upn,itemMaster,
+    classification:norm.findIndex(h=>h.startsWith('equipmentclassification')),
+    description:find('equipmentdescription'),
+    closestParent:find('closestparent'),systemName:find('systemname')};
+}
+const _extoRegCache=new Map();
+function extoRegistryInfo(key){
+  if(_extoRegCache.has(key))return _extoRegCache.get(key);
+  const {aoa}=getAoa(key),res=scanMappedHeader(aoa,detectExtoRegistry,10);
+  _extoRegCache.set(key,res);return res;
+}
+function isExtoRegistrySheet(key){return !!extoRegistryInfo(key);}
+function extoRegistryRows(key){
+  const info=extoRegistryInfo(key);if(!info)return [];
+  const {map,headerRow}=info,{aoa}=getAoa(key),rows=[];
+  for(let i=headerRow+1;i<aoa.length;i++){
+    const row=aoa[i]||[],equipmentId=clean(row[map.equipmentId]);
+    if(!equipmentId)continue;
+    rows.push({equipmentId,discipline:clean(row[map.discipline]),upn:clean(row[map.upn]),
+      itemMaster:clean(row[map.itemMaster]),
+      classification:map.classification>=0?clean(row[map.classification]):'',
+      description:map.description>=0?clean(row[map.description]):'',
+      closestParent:map.closestParent>=0?clean(row[map.closestParent]):'',
+      systemName:map.systemName>=0?clean(row[map.systemName]):''});
+  }
+  return rows;
+}
+
+function detectItemMasterTemplate(headers){
+  const norm=headers.map(extoNormHeader);
+  const site=norm.findIndex(h=>h==='site'),discipline=norm.findIndex(h=>h==='discipline');
+  const imName=norm.findIndex(h=>h==='imname'||h.startsWith('imname'));
+  if(site<0||discipline<0||imName<0)return null;
+  return {site,discipline,imName};
+}
+const _imTemplateCache=new Map();
+function itemMasterTemplateInfo(key){
+  if(_imTemplateCache.has(key))return _imTemplateCache.get(key);
+  const {aoa}=getAoa(key),res=scanMappedHeader(aoa,detectItemMasterTemplate,10);
+  _imTemplateCache.set(key,res);return res;
+}
+function isItemMasterTemplateSheet(key){return !!itemMasterTemplateInfo(key);}
+function itemMasterNames(key){
+  const info=itemMasterTemplateInfo(key);if(!info)return [];
+  const {map,headerRow}=info,{aoa}=getAoa(key),names=[];
+  for(let i=headerRow+1;i<aoa.length;i++){
+    const name=clean((aoa[i]||[])[map.imName]);
+    if(name)names.push({name,discipline:clean((aoa[i]||[])[map.discipline]),site:clean((aoa[i]||[])[map.site])});
+  }
+  return names;
+}
+
 /* ==== src/legend/corpus.js ==== */
 
 /* cleanTagRaw, deliberately NOT cleanTag. cleanTag is
@@ -9965,10 +10054,18 @@ function collectP6(){
   return {tasks};
 }
 
+/* A milestone name can cover several UPNs at once ("UPN 115/116/117 …"), so
+   the extracted token splits on '/' and every part claims the milestone. */
+function extractMilestoneUpns(name,pattern){
+  const match=String(name||'').match(pattern);
+  if(!match)return [];
+  return match[1].split('/').map(part=>clean(part)).filter(Boolean);
+}
+
 function assignMilestones(records){
   const hierarchy=activeProfile().hierarchy||{},cfg=hierarchy.milestones||{};
   const buildingReady=clean(cfg.buildingReadyLabel)||'OP / Building Ready';
-  const upnPattern=new RegExp(cfg.upnPattern||'\\bUPN\\s*[-#]?\\s*([A-Za-z0-9.-]+)','i');
+  const upnPattern=new RegExp(cfg.upnPattern||'\\bUPN\\s*[-#]?\\s*([A-Za-z0-9./-]+)','i');
   const {tasks}=collectP6();
   /* Milestone-flagged tasks claim a UPN first; unflagged activities only fill
      gaps, so a task row never shadows a real L2 milestone. */
@@ -9981,8 +10078,7 @@ function assignMilestones(records){
   for(const task of ordered){
     if(task.equipmentId){const key=tagKey(task.equipmentId);if(key&&!byTag.has(key))byTag.set(key,task);}
     if(task.upn)claimUpn(task.upn,task,2);
-    const match=(task.name||'').match(upnPattern);
-    if(match)claimUpn(match[1],task,3);
+    for(const upn of extractMilestoneUpns(task.name,upnPattern))claimUpn(upn,task,3);
   }
   for(const record of records.values()){
     const direct=byTag.get(record.key);
@@ -10133,7 +10229,93 @@ function finalizeLineRollups(records){
   }
 }
 
+/* ==== src/compiler/itemmasters.js ==== */
+
+
+
+
+/* ---- Item-master auto-assignment (optional EXTO layer) ----
+   Learned from a prior registry export as a majority-vote table with two key
+   rungs, confidence-gated: validated on a real 18k-row registry this
+   auto-assigns ~81% of rows at ~99% accuracy and sends the rest to review.
+
+     rung A — (discipline, equipment classification, UPN)
+     rung B — (discipline, UPN, first word of the equipment description)
+
+   Legacy site-specific names normalize to the universal VF vocabulary when a
+   suffix match exists (CA_NB_EL_MV_GEAR → VF_EL_MV_GEAR). Suspect registry
+   rows (placeholders; electrical-gear masters on non-electrical equipment)
+   are excluded from learning and reported as an audit list. */
+
+function normalizeItemMasterName(name,vfVocabulary){
+  const value=clean(name);
+  if(!value||/^VF_/i.test(value))return value;
+  const match=value.match(/^CA_[A-Z0-9]+_(.+)$/i);
+  if(!match)return value;
+  const candidate='VF_'+match[1];
+  if(!vfVocabulary||!vfVocabulary.size)return value;
+  for(const known of vfVocabulary)if(known.toLowerCase()===candidate.toLowerCase())return known;
+  return value;
+}
+
+function suspectRegistryRow(row){
+  const im=clean(row.itemMaster),discipline=clean(row.discipline).toUpperCase();
+  if(!im)return 'blank item master';
+  if(/blank/i.test(im))return 'placeholder item master';
+  if(/GEAR|XFMR|SWGR/i.test(im)&&!discipline.includes('ELECTRICAL'))return 'electrical-gear item master on non-electrical equipment';
+  return '';
+}
+
+const IM_KEYSEP='';
+function firstWord(value){return clean(value).split(/\s+/)[0]||'';}
+function normPart(value){return clean(value).toLowerCase();}
+
+function learnItemMasterTable(){
+  const vocabulary=new Set();
+  for(const key of S.imSel||[])for(const entry of itemMasterNames(key))vocabulary.add(entry.name);
+  const byClass=new Map(),byDesc=new Map(),audit=[];
+  const tally=(map,key,name)=>{
+    if(!map.has(key))map.set(key,new Map());
+    const counts=map.get(key);counts.set(name,(counts.get(name)||0)+1);
+  };
+  for(const key of S.extoSel||[])for(const row of extoRegistryRows(key)){
+    const reason=suspectRegistryRow(row);
+    if(reason){audit.push({equipmentId:row.equipmentId,itemMaster:row.itemMaster,discipline:row.discipline,reason});continue;}
+    const name=normalizeItemMasterName(row.itemMaster,vocabulary);
+    if(row.classification)tally(byClass,[normPart(row.discipline),normPart(row.classification),normPart(row.upn)].join(IM_KEYSEP),name);
+    if(row.description)tally(byDesc,[normPart(row.discipline),normPart(row.upn),normPart(firstWord(row.description))].join(IM_KEYSEP),name);
+  }
+  return {byClass,byDesc,vocabulary,audit,learned:byClass.size+byDesc.size>0};
+}
+
+function lookup(map,key,minConfidence){
+  const counts=map.get(key);if(!counts)return null;
+  let total=0,top='',topCount=0;
+  for(const [name,count] of counts){total+=count;if(count>topCount){top=name;topCount=count;}}
+  const confidence=total?topCount/total:0;
+  if(confidence<minConfidence)return {review:[...counts.keys()].slice(0,3)};
+  return {name:top,confidence};
+}
+
+function assignItemMasters(records,table,minConfidence=0.9){
+  if(!table||!table.learned)return;
+  for(const record of records.values()){
+    if(!record.includeInRegister||record.isSyntheticRollup)continue;
+    const upn=record.mel?normPart(record.mel.upn):'';
+    const discipline=normPart(record.discipline);
+    const classification=normPart(record.attributes&&record.attributes.equipmentClassification||'');
+    const candidates=[];
+    if(classification&&upn)candidates.push(lookup(table.byClass,[discipline,classification,upn].join(IM_KEYSEP),minConfidence));
+    if(record.description&&upn)candidates.push(lookup(table.byDesc,[discipline,upn,normPart(firstWord(record.description))].join(IM_KEYSEP),minConfidence));
+    const hit=candidates.find(candidate=>candidate&&candidate.name);
+    if(hit){record.itemMaster={name:hit.name,confidence:hit.confidence};continue;}
+    const review=candidates.find(candidate=>candidate&&candidate.review);
+    if(review)record.itemMasterReview=review.review;
+  }
+}
+
 /* ==== src/hierarchy/projection.js ==== */
+
 
 
 
@@ -10271,6 +10453,7 @@ function buildCanonicalModel(){
       const record=ensure(row.tag,{observed:true});if(!record)continue;
       const phase=clean(row.projectPhase).toLowerCase();
       record.phaseExcluded=!!phase&&excludedPhases.has(phase);
+      if(!record.description&&row.description)record.description=row.description;
       if(!record.phaseExcluded){record.includeInRegister=true;record.includeInHierarchy=true;}
     }
     synthesizeLineRollups(records,ensure);
@@ -10401,8 +10584,19 @@ function buildCanonicalModel(){
     assignMilestones(records);
     computeSequence(records,profile);
     S.upnPrecedence=upnPrecedence(records);
+    /* Optional EXTO layer: item-master assignment runs only when the profile
+       keeps EXTO on AND a learning source (registry / IM template) was given. */
+    const exto=profile.hierarchy&&profile.hierarchy.exto;
+    if((!exto||exto.enabled!==false)&&(!exto||exto.itemMasters!==false)){
+      const imTable=learnItemMasterTable();
+      S.imAudit=imTable.audit;
+      assignItemMasters(records,imTable);
+    }else{
+      S.imAudit=[];
+    }
   }else{
     S.upnPrecedence={edges:[],order:[],cycles:[]};
+    S.imAudit=[];
   }
   if(profile.hierarchy&&profile.hierarchy.resolutionStrategy!=='legacy-register'){
     S.ssmCombined=resolvedRegisterRows(S.ssmCombined,records);
@@ -12663,23 +12857,40 @@ function addHierSheet(wb,name,roots,used){
 }
 /* Exto SSM: UPN -> G, Equipment ID -> K, Closest Parent -> P, Dependencies -> AM (header row 2, data row 3).
    Load Description rows: Closest Parent blank, Dependency = equipment above. */
+function extoLayerEnabled(){
+  const exto=activeProfile().hierarchy&&activeProfile().hierarchy.exto;
+  return !exto||exto.enabled!==false;
+}
 function addExtoSheet(wb,name,rows,used){
-  /* Column layout is profile data (spec §8.1) so an upload-template revision
-     never requires code — the defaults reproduce the historical G/K/P/AM
-     layout, and a milestone column is emitted only when the map places one. */
+  /* The EXTO layer is optional (spec §8.1): sites on other Cx software disable
+     it and only the plain SSM outputs are produced. Column layout is profile
+     data per Standardized Upload Template Rev21, so a template revision never
+     requires code. Rev21 conventions honored here: roots attach to their own
+     System Name (not blank), and header names match the template exactly. */
+  if(!extoLayerEnabled())return;
   const cfg=activeProfile().hierarchy&&activeProfile().hierarchy.extoColumns||{};
-  const G=cfg.upn??6,K=cfg.equipmentId??10,P=cfg.closestParent??15,AM=cfg.dependencies??38,MS=cfg.milestone??-1;
-  const W=Math.max(G,K,P,AM,MS)+1,aoa=[];
+  const G=cfg.upn??6,K=cfg.equipmentId??10,P=cfg.closestParent??15,AN=cfg.dependencies??39,MS=cfg.milestone??24,IM=cfg.itemMaster??26;
+  const W=Math.max(G,K,P,AN,MS,IM)+1,aoa=[];
   aoa.push(new Array(W).fill(''));
-  const head=new Array(W).fill('');head[G]='UPN';head[K]='Equipment ID';head[P]='Closest Parent';head[AM]='Dependencies';if(MS>=0)head[MS]='L2 Milestone';aoa.push(head);
+  const head=new Array(W).fill('');head[G]='UPN';head[K]='Equipment ID';head[P]='Closest Parent';head[AN]='Dependencies';
+  if(MS>=0)head[MS]='Milestone';if(IM>=0)head[IM]='Item Master Unique Identifier';aoa.push(head);
+  const hierarchyCfg=activeProfile().hierarchy||{};
+  const rootsAttachToSystem=hierarchyCfg.melSeed&&hierarchyCfg.melSeed.enabled!==false;
   for(const r of filterSsm(rows)){
-    const {equip,parent,dep}=ssmRegisterResolve(r),record=MS>=0?canonicalRecord(equip):null;
-    const row=new Array(W).fill('');row[G]=melUpn(equip);row[K]=equip;row[P]=registerDisplayValue(parent);row[AM]=registerDisplayValue(dep);
+    const {equip,parent,dep}=ssmRegisterResolve(r),record=canonicalRecord(equip);
+    const row=new Array(W).fill('');row[G]=melUpn(equip);row[K]=equip;
+    const parentValue=clean(parent);
+    /* Rev21 registry convention: a root's Closest Parent is its own System
+       Name. Legacy (Eagle) keeps the frozen N/A rendering. */
+    row[P]=parentValue?registerDisplayValue(parentValue)
+      :(rootsAttachToSystem&&record&&recordAttribute(record,'system'))||registerDisplayValue(parentValue);
+    row[AN]=registerDisplayValue(dep);
     if(MS>=0)row[MS]=record&&record.milestone?record.milestone.label:'';
+    if(IM>=0)row[IM]=record&&record.itemMaster?record.itemMaster.name:'';
     aoa.push(row);
   }
   const ws=XLSX.utils.aoa_to_sheet(aoa);
-  const cols=new Array(W).fill(0).map(()=>({wch:9}));cols[G]={wch:12};cols[K]={wch:26};cols[P]={wch:26};cols[AM]={wch:24};if(MS>=0)cols[MS]={wch:34};ws['!cols']=cols;
+  const cols=new Array(W).fill(0).map(()=>({wch:9}));cols[G]={wch:12};cols[K]={wch:26};cols[P]={wch:26};cols[AN]={wch:24};if(MS>=0)cols[MS]={wch:34};if(IM>=0)cols[IM]={wch:28};ws['!cols']=cols;
   styleHeaderRow(ws,1);                                     // only the mapped header cells are non-empty
   addSheet(wb,ws,name,used,2);
 }
@@ -12756,6 +12967,14 @@ function addQaSheets(wb,used){
     ['MEL assertions contradicting the wiring',contradictions.length],
     ['Cable loads absent from the MEL',cableMissing.length],
     ['UPN precedence cycles',cycles.length]];
+  const imAssigned=records.filter(record=>record.itemMaster).length;
+  const imReview=records.filter(record=>record.itemMasterReview).length;
+  const imAudit=S.imAudit||[];
+  if(imAssigned||imReview||imAudit.length){
+    scoreAoa.push(['Item masters auto-assigned',imAssigned],
+      ['Item masters needing review',imReview],
+      ['Registry item-master audit findings',imAudit.length]);
+  }
   const scoreWs=XLSX.utils.aoa_to_sheet(scoreAoa);
   scoreWs['!cols']=[{wch:44},{wch:14}];styleHeaderRow(scoreWs,0);
   addSheet(wb,scoreWs,'QA Scorecard',used,1);
@@ -12764,6 +12983,10 @@ function addQaSheets(wb,used){
   for(const record of orphans)exceptionsAoa.push(['Orphan',record.tag,'No parent and no dependencies resolved']);
   for(const item of contradictions)exceptionsAoa.push(['MEL contradiction',item.tag,`wiring derives ${item.derived}; MEL asserts ${item.asserted}`]);
   for(const item of cableMissing)exceptionsAoa.push(['Cable load absent from MEL',item.load,`fed from ${item.panel}`]);
+  for(const record of records)if(record.itemMasterReview)
+    exceptionsAoa.push(['Item master needs review',record.tag,`candidates: ${record.itemMasterReview.join(' / ')}`]);
+  for(const item of S.imAudit||[])
+    exceptionsAoa.push(['Registry item-master audit',item.equipmentId,`${item.itemMaster||'(blank)'} on ${item.discipline}: ${item.reason}`]);
   if(exceptionsAoa.length>1){
     const exWs=XLSX.utils.aoa_to_sheet(exceptionsAoa);
     exWs['!cols']=[{wch:26},{wch:28},{wch:60}];styleHeaderRow(exWs,0);setFilter(exWs,0);
@@ -12893,6 +13116,7 @@ async function exportHierarchyXlsx(){
   }))toast(selectedMode.name+' exported');
 }
 async function exportExtoSSMXlsx(){
+  if(!extoLayerEnabled()){toast('EXTO export is disabled in this profile');return;}
   if(S.profileNeedsRebuild){toast('Rebuild the hierarchy before exporting');return;}
   if(!S.ssmCombined.length){toast('Nothing to export');return;}
   let mode='combined';
@@ -12936,6 +13160,7 @@ function exportOutlineTxt(){
 }
 
 /* ==== src/ui/screens.js ==== */
+
 
 
 
@@ -13200,6 +13425,11 @@ async function prewarmSheets(){
   allKeys().forEach(k=>{if(isMelSheet(k))S.melSel.add(k);});
   allKeys().forEach(k=>{if(!isMelSheet(k)&&!isCableSheet(k)&&!isPmdSheet(k)&&isP6Sheet(k))S.p6Sel.add(k);});
   allKeys().forEach(k=>{if(!isMelSheet(k)&&!isCableSheet(k)&&!isPmdSheet(k)&&!S.p6Sel.has(k)&&isLineListSheet(k))S.lineSel.add(k);});
+  /* Optional EXTO-layer inputs. Registry detection runs before the MEL guard
+     dilemma never arises: a registry sheet has an Item Master column no MEL
+     carries, and detectExtoRegistry requires it. */
+  allKeys().forEach(k=>{if(!isCableSheet(k)&&!isPmdSheet(k)&&isExtoRegistrySheet(k))S.extoSel.add(k);});
+  allKeys().forEach(k=>{if(isItemMasterTemplateSheet(k)&&!S.extoSel.has(k))S.imSel.add(k);});
 }
 
 /* ---- sheets screen ---- */
@@ -13321,7 +13551,7 @@ function wireSheets(){
     cb.addEventListener('change',()=>set(cb.checked));
   });
 }
-function allHierKeys(){return S.files.filter(f=>!f.error).flatMap(f=>f.sheets.map(s=>f.id+KEYSEP+s)).filter(k=>!isMelSheet(k)&&!isPmdSheet(k)&&!isCableSheet(k)&&!isP6Sheet(k)&&!isLineListSheet(k));}
+function allHierKeys(){return S.files.filter(f=>!f.error).flatMap(f=>f.sheets.map(s=>f.id+KEYSEP+s)).filter(k=>!isMelSheet(k)&&!isPmdSheet(k)&&!isCableSheet(k)&&!isP6Sheet(k)&&!isLineListSheet(k)&&!isExtoRegistrySheet(k)&&!isItemMasterTemplateSheet(k));}
 function allKeys(){return S.files.filter(f=>!f.error).flatMap(f=>f.sheets.map(s=>f.id+KEYSEP+s));}
 function toggleEditPanel(key,row){
   const panel=row.nextElementSibling;

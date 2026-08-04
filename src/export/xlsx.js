@@ -106,23 +106,40 @@ export function addHierSheet(wb,name,roots,used){
 }
 /* Exto SSM: UPN -> G, Equipment ID -> K, Closest Parent -> P, Dependencies -> AM (header row 2, data row 3).
    Load Description rows: Closest Parent blank, Dependency = equipment above. */
+export function extoLayerEnabled(){
+  const exto=activeProfile().hierarchy&&activeProfile().hierarchy.exto;
+  return !exto||exto.enabled!==false;
+}
 export function addExtoSheet(wb,name,rows,used){
-  /* Column layout is profile data (spec §8.1) so an upload-template revision
-     never requires code — the defaults reproduce the historical G/K/P/AM
-     layout, and a milestone column is emitted only when the map places one. */
+  /* The EXTO layer is optional (spec §8.1): sites on other Cx software disable
+     it and only the plain SSM outputs are produced. Column layout is profile
+     data per Standardized Upload Template Rev21, so a template revision never
+     requires code. Rev21 conventions honored here: roots attach to their own
+     System Name (not blank), and header names match the template exactly. */
+  if(!extoLayerEnabled())return;
   const cfg=activeProfile().hierarchy&&activeProfile().hierarchy.extoColumns||{};
-  const G=cfg.upn??6,K=cfg.equipmentId??10,P=cfg.closestParent??15,AM=cfg.dependencies??38,MS=cfg.milestone??-1;
-  const W=Math.max(G,K,P,AM,MS)+1,aoa=[];
+  const G=cfg.upn??6,K=cfg.equipmentId??10,P=cfg.closestParent??15,AN=cfg.dependencies??39,MS=cfg.milestone??24,IM=cfg.itemMaster??26;
+  const W=Math.max(G,K,P,AN,MS,IM)+1,aoa=[];
   aoa.push(new Array(W).fill(''));
-  const head=new Array(W).fill('');head[G]='UPN';head[K]='Equipment ID';head[P]='Closest Parent';head[AM]='Dependencies';if(MS>=0)head[MS]='L2 Milestone';aoa.push(head);
+  const head=new Array(W).fill('');head[G]='UPN';head[K]='Equipment ID';head[P]='Closest Parent';head[AN]='Dependencies';
+  if(MS>=0)head[MS]='Milestone';if(IM>=0)head[IM]='Item Master Unique Identifier';aoa.push(head);
+  const hierarchyCfg=activeProfile().hierarchy||{};
+  const rootsAttachToSystem=hierarchyCfg.melSeed&&hierarchyCfg.melSeed.enabled!==false;
   for(const r of filterSsm(rows)){
-    const {equip,parent,dep}=ssmRegisterResolve(r),record=MS>=0?canonicalRecord(equip):null;
-    const row=new Array(W).fill('');row[G]=melUpn(equip);row[K]=equip;row[P]=registerDisplayValue(parent);row[AM]=registerDisplayValue(dep);
+    const {equip,parent,dep}=ssmRegisterResolve(r),record=canonicalRecord(equip);
+    const row=new Array(W).fill('');row[G]=melUpn(equip);row[K]=equip;
+    const parentValue=clean(parent);
+    /* Rev21 registry convention: a root's Closest Parent is its own System
+       Name. Legacy (Eagle) keeps the frozen N/A rendering. */
+    row[P]=parentValue?registerDisplayValue(parentValue)
+      :(rootsAttachToSystem&&record&&recordAttribute(record,'system'))||registerDisplayValue(parentValue);
+    row[AN]=registerDisplayValue(dep);
     if(MS>=0)row[MS]=record&&record.milestone?record.milestone.label:'';
+    if(IM>=0)row[IM]=record&&record.itemMaster?record.itemMaster.name:'';
     aoa.push(row);
   }
   const ws=XLSX.utils.aoa_to_sheet(aoa);
-  const cols=new Array(W).fill(0).map(()=>({wch:9}));cols[G]={wch:12};cols[K]={wch:26};cols[P]={wch:26};cols[AM]={wch:24};if(MS>=0)cols[MS]={wch:34};ws['!cols']=cols;
+  const cols=new Array(W).fill(0).map(()=>({wch:9}));cols[G]={wch:12};cols[K]={wch:26};cols[P]={wch:26};cols[AN]={wch:24};if(MS>=0)cols[MS]={wch:34};if(IM>=0)cols[IM]={wch:28};ws['!cols']=cols;
   styleHeaderRow(ws,1);                                     // only the mapped header cells are non-empty
   addSheet(wb,ws,name,used,2);
 }
@@ -199,6 +216,14 @@ export function addQaSheets(wb,used){
     ['MEL assertions contradicting the wiring',contradictions.length],
     ['Cable loads absent from the MEL',cableMissing.length],
     ['UPN precedence cycles',cycles.length]];
+  const imAssigned=records.filter(record=>record.itemMaster).length;
+  const imReview=records.filter(record=>record.itemMasterReview).length;
+  const imAudit=S.imAudit||[];
+  if(imAssigned||imReview||imAudit.length){
+    scoreAoa.push(['Item masters auto-assigned',imAssigned],
+      ['Item masters needing review',imReview],
+      ['Registry item-master audit findings',imAudit.length]);
+  }
   const scoreWs=XLSX.utils.aoa_to_sheet(scoreAoa);
   scoreWs['!cols']=[{wch:44},{wch:14}];styleHeaderRow(scoreWs,0);
   addSheet(wb,scoreWs,'QA Scorecard',used,1);
@@ -207,6 +232,10 @@ export function addQaSheets(wb,used){
   for(const record of orphans)exceptionsAoa.push(['Orphan',record.tag,'No parent and no dependencies resolved']);
   for(const item of contradictions)exceptionsAoa.push(['MEL contradiction',item.tag,`wiring derives ${item.derived}; MEL asserts ${item.asserted}`]);
   for(const item of cableMissing)exceptionsAoa.push(['Cable load absent from MEL',item.load,`fed from ${item.panel}`]);
+  for(const record of records)if(record.itemMasterReview)
+    exceptionsAoa.push(['Item master needs review',record.tag,`candidates: ${record.itemMasterReview.join(' / ')}`]);
+  for(const item of S.imAudit||[])
+    exceptionsAoa.push(['Registry item-master audit',item.equipmentId,`${item.itemMaster||'(blank)'} on ${item.discipline}: ${item.reason}`]);
   if(exceptionsAoa.length>1){
     const exWs=XLSX.utils.aoa_to_sheet(exceptionsAoa);
     exWs['!cols']=[{wch:26},{wch:28},{wch:60}];styleHeaderRow(exWs,0);setFilter(exWs,0);
@@ -336,6 +365,7 @@ export async function exportHierarchyXlsx(){
   }))toast(selectedMode.name+' exported');
 }
 export async function exportExtoSSMXlsx(){
+  if(!extoLayerEnabled()){toast('EXTO export is disabled in this profile');return;}
   if(S.profileNeedsRebuild){toast('Rebuild the hierarchy before exporting');return;}
   if(!S.ssmCombined.length){toast('Nothing to export');return;}
   let mode='combined';

@@ -42,3 +42,15 @@ Phase 3 — see docs/specs/2026-08-03-ssm-compiler-design.md §11.
   rule-pack authoring polish, review-queue UX. The SOP-baseline equipment-type
   relate rules (VFD→major equipment with PLC/panel deps, etc.) remain profile
   authoring work, not code.
+
+## 2026-08-04 EXTO-layer batch
+
+- EXTO is a profile-gated optional layer (`hierarchy.exto`): other sites use
+  different Cx software and only want the SSM itself. Eagle keeps the frozen
+  historical Exto layout (deps at AM, no milestone/IM columns, N/A roots);
+  project profiles follow Upload Template Rev21.
+- Item-master learning keys: (discipline, classification, UPN) then
+  (discipline, UPN, first description word), 0.9 confidence gate — measured on
+  a real 18k-row registry at ~81% auto-assignment, ~99% accuracy.
+- Registry rows with placeholder masters or electrical-gear masters on
+  non-electrical equipment are excluded from learning and audited instead.

@@ -6,6 +6,7 @@ import { PMD_SHEET_NAME, cableInfo, cableRowCount, isCableSheet, isMelSheet, isP
 import { extractStrikeCells, getAoa, getAoaAsync, readArrayBuffer, sheetRowCount } from '../io/workbook.js'
 import { isP6Sheet, parseXer } from '../io/p6.js'
 import { isLineListSheet } from '../io/linelist.js'
+import { isExtoRegistrySheet, isItemMasterTemplateSheet } from '../io/exto.js'
 import { buildHierarchy } from '../hierarchy/build.js'
 
 
@@ -262,6 +263,11 @@ export async function prewarmSheets(){
   allKeys().forEach(k=>{if(isMelSheet(k))S.melSel.add(k);});
   allKeys().forEach(k=>{if(!isMelSheet(k)&&!isCableSheet(k)&&!isPmdSheet(k)&&isP6Sheet(k))S.p6Sel.add(k);});
   allKeys().forEach(k=>{if(!isMelSheet(k)&&!isCableSheet(k)&&!isPmdSheet(k)&&!S.p6Sel.has(k)&&isLineListSheet(k))S.lineSel.add(k);});
+  /* Optional EXTO-layer inputs. Registry detection runs before the MEL guard
+     dilemma never arises: a registry sheet has an Item Master column no MEL
+     carries, and detectExtoRegistry requires it. */
+  allKeys().forEach(k=>{if(!isCableSheet(k)&&!isPmdSheet(k)&&isExtoRegistrySheet(k))S.extoSel.add(k);});
+  allKeys().forEach(k=>{if(isItemMasterTemplateSheet(k)&&!S.extoSel.has(k))S.imSel.add(k);});
 }
 
 /* ---- sheets screen ---- */
@@ -383,7 +389,7 @@ export function wireSheets(){
     cb.addEventListener('change',()=>set(cb.checked));
   });
 }
-export function allHierKeys(){return S.files.filter(f=>!f.error).flatMap(f=>f.sheets.map(s=>f.id+KEYSEP+s)).filter(k=>!isMelSheet(k)&&!isPmdSheet(k)&&!isCableSheet(k)&&!isP6Sheet(k)&&!isLineListSheet(k));}
+export function allHierKeys(){return S.files.filter(f=>!f.error).flatMap(f=>f.sheets.map(s=>f.id+KEYSEP+s)).filter(k=>!isMelSheet(k)&&!isPmdSheet(k)&&!isCableSheet(k)&&!isP6Sheet(k)&&!isLineListSheet(k)&&!isExtoRegistrySheet(k)&&!isItemMasterTemplateSheet(k));}
 export function allKeys(){return S.files.filter(f=>!f.error).flatMap(f=>f.sheets.map(s=>f.id+KEYSEP+s));}
 export function toggleEditPanel(key,row){
   const panel=row.nextElementSibling;

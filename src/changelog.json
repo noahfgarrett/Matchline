@@ -1,5 +1,11 @@
 [
   {
+    "version": "0.4.0",
+    "date": "2026-08-04T00:00:00Z",
+    "type": "feature",
+    "notes": "- Made the EXTO layer optional per profile: the plain SSM outputs are the universal deliverable; the Exto sheet, item masters, and upload conventions only apply where EXTO is in use\n- Updated the EXTO upload defaults to Standardized Upload Template Rev21 (Dependencies at AN, Milestone at Y, Item Master Unique Identifier at AA)\n- Roots now attach to their own System Name in the Exto sheet, matching the registry convention\n- Added item-master auto-assignment learned from a prior registry export, confidence-gated with a review queue, CA_* names normalized to the universal VF vocabulary\n- Added a registry item-master audit (placeholders and electrical-gear masters on non-electrical equipment) to the QA sheets\n- Milestone names covering several UPNs (e.g. UPN 115/116/117) now claim each UPN on the ladder"
+  },
+  {
     "version": "0.3.0",
     "date": "2026-08-03T00:00:00Z",
     "type": "feature",
