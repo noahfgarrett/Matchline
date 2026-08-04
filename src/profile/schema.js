@@ -127,9 +127,18 @@ export function makeDefaultProfile(name){
          heuristic (top-down for electrical/LSS/security, bottom-up otherwise). */
       milestones:{upnPattern:'',buildingReadyLabel:'OP / Building Ready'},
       polarity:{},
-      /* EXTO upload column indexes (0-based). Defaults reproduce the
-         historical G/K/P/AM layout; milestone -1 = column not emitted. */
-      extoColumns:{upn:6,equipmentId:10,closestParent:15,dependencies:38,milestone:-1},
+      /* The EXTO layer is optional (spec §8.1): the SSM itself is the universal
+         deliverable; sites on other Cx software disable this and only the
+         plain SSM outputs are produced. itemMasters further gates checklist
+         auto-assignment inside the EXTO layer. */
+      exto:{enabled:true,itemMasters:!isBuiltIn},
+      /* EXTO upload column indexes (0-based). Project profiles follow the
+         Standardized Upload File Template Rev21 (UPN=G, Equipment ID=K,
+         Closest Parent=P, Milestone=Y, Item Master UID=AA, Dependencies=AN);
+         Eagle keeps the frozen historical G/K/P/AM layout. -1 = not emitted. */
+      extoColumns:isBuiltIn
+        ?{upn:6,equipmentId:10,closestParent:15,dependencies:38,milestone:-1,itemMaster:-1}
+        :{upn:6,equipmentId:10,closestParent:15,milestone:24,itemMaster:26,dependencies:39},
       roleParents:{LVS:'XFM',XFM:'GIS',GIS:'SYSTEM'},
       resolutionStrategy:isBuiltIn?'legacy-register':'source-priority',
       downstreamGapPolicy:isBuiltIn?'truncate':'bridge-review',

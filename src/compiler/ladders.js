@@ -20,10 +20,18 @@ export function collectP6(){
   return {tasks};
 }
 
+/* A milestone name can cover several UPNs at once ("UPN 115/116/117 …"), so
+   the extracted token splits on '/' and every part claims the milestone. */
+export function extractMilestoneUpns(name,pattern){
+  const match=String(name||'').match(pattern);
+  if(!match)return [];
+  return match[1].split('/').map(part=>clean(part)).filter(Boolean);
+}
+
 export function assignMilestones(records){
   const hierarchy=activeProfile().hierarchy||{},cfg=hierarchy.milestones||{};
   const buildingReady=clean(cfg.buildingReadyLabel)||'OP / Building Ready';
-  const upnPattern=new RegExp(cfg.upnPattern||'\\bUPN\\s*[-#]?\\s*([A-Za-z0-9.-]+)','i');
+  const upnPattern=new RegExp(cfg.upnPattern||'\\bUPN\\s*[-#]?\\s*([A-Za-z0-9./-]+)','i');
   const {tasks}=collectP6();
   /* Milestone-flagged tasks claim a UPN first; unflagged activities only fill
      gaps, so a task row never shadows a real L2 milestone. */
@@ -36,8 +44,7 @@ export function assignMilestones(records){
   for(const task of ordered){
     if(task.equipmentId){const key=tagKey(task.equipmentId);if(key&&!byTag.has(key))byTag.set(key,task);}
     if(task.upn)claimUpn(task.upn,task,2);
-    const match=(task.name||'').match(upnPattern);
-    if(match)claimUpn(match[1],task,3);
+    for(const upn of extractMilestoneUpns(task.name,upnPattern))claimUpn(upn,task,3);
   }
   for(const record of records.values()){
     const direct=byTag.get(record.key);

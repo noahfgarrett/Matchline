@@ -12,6 +12,7 @@ import { foldClaimsByPartition, recordPartitionKey } from '../compiler/fold.js'
 import { recordCompilerCableEdges, recordCompilerMelClaims } from '../compiler/edges.js'
 import { assignMilestones } from '../compiler/ladders.js'
 import { synthesizeLineRollups, finalizeLineRollups } from '../compiler/rollups.js'
+import { learnItemMasterTable, assignItemMasters } from '../compiler/itemmasters.js'
 import { computeSequence, upnPrecedence } from '../compiler/sequence.js'
 
 /* ---- canonical equipment model and projections ---- */
@@ -135,6 +136,7 @@ export function buildCanonicalModel(){
       const record=ensure(row.tag,{observed:true});if(!record)continue;
       const phase=clean(row.projectPhase).toLowerCase();
       record.phaseExcluded=!!phase&&excludedPhases.has(phase);
+      if(!record.description&&row.description)record.description=row.description;
       if(!record.phaseExcluded){record.includeInRegister=true;record.includeInHierarchy=true;}
     }
     synthesizeLineRollups(records,ensure);
@@ -265,8 +267,19 @@ export function buildCanonicalModel(){
     assignMilestones(records);
     computeSequence(records,profile);
     S.upnPrecedence=upnPrecedence(records);
+    /* Optional EXTO layer: item-master assignment runs only when the profile
+       keeps EXTO on AND a learning source (registry / IM template) was given. */
+    const exto=profile.hierarchy&&profile.hierarchy.exto;
+    if((!exto||exto.enabled!==false)&&(!exto||exto.itemMasters!==false)){
+      const imTable=learnItemMasterTable();
+      S.imAudit=imTable.audit;
+      assignItemMasters(records,imTable);
+    }else{
+      S.imAudit=[];
+    }
   }else{
     S.upnPrecedence={edges:[],order:[],cycles:[]};
+    S.imAudit=[];
   }
   if(profile.hierarchy&&profile.hierarchy.resolutionStrategy!=='legacy-register'){
     S.ssmCombined=resolvedRegisterRows(S.ssmCombined,records);

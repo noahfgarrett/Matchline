@@ -45,18 +45,22 @@ test('the QA scorecard reports coverage KPIs and lists exceptions', async () => 
   assert.ok(exceptions.some(row => row[0] === 'MEL contradiction' && /MTR-9001/.test(row[1])))
 })
 
-test('the EXTO sheet honors the profile column map, defaulting to the historical layout', async () => {
+test('the EXTO sheet follows the Rev21 layout and attaches roots to their System Name', async () => {
   const app = await buildProjectApp(CORE)
   const byDefault = exportSheets(app, `addExtoSheet(wb, 'Exto SSM', S.ssmCombined, used);`)['Exto SSM']
   assert.equal(byDefault[1][6], 'UPN')
   assert.equal(byDefault[1][10], 'Equipment ID')
   assert.equal(byDefault[1][15], 'Closest Parent')
-  assert.equal(byDefault[1][38], 'Dependencies')
+  assert.equal(byDefault[1][24], 'Milestone')
+  assert.equal(byDefault[1][26], 'Item Master Unique Identifier')
+  assert.equal(byDefault[1][39], 'Dependencies', 'Rev21 moved Dependencies to AN')
+  const rioDefault = byDefault.find(row => /RIO-6500/.test(row[10]))
+  assert.equal(rioDefault[15], '650 FMS Network', 'a root attaches to its own System Name, not N/A')
   const custom = exportSheets(app, `
-    activeProfile().hierarchy.extoColumns = { upn: 0, equipmentId: 1, closestParent: 2, dependencies: 3, milestone: 4 };
+    activeProfile().hierarchy.extoColumns = { upn: 0, equipmentId: 1, closestParent: 2, dependencies: 3, milestone: 4, itemMaster: -1 };
     addExtoSheet(wb, 'Exto SSM', S.ssmCombined, used);
   `)['Exto SSM']
-  assert.deepEqual(custom[1], ['UPN', 'Equipment ID', 'Closest Parent', 'Dependencies', 'L2 Milestone'])
+  assert.deepEqual(custom[1], ['UPN', 'Equipment ID', 'Closest Parent', 'Dependencies', 'Milestone'])
   const rio = custom.find(row => /RIO-6500/.test(row[1]))
   assert.equal(rio[4], 'OP / Building Ready', 'milestone column carries the ladder label')
 })

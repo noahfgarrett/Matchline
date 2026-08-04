@@ -60,6 +60,29 @@ const SHEETS = {
       ['B14-FCU-7101', 'Fan coil unit', '2201', 'B14', 'B14-AHU-7001', 'Mechanical', 'Screening', 'New'],
     ],
   },
+  /* Optional EXTO-layer fixtures: a prior registry export (item-master
+     learning source, with one bulk-fill audit case and one placeholder) and
+     the VF item-master vocabulary template. */
+  'compiler-extoreg.xlsx': {
+    Registry: [
+      ['Cx Upload Unique Number', 'Site', 'Building', 'UPN', 'Discipline', 'System Name', 'Equipment ID', 'Equipment Description', 'Closest Parent', 'Item Master Unique Identifier'],
+      ['E-1', 'B1', 'B14', '650', 'I&C', '650 FMS Network', 'X-RIO-1', 'Remote IO panel', '650 FMS Network', 'CA_NB_IC_RIO'],
+      ['E-2', 'B1', 'B14', '2201', 'MECHANICAL', '2201 Screening', 'X-AHU-9', 'Air handler', '2201 Screening', 'VF_MECH_AHU'],
+      ['E-3', 'B1', 'B14', '2201', 'MECHANICAL', '2201 Screening', 'X-M1', 'Supply fan motor', 'X-AHU-9', 'VF_MECH_FAN'],
+      ['E-4', 'B1', 'B14', '2201', 'MECHANICAL', '2201 Screening', 'X-M2', 'Supply pump', 'X-AHU-9', 'VF_MECH_PUMP'],
+      ['E-5', 'B1', 'B14', '241', 'UPW', '241 UPW Makeup', 'X-BAD', 'Makeup pump', '241 UPW Makeup', 'CA_NB_EL_MV_GEAR'],
+      ['E-6', 'B1', 'B14', '266', 'WASTE', '266 HFW Treatment', 'X-BLANK', 'Isolation valve', '266 HFW Treatment', 'VF_Blank'],
+    ],
+  },
+  'compiler-imtemplate.xlsx': {
+    'VF POR Item Masters': [
+      ['Site', 'Discipline', 'IM Name', 'Use Case(s)'],
+      ['VF', 'I&C', 'VF_IC_RIO', 'Remote IO panels'],
+      ['VF', 'MECH', 'VF_MECH_AHU', 'Air handlers'],
+      ['VF', 'MECH', 'VF_MECH_FAN', 'Fans'],
+      ['VF', 'MECH', 'VF_MECH_PUMP', 'Pumps'],
+    ],
+  },
   'compiler-wc.xlsx': {
     SSM: [
       ['Equipment ID', 'Closest Parent', 'Dependencies'],
