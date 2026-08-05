@@ -1188,3 +1188,6 @@ body.visual-trainer-fullscreen{overflow:hidden}
 .row.kind-equipment[draggable="true"]:active{cursor:grabbing}
 .row.drag-src{opacity:.45}
 .row.drag-over{box-shadow:inset 0 0 0 2px #e57324;border-radius:6px}
+.badge-manual{display:inline-flex;align-items:center;margin-left:6px;color:#e57324;opacity:.85}
+.badge-manual svg{width:12px;height:12px}
+#massageUndo[disabled],#massageRedo[disabled]{opacity:.4;pointer-events:none}

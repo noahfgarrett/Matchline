@@ -151,7 +151,11 @@ export function buildCanonicalModel(){
     for(const child of node.children)walk(child,systemAlong);
   };
   S.roots.forEach(root=>walk(root,''));
-  for(const row of S.ssmCombined){
+  /* Re-ingestion must read the PRISTINE register, not our own previous
+     resolution — otherwise every rebuild re-mints its past output as register
+     claims and manual/inferred changes can never be walked back. */
+  if(!S.ssmCombinedRaw)S.ssmCombinedRaw=(S.ssmCombined||[]).map(row=>[...row]);
+  for(const row of S.ssmCombinedRaw){
     const resolved=ssmResolve(row),record=ensure(resolved.equip,{observed:true,hierarchy:true,register:true});if(!record)continue;
     if(resolved.parent){record.registerParents.add(cleanRegisterTag(resolved.parent));ensure(resolved.parent);}
     if(resolved.dep)record.dependencies.add(cleanRegisterTag(resolved.dep));
@@ -329,7 +333,7 @@ export function buildCanonicalModel(){
     S.upnPrecedence={edges:[],order:[],cycles:[]};
   }
   if(profile.hierarchy&&profile.hierarchy.resolutionStrategy!=='legacy-register'){
-    S.ssmCombined=resolvedRegisterRows(S.ssmCombined,records);
+    S.ssmCombined=resolvedRegisterRows(S.ssmCombinedRaw,records);
   }
   S.canonicalModel=records;return records;
 }
