@@ -61,6 +61,7 @@ const SHEETS = {
       ['B14-DDC-7301', 'DDC controller', '650', 'B14', '', 'I&C', 'FMS Network', 'New'],
       ['B14-TT-7001-02A', 'Temperature transmitter', '2201', 'B14', '', 'Mechanical', 'Screening', 'New'],
       ['B14-RIO-6500-PS1', 'RIO power supply', '650', 'B14', '', 'I&C', 'FMS Network', 'New'],
+      ['B14-PT-7001-01', 'Pressure transmitter', '2201', 'B14', '', 'Mechanical', 'Screening', 'New'],
     ],
   },
   /* Optional EXTO-layer fixtures: a prior registry export (item-master
@@ -77,7 +78,11 @@ const SHEETS = {
       // role-teaching rows: TT is a child-only class (>=10 sightings) that
       // conventionally nests under AHU-class equipment (affinity >= 3)
       ...Array.from({ length: 10 }, (_, i) =>
-        ['E-T' + i, 'B1', 'B14', '2201', 'MECHANICAL', '2201 Screening', 'X-TT-' + i, 'Temperature transmitter', 'TT', 'X-AHU-9', 'VF_I&C_TRANSMITTER']),
+        ['E-T' + i, 'B1', 'B14', '2201', 'MECHANICAL', '2201 Screening', 'X-TT-9-' + i, 'Temperature transmitter', 'TT', 'X-AHU-9', 'VF_I&C_TRANSMITTER']),
+      ['E-P0', 'B1', 'B14', '2201', 'MECHANICAL', '2201 Screening', 'X-PMP-1', 'Screening pump', 'PMP', '2201 Screening', 'VF_MECH_PUMP'],
+      // PT rows nest inconsistently (half AHU, half PMP) so PT self-grades as propose-only
+      ...Array.from({ length: 12 }, (_, i) =>
+        ['E-P' + (i + 1), 'B1', 'B14', '2201', 'MECHANICAL', '2201 Screening', 'X-PT-9-' + (i + 1), 'Pressure transmitter', 'PT', (i % 2 ? 'X-AHU-9' : 'X-PMP-1'), 'VF_I&C_TRANSMITTER']),
       ['E-6', 'B1', 'B14', '266', 'WASTE', '266 HFW Treatment', 'X-BLANK', 'Isolation valve', 'XV', '266 HFW Treatment', 'VF_Blank'],
     ],
   },
@@ -110,6 +115,12 @@ const SHEETS = {
       ['Activity ID', 'Activity Name', 'Equipment ID', 'UPN'],
       ['A2000', 'Commission RIO 6500 remote IO', 'B14-RIO-6500', '650'],
       ['A2010', 'Terminate FMS network trunk', '', '650'],
+    ],
+  },
+  'compiler-ep.xlsx': {
+    EasyPower: [
+      ['Starting Source', 'Downstream1', 'Downstream2', 'Final Source', 'ID Name', 'Load Description'],
+      ['GIS-01', 'B14-XFM-1234', 'B14-LVS-1234', 'B14-LVS-1234', '', 'TT-7001-02A'],
     ],
   },
   'compiler-cable.xlsx': {

@@ -1,5 +1,11 @@
 [
   {
+    "version": "0.8.0",
+    "date": "2026-08-05T00:00:00Z",
+    "type": "feature",
+    "notes": "- Nesting inference now BUILDS the hierarchy for self-graded claim classes: the model replays its policy against the registry's own Closest Parent answers per class, and only classes proving >=85% precision nest automatically (evidence always outranks; provenance says inferred)\n- Everything below the bar stays a reviewable proposal; benchmarked end-to-end against a real registry at 87% claim precision with 100% root agreement\n- Containment rule hardened: extensions must be substantive and continue at a separator boundary (racks and power supplies nest; A/B siblings and short header tags do not)\n- Electrical Flow view now lists what an instrument controls beneath it as a marked reference node\n- A MEL alone now builds the full register \u2014 no electrical sources required"
+  },
+  {
     "version": "0.7.0",
     "date": "2026-08-05T00:00:00Z",
     "type": "feature",

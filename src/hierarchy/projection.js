@@ -13,7 +13,7 @@ import { recordCompilerCableEdges, recordCompilerMelClaims } from '../compiler/e
 import { assignMilestones } from '../compiler/ladders.js'
 import { synthesizeLineRollups, finalizeLineRollups } from '../compiler/rollups.js'
 import { learnItemMasterTable, assignItemMasters, assignClassifications } from '../compiler/itemmasters.js'
-import { learnNestingModel, proposeNesting } from '../compiler/nesting.js'
+import { learnNestingModel, inferNesting, attachControlsRefs } from '../compiler/nesting.js'
 import { computeSequence, upnPrecedence } from '../compiler/sequence.js'
 
 /* ---- canonical equipment model and projections ---- */
@@ -210,6 +210,18 @@ export function buildCanonicalModel(){
       record.context.attributeOverride?'Grouping · Visual Trainer':''
     ].filter(Boolean);
   }
+  /* Learned layers that must precede claim assembly: description-derived
+     classifications feed the nesting roles, and claim-grade nesting joins the
+     candidate pool below (lowest priority — evidence always outranks it). */
+  let compilerImTable=null;
+  if(melFirst){
+    compilerImTable=learnItemMasterTable();
+    S.imAudit=compilerImTable.audit||[];
+    assignClassifications(records,compilerImTable);
+    inferNesting(records,learnNestingModel());
+  }else{
+    S.imAudit=[];
+  }
   const profile=activeProfile(),observations=[],candidates=[],manualOverrides=[];let order=0;
   const canonicalLookup=createMemoryLookup([...records.values()].map(record=>({
     tag:record.tag,columns:{},attributes:{...record.attributes}
@@ -243,6 +255,8 @@ export function buildCanonicalModel(){
     record.ruleDecision=decision;
     if(decision.status==='resolved'&&decision.parent)addParent(record,decision.parent,'rule-'+decision.ruleId,relationshipRulePriority(profile,decision.ruleId),
       {source:'Rule Engine',ruleId:decision.ruleId,reason:decision.reason||''});
+    if(record.nestingInference&&record.nestingInference.grade==='claim')
+      addParent(record,record.nestingInference.parent,'inferred',150,{source:'Inferred nesting',reason:record.nestingInference.rationale});
     else if(decision.status==='ambiguous')S.resolutionIssues.push({type:'rule-ambiguity',entityId:record.key,tag:record.tag,ruleId:decision.ruleId,
       candidates:decision.candidates||[],reason:decision.reason||'Rule matched multiple possible parents'});
     for(const dependency of decision.dependencies||[])addDependency(record,dependency,'rule-'+decision.ruleId,relationshipRulePriority(profile,decision.ruleId));
@@ -300,21 +314,11 @@ export function buildCanonicalModel(){
     /* Optional EXTO layer: item-master assignment runs only when the profile
        keeps EXTO on AND a learning source (registry / IM template) was given. */
     const exto=profile.hierarchy&&profile.hierarchy.exto;
-    if((!exto||exto.enabled!==false)&&(!exto||exto.itemMasters!==false)){
-      const imTable=learnItemMasterTable();
-      S.imAudit=imTable.audit;
-      assignClassifications(records,imTable);
-      assignItemMasters(records,imTable);
-    }else{
-      S.imAudit=[];
+    if((!exto||exto.enabled!==false)&&(!exto||exto.itemMasters!==false)&&compilerImTable){
+      assignItemMasters(records,compilerImTable);
     }
-    /* Nesting proposals (spec §5): description-derived roles + number
-       nomenclature, learned from the registry. Proposals only — they surface
-       in the Completed MEL and review queue, never as silent claims. */
-    proposeNesting(records,learnNestingModel());
   }else{
     S.upnPrecedence={edges:[],order:[],cycles:[]};
-    S.imAudit=[];
   }
   if(profile.hierarchy&&profile.hierarchy.resolutionStrategy!=='legacy-register'){
     S.ssmCombined=resolvedRegisterRows(S.ssmCombined,records);
@@ -412,8 +416,16 @@ export function buildModeProjection(mode){
   return projection;
 }
 export function rebuildProfileProjections(){
-  if(!S.roots.length)return;
+  /* A MEL-only compile is valid under MEL-first seeding (spec §6: every input
+     maturity level yields a complete register) — only bail when there is
+     neither an electrical tree nor a seed universe. */
+  const hierarchyCfg=activeProfile().hierarchy,melSeedCfg=hierarchyCfg&&hierarchyCfg.melSeed;
+  const melSeedActive=!!(melSeedCfg&&melSeedCfg.enabled!==false&&S.melRows&&S.melRows.length);
+  if(!S.roots.length&&!melSeedActive)return;
   S.resolutionIssues=[];buildCanonicalModel();
+  /* Electrical Flow flip: instruments show what they control as marked
+     reference children in the raw flow tree. */
+  attachControlsRefs();
   for(const mode of activeModes(activeProfile()))buildModeProjection(mode);
   clearResultCache();
 }
