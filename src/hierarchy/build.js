@@ -991,7 +991,9 @@ export function flagDuplicateRegisterParents(rows){
   return conflicts.length;
 }
 export async function buildHierarchy(expectedProfileRevision=S.profileBuildRevision){
-  const keys=[...S.selected];if(!keys.length)return;
+  /* No Easy Power tabs is not "nothing to build" under MEL-first seeding — a
+     MEL alone yields a complete register (spec §6). */
+  const keys=[...S.selected];if(!keys.length&&!S.melSel.size)return;
   const previous={...S};
   const superseded=()=>{
     if(expectedProfileRevision!==S.profileBuildRevision){const error=new Error('Profile changed during hierarchy build');error.code='profile_build_superseded';throw error;}

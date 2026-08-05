@@ -225,8 +225,11 @@ export function addQaSheets(wb,used){
       ['Item masters needing review',imReview],
       ['Registry item-master audit findings',imAudit.length]);
   }
-  const nestingProposals=records.filter(record=>record.nestingProposal);
-  if(nestingProposals.length)scoreAoa.push(['Nesting proposals (need review)',nestingProposals.length]);
+  const nestingClaims=records.filter(record=>record.nestingInference&&record.nestingInference.grade==='claim');
+  const nestingProposals=records.filter(record=>record.nestingInference&&record.nestingInference.grade!=='claim');
+  if(nestingClaims.length||nestingProposals.length)scoreAoa.push(
+    ['Nesting applied (inferred, self-graded)',nestingClaims.length],
+    ['Nesting proposals (need review)',nestingProposals.length]);
   const scoreWs=XLSX.utils.aoa_to_sheet(scoreAoa);
   scoreWs['!cols']=[{wch:44},{wch:14}];styleHeaderRow(scoreWs,0);
   addSheet(wb,scoreWs,'QA Scorecard',used,1);
@@ -237,9 +240,11 @@ export function addQaSheets(wb,used){
   for(const item of cableMissing)exceptionsAoa.push(['Cable load absent from MEL',item.load,`fed from ${item.panel}`]);
   for(const record of records)if(record.itemMasterReview)
     exceptionsAoa.push(['Item master needs review',record.tag,`candidates: ${record.itemMasterReview.join(' / ')}`]);
-  for(const record of records)if(record.nestingProposal)
-    exceptionsAoa.push(['Nesting proposal',record.tag,
-      `${record.nestingProposal.parent} — ${record.nestingProposal.rationale}${record.nestingProposal.runnersUp&&record.nestingProposal.runnersUp.length?` (also: ${record.nestingProposal.runnersUp.join(', ')})`:''}`]);
+  for(const record of records)if(record.nestingInference){
+    const inference=record.nestingInference;
+    exceptionsAoa.push([inference.grade==='claim'?'Nesting applied (inferred)':'Nesting proposal',record.tag,
+      `${inference.parent} — ${inference.rationale}${inference.runnersUp&&inference.runnersUp.length?` (also: ${inference.runnersUp.join(', ')})`:''}`]);
+  }
   for(const item of S.imAudit||[])
     exceptionsAoa.push(['Registry item-master audit',item.equipmentId,`${item.itemMaster||'(blank)'} on ${item.discipline}: ${item.reason}`]);
   if(exceptionsAoa.length>1){
@@ -259,18 +264,17 @@ export function addCompletedMelSheet(wb,used){
   for(const row of S.melRows){
     const record=canonicalRecord(row.tag),asserted=clean(row.systemParent);
     const derived=record&&record.ssmParentTag||'';
-    /* Where neither the MEL nor the wiring supplies a parent, the nesting
-       proposal (description role + number nomenclature) fills the cell — the
-       rationale rides in Provenance so the reviewer sees it is inferred. */
-    const proposal=!asserted&&!derived&&record&&record.nestingProposal||null;
+    /* Where neither the MEL nor the wiring supplies a parent, a propose-grade
+       nesting inference fills the cell — its rationale already rides in the
+       record's provenance, so the reviewer sees it is inferred. Claim-grade
+       inferences arrive through `derived` like any other resolved parent. */
+    const proposal=!asserted&&!derived&&record&&record.nestingInference||null;
     const contradiction=asserted&&derived&&tagKey(asserted)!==tagKey(derived)
       ?`wiring derives ${derived}; MEL asserts ${asserted}`:'';
-    const provenance=[...(record&&record.provenance||[])];
-    if(proposal)provenance.push(`Nesting proposal · ${proposal.rationale}`);
     aoa.push([row.tag,clean(row.description),clean(row.building),clean(row.discipline),clean(row.upn),clean(row.systemDescription),
       asserted,asserted?'':(derived||(proposal?proposal.parent:'')),
       record&&record.dependencies.size?[...record.dependencies].join('; '):'',
-      provenance.join(' | '),contradiction]);
+      record&&record.provenance.length?record.provenance.join(' | '):'',contradiction]);
   }
   const ws=XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols']=[{wch:26},{wch:28},{wch:12},{wch:14},{wch:10},{wch:22},{wch:26},{wch:26},{wch:26},{wch:30},{wch:40}];

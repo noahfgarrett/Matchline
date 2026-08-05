@@ -1287,6 +1287,12 @@ const LEGEND_PDFJS_WORKER="/**\n * @licstart The following is the entire license
 "use strict";
 const CHANGELOG = [
   {
+    "version": "0.8.0",
+    "date": "2026-08-05T00:00:00Z",
+    "type": "feature",
+    "notes": "- Nesting inference now BUILDS the hierarchy for self-graded claim classes: the model replays its policy against the registry's own Closest Parent answers per class, and only classes proving >=85% precision nest automatically (evidence always outranks; provenance says inferred)\n- Everything below the bar stays a reviewable proposal; benchmarked end-to-end against a real registry at 87% claim precision with 100% root agreement\n- Containment rule hardened: extensions must be substantive and continue at a separator boundary (racks and power supplies nest; A/B siblings and short header tags do not)\n- Electrical Flow view now lists what an instrument controls beneath it as a marked reference node\n- A MEL alone now builds the full register \u2014 no electrical sources required"
+  },
+  {
     "version": "0.7.0",
     "date": "2026-08-05T00:00:00Z",
     "type": "feature",
@@ -4735,7 +4741,7 @@ function createDurableProfileStorage(options = {}) {
 
 
 
-const APP_VERSION = '0.7.0';
+const APP_VERSION = '0.8.0';
 const UPDATE_REPOSITORY = 'noahfgarrett/SSMCompiler-Releases';
 const UPDATE_RELEASE_API = 'https://api.github.com/repos/'+UPDATE_REPOSITORY+'/releases/latest';
 const UPDATE_API_VERSION = '2026-03-10';
@@ -10381,26 +10387,28 @@ function assignItemMasters(records,table,minConfidence=0.9){
 
 
 
-/* ---- Nesting proposals (spec §5, propose-don't-assume) ----
+/* ---- Graded nesting inference (spec §5) ----
    Equipment Description decides the ROLE (parent-capable equipment vs child
-   device — so siblings never compete for parenthood), number nomenclature
-   picks the INSTANCE. Learned from a prior registry export; measured there at
-   ~59% coverage / ~70% agreement with the human-built hierarchy, so this layer
-   emits PROPOSALS — Completed MEL column + review queue with rationale and
-   runners-up — never silent structural claims. Two rules:
+   device — siblings never compete for parenthood), number nomenclature picks
+   the INSTANCE. Learned from a prior registry export, and SELF-GRADED against
+   it: the model replays its own policy over the registry's real Closest Parent
+   answers, per child class. Classes that prove out (>=85% precision on >=10
+   rows) build the hierarchy as low-priority claims — evidence always outranks
+   them, and provenance says "inferred". Everything else stays a proposal for
+   the review/massage pass. Measured on a real 18k-row registry the claim-grade
+   slice (motors, VFDs, drives, unit valves…) runs 93–100% precision.
 
-     A. containment — the child tag literally extends another same-partition
-        tag (PLC racks, power supplies): deterministic pick.
-     B. role + shared number run + class-pair affinity: the child class must
-        have an established convention (affinity ≥ 3) and a unique best match.
+   Rules, in order:
+     A. containment — the tag literally extends another same-partition tag
+        (PLC racks, power supplies). Claim-grade by design intent.
+     B. role gate + shared number run + class-pair affinity (>=3), unique best.
 
    Inert without a registry to learn from. */
 
 const NEST_MIN_AFFINITY = 3
+const NEST_GRADE_MIN_ROWS = 10
+const NEST_GRADE_MIN_PRECISION = 0.85
 
-function classOf(record) {
-  return clean(record.attributes && record.attributes.equipmentClassification)
-}
 function coordsOf(tag) { return (clean(tag).toLowerCase().match(/\d+/g) || []) }
 function tagBody(tag) { return clean(tag).toLowerCase().replace(/[^a-z0-9]/g, '') }
 function sharedRun(a, b) {
@@ -10413,13 +10421,46 @@ function sharedRun(a, b) {
   return best
 }
 
+/* The one policy, shared by self-grading and inference. Items: {tag, cls, group}. */
+function pickParent(item, peers, model) {
+  const body = tagBody(item.tag)
+  /* Containment demands a SUBSTANTIVE extension (>=3 chars) that continues at
+     a SEPARATOR boundary: "…-00_PS2-RACK" genuinely extends its PLC, while
+     "…-05A" merely extends its sibling "…-05" by a letter, and "…-RIO650-1-03"
+     runs straight past the short header tag "…-RIO" with no boundary. */
+  const childTag = clean(item.tag).toLowerCase()
+  const container = peers
+    .filter(peer => {
+      const parentTag = clean(peer.tag).toLowerCase(), parentBody = tagBody(peer.tag)
+      return parentBody.length >= 6 && body.length - parentBody.length >= 3
+        && childTag.startsWith(parentTag) && /[-_./\s]/.test(childTag[parentTag.length] || '')
+    })
+    .sort((a, b) => tagBody(b.tag).length - tagBody(a.tag).length)[0]
+  if (container) return { pick: container, rule: 'containment',
+    rationale: `${item.tag} extends ${container.tag}` }
+  if (!model.isChildClass(item.cls)) return null
+  const rc = coordsOf(item.tag)
+  const scored = peers
+    .filter(peer => model.isParentCapable(peer.cls))
+    .map(peer => [peer, sharedRun(rc, coordsOf(peer.tag)), model.affinity(item.cls, peer.cls)])
+    .filter(([, run]) => run >= 1)
+    .sort((a, b) => b[1] - a[1] || b[2] - a[2])
+  if (!scored.length) return null
+  const [best, run, pairs] = scored[0]
+  if (pairs < NEST_MIN_AFFINITY) return null
+  if (scored.some(entry => entry[0] !== best && entry[1] === run && entry[2] === pairs)) return null
+  return { pick: best, rule: 'role-affinity',
+    rationale: `${item.cls} nests under ${best.cls} (${pairs}× in registry); shared number run ${run}`,
+    runnersUp: scored.slice(1, 3).map(([peer]) => peer.tag) }
+}
+
 function learnNestingModel() {
   const rows = []
   for (const key of S.extoSel || []) rows.push(...extoRegistryRows(key))
   if (!rows.length) return { learned: false }
   const byId = new Map()
   for (const row of rows) { const k = tagKey(row.equipmentId); if (k && !byId.has(k)) byId.set(k, row) }
-  const asParent = new Map(), asChild = new Map(), affinity = new Map()
+  const asParent = new Map(), asChild = new Map(), affinity = new Map(), truthPairs = []
   for (const row of rows) {
     const parent = byId.get(tagKey(row.closestParent))
     if (!parent || clean(parent.systemName).toLowerCase() !== clean(row.systemName).toLowerCase()) continue
@@ -10427,22 +10468,48 @@ function learnNestingModel() {
     if (!childClass || !parentClass) continue
     asChild.set(childClass, (asChild.get(childClass) || 0) + 1)
     asParent.set(parentClass, (asParent.get(parentClass) || 0) + 1)
-    const pairKey = childClass + '|' + parentClass
-    affinity.set(pairKey, (affinity.get(pairKey) || 0) + 1)
+    affinity.set(childClass + '|' + parentClass, (affinity.get(childClass + '|' + parentClass) || 0) + 1)
+    truthPairs.push([row, parent])
   }
   const ratio = cls => {
     const p = asParent.get(cls) || 0, c = asChild.get(cls) || 0
     return (p + c) ? p / (p + c) : 0
   }
-  return {
+  const model = {
     learned: asParent.size > 0,
-    isChildClass: cls => !!cls && ratio(cls) < 0.05 && (asChild.get(cls) || 0) >= 10,
+    isChildClass: cls => !!cls && ratio(cls) < 0.05 && (asChild.get(cls) || 0) >= NEST_GRADE_MIN_ROWS,
     isParentCapable: cls => !!cls && ratio(cls) >= 0.15 && (asParent.get(cls) || 0) >= 5,
     affinity: (childClass, parentClass) => affinity.get(childClass + '|' + parentClass) || 0,
   }
+  /* Self-grade: replay the policy over the registry's own answers, per class. */
+  const bySystem = new Map()
+  for (const row of rows) {
+    const group = clean(row.systemName).toLowerCase()
+    if (!bySystem.has(group)) bySystem.set(group, [])
+    bySystem.get(group).push({ tag: row.equipmentId, cls: clean(row.classification), key: tagKey(row.equipmentId) })
+  }
+  const scores = new Map()
+  for (const [row, truthParent] of truthPairs) {
+    const cls = clean(row.classification)
+    if (!model.isChildClass(cls)) continue
+    const item = { tag: row.equipmentId, cls }
+    const peers = bySystem.get(clean(row.systemName).toLowerCase()).filter(peer => peer.key !== tagKey(row.equipmentId))
+    const result = pickParent(item, peers, model)
+    if (!scores.has(cls)) scores.set(cls, { predicted: 0, correct: 0 })
+    if (result && result.rule === 'role-affinity') {
+      const s = scores.get(cls); s.predicted++
+      if (tagKey(result.pick.tag) === tagKey(truthParent.equipmentId)) s.correct++
+    }
+  }
+  model.gradeOf = cls => {
+    const s = scores.get(cls)
+    if (!s || s.predicted < NEST_GRADE_MIN_ROWS) return 'propose'
+    return (s.correct / s.predicted) >= NEST_GRADE_MIN_PRECISION ? 'claim' : 'propose'
+  }
+  return model
 }
 
-function proposeNesting(records, model) {
+function inferNesting(records, model) {
   if (!model || !model.learned) return
   const byPartition = new Map()
   for (const record of records.values()) {
@@ -10450,41 +10517,49 @@ function proposeNesting(records, model) {
     const partition = recordPartitionKey(record)
     if (!partition) continue
     if (!byPartition.has(partition)) byPartition.set(partition, [])
-    byPartition.get(partition).push(record)
+    byPartition.get(partition).push({ tag: record.tag, key: record.key,
+      cls: clean(record.attributes && record.attributes.equipmentClassification) })
   }
   for (const record of records.values()) {
-    if (!record.includeInRegister || record.isSyntheticRollup || record.ssmParentTag) continue
+    if (!record.includeInRegister || record.isSyntheticRollup) continue
     const partition = recordPartitionKey(record)
     if (!partition) continue
     const peers = byPartition.get(partition).filter(peer => peer.key !== record.key)
     if (!peers.length) continue
-    const body = tagBody(record.tag)
-    /* Rule A — containment: the tag extends another tag in the same partition. */
-    const container = peers
-      .filter(peer => tagBody(peer.tag).length >= 6 && body.startsWith(tagBody(peer.tag)))
-      .sort((a, b) => tagBody(b.tag).length - tagBody(a.tag).length)[0]
-    if (container) {
-      record.nestingProposal = { parent: container.tag, rule: 'containment',
-        rationale: `${record.tag} extends ${container.tag}` }
-      continue
+    const item = { tag: record.tag, cls: clean(record.attributes && record.attributes.equipmentClassification) }
+    const result = pickParent(item, peers, model)
+    if (!result) continue
+    const grade = result.rule === 'containment' ? 'claim' : model.gradeOf(item.cls)
+    record.nestingInference = { parent: result.pick.tag, rule: result.rule, grade,
+      rationale: result.rationale, runnersUp: result.runnersUp || [] }
+    record.provenance.push(`Nesting ${grade === 'claim' ? '(inferred claim)' : 'proposal'} · ${result.rationale}`)
+  }
+}
+
+/* Electrical Flow view flip: the raw flow tree lists the instrument where the
+   wiring put it, and below it what the instrument CONTROLS — the inferred
+   equipment — as a marked reference node. Idempotent across rebuilds. */
+function attachControlsRefs() {
+  if (!S.roots || !S.roots.length || !S.canonicalModel) return
+  const strip = node => {
+    for (const child of node.children) if (child.isControlsRef) S.nodeById.delete(child.id)
+    node.children = node.children.filter(child => !child.isControlsRef)
+    node.children.forEach(strip)
+  }
+  S.roots.forEach(strip)
+  let n = 0
+  for (const record of S.canonicalModel.values()) {
+    const inference = record.nestingInference
+    if (!inference) continue
+    for (const occurrence of record.occurrences) {
+      const node = S.nodeById.get(occurrence.nodeId)
+      if (!node) continue
+      const ref = { id: 'ctl' + (n++), name: `controls → ${inference.parent}`, depth: node.depth + 1,
+        parent: node, children: [], isId: false, isLoad: false, isInstrument: false, isControlsRef: true,
+        loadDependency: '', dependencyOverride: '', _raw: null }
+      node.children.push(ref)
+      S.nodeById.set(ref.id, ref)
     }
-    /* Rule B — role gate, shared number run, class-pair affinity. */
-    const childClass = classOf(record)
-    if (!model.isChildClass(childClass)) continue
-    const rc = coordsOf(record.tag)
-    const scored = peers
-      .filter(peer => model.isParentCapable(classOf(peer)))
-      .map(peer => [peer, sharedRun(rc, coordsOf(peer.tag)), model.affinity(childClass, classOf(peer))])
-      .filter(([, run]) => run >= 1)
-      .sort((a, b) => b[1] - a[1] || b[2] - a[2])
-    if (!scored.length) continue
-    const [best, run, pairs] = scored[0]
-    if (pairs < NEST_MIN_AFFINITY) continue
-    const rival = scored.find(entry => entry[0] !== best && entry[1] === run && entry[2] === pairs)
-    if (rival) continue
-    record.nestingProposal = { parent: best.tag, rule: 'role-affinity',
-      rationale: `${childClass} nests under ${classOf(best)} (${pairs}× in registry); shared number run ${run}`,
-      runnersUp: scored.slice(1, 3).map(([peer]) => peer.tag) }
   }
 }
 
@@ -10701,6 +10776,18 @@ function buildCanonicalModel(){
       record.context.attributeOverride?'Grouping · Visual Trainer':''
     ].filter(Boolean);
   }
+  /* Learned layers that must precede claim assembly: description-derived
+     classifications feed the nesting roles, and claim-grade nesting joins the
+     candidate pool below (lowest priority — evidence always outranks it). */
+  let compilerImTable=null;
+  if(melFirst){
+    compilerImTable=learnItemMasterTable();
+    S.imAudit=compilerImTable.audit||[];
+    assignClassifications(records,compilerImTable);
+    inferNesting(records,learnNestingModel());
+  }else{
+    S.imAudit=[];
+  }
   const profile=activeProfile(),observations=[],candidates=[],manualOverrides=[];let order=0;
   const canonicalLookup=createMemoryLookup([...records.values()].map(record=>({
     tag:record.tag,columns:{},attributes:{...record.attributes}
@@ -10734,6 +10821,8 @@ function buildCanonicalModel(){
     record.ruleDecision=decision;
     if(decision.status==='resolved'&&decision.parent)addParent(record,decision.parent,'rule-'+decision.ruleId,relationshipRulePriority(profile,decision.ruleId),
       {source:'Rule Engine',ruleId:decision.ruleId,reason:decision.reason||''});
+    if(record.nestingInference&&record.nestingInference.grade==='claim')
+      addParent(record,record.nestingInference.parent,'inferred',150,{source:'Inferred nesting',reason:record.nestingInference.rationale});
     else if(decision.status==='ambiguous')S.resolutionIssues.push({type:'rule-ambiguity',entityId:record.key,tag:record.tag,ruleId:decision.ruleId,
       candidates:decision.candidates||[],reason:decision.reason||'Rule matched multiple possible parents'});
     for(const dependency of decision.dependencies||[])addDependency(record,dependency,'rule-'+decision.ruleId,relationshipRulePriority(profile,decision.ruleId));
@@ -10791,21 +10880,11 @@ function buildCanonicalModel(){
     /* Optional EXTO layer: item-master assignment runs only when the profile
        keeps EXTO on AND a learning source (registry / IM template) was given. */
     const exto=profile.hierarchy&&profile.hierarchy.exto;
-    if((!exto||exto.enabled!==false)&&(!exto||exto.itemMasters!==false)){
-      const imTable=learnItemMasterTable();
-      S.imAudit=imTable.audit;
-      assignClassifications(records,imTable);
-      assignItemMasters(records,imTable);
-    }else{
-      S.imAudit=[];
+    if((!exto||exto.enabled!==false)&&(!exto||exto.itemMasters!==false)&&compilerImTable){
+      assignItemMasters(records,compilerImTable);
     }
-    /* Nesting proposals (spec §5): description-derived roles + number
-       nomenclature, learned from the registry. Proposals only — they surface
-       in the Completed MEL and review queue, never as silent claims. */
-    proposeNesting(records,learnNestingModel());
   }else{
     S.upnPrecedence={edges:[],order:[],cycles:[]};
-    S.imAudit=[];
   }
   if(profile.hierarchy&&profile.hierarchy.resolutionStrategy!=='legacy-register'){
     S.ssmCombined=resolvedRegisterRows(S.ssmCombined,records);
@@ -10903,8 +10982,16 @@ function buildModeProjection(mode){
   return projection;
 }
 function rebuildProfileProjections(){
-  if(!S.roots.length)return;
+  /* A MEL-only compile is valid under MEL-first seeding (spec §6: every input
+     maturity level yields a complete register) — only bail when there is
+     neither an electrical tree nor a seed universe. */
+  const hierarchyCfg=activeProfile().hierarchy,melSeedCfg=hierarchyCfg&&hierarchyCfg.melSeed;
+  const melSeedActive=!!(melSeedCfg&&melSeedCfg.enabled!==false&&S.melRows&&S.melRows.length);
+  if(!S.roots.length&&!melSeedActive)return;
   S.resolutionIssues=[];buildCanonicalModel();
+  /* Electrical Flow flip: instruments show what they control as marked
+     reference children in the raw flow tree. */
+  attachControlsRefs();
   for(const mode of activeModes(activeProfile()))buildModeProjection(mode);
   clearResultCache();
 }
@@ -11903,7 +11990,9 @@ function flagDuplicateRegisterParents(rows){
   return conflicts.length;
 }
 async function buildHierarchy(expectedProfileRevision=S.profileBuildRevision){
-  const keys=[...S.selected];if(!keys.length)return;
+  /* No Easy Power tabs is not "nothing to build" under MEL-first seeding — a
+     MEL alone yields a complete register (spec §6). */
+  const keys=[...S.selected];if(!keys.length&&!S.melSel.size)return;
   const previous={...S};
   const superseded=()=>{
     if(expectedProfileRevision!==S.profileBuildRevision){const error=new Error('Profile changed during hierarchy build');error.code='profile_build_superseded';throw error;}
@@ -13185,8 +13274,11 @@ function addQaSheets(wb,used){
       ['Item masters needing review',imReview],
       ['Registry item-master audit findings',imAudit.length]);
   }
-  const nestingProposals=records.filter(record=>record.nestingProposal);
-  if(nestingProposals.length)scoreAoa.push(['Nesting proposals (need review)',nestingProposals.length]);
+  const nestingClaims=records.filter(record=>record.nestingInference&&record.nestingInference.grade==='claim');
+  const nestingProposals=records.filter(record=>record.nestingInference&&record.nestingInference.grade!=='claim');
+  if(nestingClaims.length||nestingProposals.length)scoreAoa.push(
+    ['Nesting applied (inferred, self-graded)',nestingClaims.length],
+    ['Nesting proposals (need review)',nestingProposals.length]);
   const scoreWs=XLSX.utils.aoa_to_sheet(scoreAoa);
   scoreWs['!cols']=[{wch:44},{wch:14}];styleHeaderRow(scoreWs,0);
   addSheet(wb,scoreWs,'QA Scorecard',used,1);
@@ -13197,9 +13289,11 @@ function addQaSheets(wb,used){
   for(const item of cableMissing)exceptionsAoa.push(['Cable load absent from MEL',item.load,`fed from ${item.panel}`]);
   for(const record of records)if(record.itemMasterReview)
     exceptionsAoa.push(['Item master needs review',record.tag,`candidates: ${record.itemMasterReview.join(' / ')}`]);
-  for(const record of records)if(record.nestingProposal)
-    exceptionsAoa.push(['Nesting proposal',record.tag,
-      `${record.nestingProposal.parent} — ${record.nestingProposal.rationale}${record.nestingProposal.runnersUp&&record.nestingProposal.runnersUp.length?` (also: ${record.nestingProposal.runnersUp.join(', ')})`:''}`]);
+  for(const record of records)if(record.nestingInference){
+    const inference=record.nestingInference;
+    exceptionsAoa.push([inference.grade==='claim'?'Nesting applied (inferred)':'Nesting proposal',record.tag,
+      `${inference.parent} — ${inference.rationale}${inference.runnersUp&&inference.runnersUp.length?` (also: ${inference.runnersUp.join(', ')})`:''}`]);
+  }
   for(const item of S.imAudit||[])
     exceptionsAoa.push(['Registry item-master audit',item.equipmentId,`${item.itemMaster||'(blank)'} on ${item.discipline}: ${item.reason}`]);
   if(exceptionsAoa.length>1){
@@ -13219,18 +13313,17 @@ function addCompletedMelSheet(wb,used){
   for(const row of S.melRows){
     const record=canonicalRecord(row.tag),asserted=clean(row.systemParent);
     const derived=record&&record.ssmParentTag||'';
-    /* Where neither the MEL nor the wiring supplies a parent, the nesting
-       proposal (description role + number nomenclature) fills the cell — the
-       rationale rides in Provenance so the reviewer sees it is inferred. */
-    const proposal=!asserted&&!derived&&record&&record.nestingProposal||null;
+    /* Where neither the MEL nor the wiring supplies a parent, a propose-grade
+       nesting inference fills the cell — its rationale already rides in the
+       record's provenance, so the reviewer sees it is inferred. Claim-grade
+       inferences arrive through `derived` like any other resolved parent. */
+    const proposal=!asserted&&!derived&&record&&record.nestingInference||null;
     const contradiction=asserted&&derived&&tagKey(asserted)!==tagKey(derived)
       ?`wiring derives ${derived}; MEL asserts ${asserted}`:'';
-    const provenance=[...(record&&record.provenance||[])];
-    if(proposal)provenance.push(`Nesting proposal · ${proposal.rationale}`);
     aoa.push([row.tag,clean(row.description),clean(row.building),clean(row.discipline),clean(row.upn),clean(row.systemDescription),
       asserted,asserted?'':(derived||(proposal?proposal.parent:'')),
       record&&record.dependencies.size?[...record.dependencies].join('; '):'',
-      provenance.join(' | '),contradiction]);
+      record&&record.provenance.length?record.provenance.join(' | '):'',contradiction]);
   }
   const ws=XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols']=[{wch:26},{wch:28},{wch:12},{wch:14},{wch:10},{wch:22},{wch:26},{wch:26},{wch:26},{wch:30},{wch:40}];

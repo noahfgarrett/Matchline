@@ -65,6 +65,17 @@ test('evidence tags unify with MEL tags by suffix — one record, MEL spelling w
   assert.equal(counts.registerRows, 1, 'exactly one register row for the asset')
 })
 
+test('a MEL-only compile still builds the register (no electrical sources at all)', async () => {
+  const app = await buildProjectApp(['compiler-mel.xlsx'])
+  const ahu = canonicalRecordOf(app, 'B14-AHU-7001')
+  assert.ok(ahu, 'MEL-only build produces canonical records')
+  assert.equal(ahu.includeInRegister, true)
+  const fcu = canonicalRecordOf(app, 'B14-FCU-7101')
+  assert.equal(fcu.ssmParentTag, 'B14-AHU-7001', 'MEL System Parent assertions still nest')
+  const registerRows = JSON.parse(app.eval(`JSON.stringify(S.ssmCombined.length)`))
+  assert.ok(registerRows >= 10, `register populated from the MEL alone, got ${registerRows}`)
+})
+
 test('a MEL without the new columns still detects, with the new fields absent', () => {
   const info = detectMel(['Equipment Tag', 'UPN', 'Bldg'])
   assert.ok(info)
