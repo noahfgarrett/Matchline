@@ -47,6 +47,7 @@ export const APP_MODULES = [
   'src/compiler/sequence.js',
   'src/compiler/rollups.js',
   'src/compiler/itemmasters.js',
+  'src/compiler/nesting.js',
   'src/hierarchy/projection.js',
   'src/hierarchy/build.js',
   'src/profile/visual-trainer.js',

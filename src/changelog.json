@@ -1,5 +1,11 @@
 [
   {
+    "version": "0.7.0",
+    "date": "2026-08-05T00:00:00Z",
+    "type": "feature",
+    "notes": "- Added nesting proposals learned from a registry export: Equipment Description decides the role (parent-capable equipment vs child device), number nomenclature picks the instance\n- Two rules: deterministic tag-containment (racks, power supplies extend their parent's tag) and role + shared-number + class-pair affinity\n- Proposals fill blank Proposed System Parent cells in the Completed MEL with the rationale in Provenance, and land in the QA review queue with runners-up \u2014 never silent structural claims\n- Inert without a registry to learn from; proposals respect discipline boundaries (candidates come from the same building/discipline/system block)"
+  },
+  {
     "version": "0.6.0",
     "date": "2026-08-04T00:00:00Z",
     "type": "feature",

@@ -13,6 +13,7 @@ import { recordCompilerCableEdges, recordCompilerMelClaims } from '../compiler/e
 import { assignMilestones } from '../compiler/ladders.js'
 import { synthesizeLineRollups, finalizeLineRollups } from '../compiler/rollups.js'
 import { learnItemMasterTable, assignItemMasters, assignClassifications } from '../compiler/itemmasters.js'
+import { learnNestingModel, proposeNesting } from '../compiler/nesting.js'
 import { computeSequence, upnPrecedence } from '../compiler/sequence.js'
 
 /* ---- canonical equipment model and projections ---- */
@@ -307,6 +308,10 @@ export function buildCanonicalModel(){
     }else{
       S.imAudit=[];
     }
+    /* Nesting proposals (spec §5): description-derived roles + number
+       nomenclature, learned from the registry. Proposals only — they surface
+       in the Completed MEL and review queue, never as silent claims. */
+    proposeNesting(records,learnNestingModel());
   }else{
     S.upnPrecedence={edges:[],order:[],cycles:[]};
     S.imAudit=[];
