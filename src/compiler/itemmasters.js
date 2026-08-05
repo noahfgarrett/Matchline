@@ -1,4 +1,5 @@
 import { clean } from '../core/text.js'
+import { activeProfile } from '../profile/schema.js'
 import { S } from '../state.js'
 import { extoRegistryRows, itemMasterNames } from '../io/exto.js'
 
@@ -61,7 +62,15 @@ export function learnItemMasterTable(){
     if(row.classification)tally(byClass,[normPart(row.discipline),normPart(row.classification),normPart(row.upn)].join(IM_KEYSEP),name);
     if(row.description)tally(byDesc,[normPart(row.discipline),normPart(row.upn),normPart(firstWord(row.description))].join(IM_KEYSEP),name);
   }
-  return {byClass,byDesc,descClass,vocabulary,audit,learned:byClass.size+byDesc.size+descClass.size>0};
+  if(byClass.size+byDesc.size+descClass.size>0)
+    return {byClass,byDesc,descClass,vocabulary,audit,learned:true,fresh:true};
+  /* No registry uploaded: hydrate the classification table from the profile's
+     persisted learning. Item-master assignment stays inert (its tables need
+     the registry), but classification — which feeds nesting — keeps working. */
+  const persisted=activeProfile().learnedModels;
+  if(persisted&&persisted.descClass&&Object.keys(persisted.descClass).length)
+    return {byClass,byDesc,descClass:hydrateDescClass(persisted.descClass),vocabulary,audit,learned:true,fresh:false};
+  return {byClass,byDesc,descClass,vocabulary,audit,learned:false,fresh:false};
 }
 
 /* Equipment Classification from the description (validated ~94% on real data;
@@ -86,11 +95,33 @@ export function assignClassifications(records,table,minConfidence=0.9){
 
 function lookup(map,key,minConfidence){
   const counts=map.get(key);if(!counts)return null;
+  if(counts.__resolved){
+    /* hydrated from a profile-persisted model: majority + confidence only */
+    return counts.__resolved.confidence>=minConfidence?{...counts.__resolved}:{review:[counts.__resolved.name]};
+  }
   let total=0,top='',topCount=0;
   for(const [name,count] of counts){total+=count;if(count>topCount){top=name;topCount=count;}}
   const confidence=total?topCount/total:0;
   if(confidence<minConfidence)return {review:[...counts.keys()].slice(0,3)};
   return {name:top,confidence};
+}
+/* Plain, profile-persistable form of the description→classification table, and
+   its hydration back into lookup()-compatible shape. The learned rules travel
+   with the site profile so later sessions classify without re-uploading the
+   registry (spec §6: recompilation at any input maturity). */
+export function serializeDescClass(descClass){
+  const out={};
+  for(const [key,counts] of descClass){
+    let total=0,top='',topCount=0;
+    for(const [name,count] of counts){total+=count;if(count>topCount){top=name;topCount=count;}}
+    if(total)out[key]={name:top,confidence:Math.round((topCount/total)*100)/100};
+  }
+  return out;
+}
+export function hydrateDescClass(plain){
+  const map=new Map();
+  for(const [key,entry] of Object.entries(plain||{}))map.set(key,{__resolved:{name:entry.name,confidence:entry.confidence}});
+  return map;
 }
 
 export function assignItemMasters(records,table,minConfidence=0.9){

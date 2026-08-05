@@ -1,5 +1,11 @@
 [
   {
+    "version": "1.2.0",
+    "date": "2026-08-05T00:00:00Z",
+    "type": "feature",
+    "notes": "- A MEL alone now builds end to end from the UI: the build button enables with only a MEL selected, headers are found whether they start in row 1, 2, or 3, and the result opens straight into the SSM Hierarchy view (Electrical Flow only exists when Easy Power does)\n- Learned rules now persist into the site profile: upload the registry once and classification, roles, affinities, and self-grades keep applying in every later session without re-uploading it\n- The drag-to-teach dialog is now a reviewable checklist: select or deselect any matched sibling, and search to add tags the matcher missed (each shown with the parent it would get)\n- Fixed the build completing but never opening results when no electrical sources were selected"
+  },
+  {
     "version": "1.1.0",
     "date": "2026-08-05T00:00:00Z",
     "type": "feature",

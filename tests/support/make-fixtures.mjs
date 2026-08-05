@@ -96,6 +96,16 @@ const SHEETS = {
       ['VF', 'MECH', 'VF_MECH_PUMP', 'Pumps'],
     ],
   },
+  'compiler-mel-row3.xlsx': {
+    Equipment_List: [
+      ['Master Equipment List', '', '', '', '', '', '', ''],
+      ['Rev 4 — issued 2026', '', '', '', '', '', '', ''],
+      ['Equipment Tag', 'Equipment Description', 'Bldg', 'Discipline', 'UPN', 'System Description', 'System Parent Equipment Tag(s)', 'Project Phase'],
+      ['B31-CH-101-01', 'Centrifugal chiller', 'B31', 'Mechanical', '101', 'Chilled Water', '', 'New'],
+      ['B31-PMP-101-01', 'CHW primary pump', 'B31', 'Mechanical', '101', 'Chilled Water', 'B31-CH-101-01', 'New'],
+      ['B31-TK-101-01', 'CHW buffer tank', 'B31', 'Mechanical', '101', 'Chilled Water', '', 'New'],
+    ],
+  },
   'compiler-wc.xlsx': {
     SSM: [
       ['Equipment ID', 'Closest Parent', 'Dependencies'],

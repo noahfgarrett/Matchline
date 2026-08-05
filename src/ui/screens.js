@@ -408,5 +408,5 @@ export function toggleEditPanel(key,row){
 export function updateSelInfo(){
   const n=S.selected.size,c=S.cableSel.size,p=S.pmdSel.size,m=S.melSel.size,info=$('#selinfo');
   if(info)info.textContent=(n?`${n} hierarchy tab${n!==1?'s':''}`:'No hierarchy tabs')+(c?` · ${c} cable schedule`:'')+(p?` · ${p} PMD tab${p!==1?'s':''}`:'')+(m?` · ${m} MEL tab${m!==1?'s':''}`:'');
-  const b=$('#build');if(b)b.disabled=n===0;
+  const b=$('#build');if(b)b.disabled=n===0&&m===0;
 }

@@ -1296,6 +1296,12 @@ const LEGEND_PDFJS_WORKER="/**\n * @licstart The following is the entire license
 "use strict";
 const CHANGELOG = [
   {
+    "version": "1.2.0",
+    "date": "2026-08-05T00:00:00Z",
+    "type": "feature",
+    "notes": "- A MEL alone now builds end to end from the UI: the build button enables with only a MEL selected, headers are found whether they start in row 1, 2, or 3, and the result opens straight into the SSM Hierarchy view (Electrical Flow only exists when Easy Power does)\n- Learned rules now persist into the site profile: upload the registry once and classification, roles, affinities, and self-grades keep applying in every later session without re-uploading it\n- The drag-to-teach dialog is now a reviewable checklist: select or deselect any matched sibling, and search to add tags the matcher missed (each shown with the parent it would get)\n- Fixed the build completing but never opening results when no electrical sources were selected"
+  },
+  {
     "version": "1.1.0",
     "date": "2026-08-05T00:00:00Z",
     "type": "feature",
@@ -4768,7 +4774,7 @@ function createDurableProfileStorage(options = {}) {
 
 
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const UPDATE_REPOSITORY = 'noahfgarrett/SSMCompiler-Releases';
 const UPDATE_RELEASE_API = 'https://api.github.com/repos/'+UPDATE_REPOSITORY+'/releases/latest';
 const UPDATE_API_VERSION = '2026-03-10';
@@ -10301,6 +10307,7 @@ function finalizeLineRollups(records){
 
 
 
+
 /* ---- Item-master auto-assignment (optional EXTO layer) ----
    Learned from a prior registry export as a majority-vote table with two key
    rungs, confidence-gated: validated on a real 18k-row registry this
@@ -10360,7 +10367,15 @@ function learnItemMasterTable(){
     if(row.classification)tally(byClass,[normPart(row.discipline),normPart(row.classification),normPart(row.upn)].join(IM_KEYSEP),name);
     if(row.description)tally(byDesc,[normPart(row.discipline),normPart(row.upn),normPart(firstWord(row.description))].join(IM_KEYSEP),name);
   }
-  return {byClass,byDesc,descClass,vocabulary,audit,learned:byClass.size+byDesc.size+descClass.size>0};
+  if(byClass.size+byDesc.size+descClass.size>0)
+    return {byClass,byDesc,descClass,vocabulary,audit,learned:true,fresh:true};
+  /* No registry uploaded: hydrate the classification table from the profile's
+     persisted learning. Item-master assignment stays inert (its tables need
+     the registry), but classification — which feeds nesting — keeps working. */
+  const persisted=activeProfile().learnedModels;
+  if(persisted&&persisted.descClass&&Object.keys(persisted.descClass).length)
+    return {byClass,byDesc,descClass:hydrateDescClass(persisted.descClass),vocabulary,audit,learned:true,fresh:false};
+  return {byClass,byDesc,descClass,vocabulary,audit,learned:false,fresh:false};
 }
 
 /* Equipment Classification from the description (validated ~94% on real data;
@@ -10385,11 +10400,33 @@ function assignClassifications(records,table,minConfidence=0.9){
 
 function lookup(map,key,minConfidence){
   const counts=map.get(key);if(!counts)return null;
+  if(counts.__resolved){
+    /* hydrated from a profile-persisted model: majority + confidence only */
+    return counts.__resolved.confidence>=minConfidence?{...counts.__resolved}:{review:[counts.__resolved.name]};
+  }
   let total=0,top='',topCount=0;
   for(const [name,count] of counts){total+=count;if(count>topCount){top=name;topCount=count;}}
   const confidence=total?topCount/total:0;
   if(confidence<minConfidence)return {review:[...counts.keys()].slice(0,3)};
   return {name:top,confidence};
+}
+/* Plain, profile-persistable form of the description→classification table, and
+   its hydration back into lookup()-compatible shape. The learned rules travel
+   with the site profile so later sessions classify without re-uploading the
+   registry (spec §6: recompilation at any input maturity). */
+function serializeDescClass(descClass){
+  const out={};
+  for(const [key,counts] of descClass){
+    let total=0,top='',topCount=0;
+    for(const [name,count] of counts){total+=count;if(count>topCount){top=name;topCount=count;}}
+    if(total)out[key]={name:top,confidence:Math.round((topCount/total)*100)/100};
+  }
+  return out;
+}
+function hydrateDescClass(plain){
+  const map=new Map();
+  for(const [key,entry] of Object.entries(plain||{}))map.set(key,{__resolved:{name:entry.name,confidence:entry.confidence}});
+  return map;
 }
 
 function assignItemMasters(records,table,minConfidence=0.9){
@@ -10410,6 +10447,7 @@ function assignItemMasters(records,table,minConfidence=0.9){
 }
 
 /* ==== src/compiler/nesting.js ==== */
+
 
 
 
@@ -10482,10 +10520,28 @@ function pickParent(item, peers, model) {
     runnersUp: scored.slice(1, 3).map(([peer]) => peer.tag) }
 }
 
+/* Rebuild a working model from the plain form persisted in the profile, so the
+   registry's rules keep applying in sessions where it is not uploaded. */
+function hydrateNestingModel(plain) {
+  const roles = plain.roles || {}, affinity = plain.affinity || {}, grades = plain.grades || {}
+  const ratio = cls => { const [p, c] = roles[cls] || [0, 0]; return (p + c) ? p / (p + c) : 0 }
+  return {
+    learned: true,
+    isChildClass: cls => !!cls && ratio(cls) < 0.05 && ((roles[cls] || [0, 0])[1]) >= NEST_GRADE_MIN_ROWS,
+    isParentCapable: cls => !!cls && ratio(cls) >= 0.15 && ((roles[cls] || [0, 0])[0]) >= 5,
+    affinity: (childClass, parentClass) => affinity[childClass + '|' + parentClass] || 0,
+    gradeOf: cls => grades[cls] || 'propose',
+  }
+}
+
 function learnNestingModel() {
   const rows = []
   for (const key of S.extoSel || []) rows.push(...extoRegistryRows(key))
-  if (!rows.length) return { learned: false }
+  if (!rows.length) {
+    const persisted = activeProfile().learnedModels
+    if (persisted && persisted.nesting) return hydrateNestingModel(persisted.nesting)
+    return { learned: false }
+  }
   const byId = new Map()
   for (const row of rows) { const k = tagKey(row.equipmentId); if (k && !byId.has(k)) byId.set(k, row) }
   const asParent = new Map(), asChild = new Map(), affinity = new Map(), truthPairs = []
@@ -10534,6 +10590,14 @@ function learnNestingModel() {
     if (!s || s.predicted < NEST_GRADE_MIN_ROWS) return 'propose'
     return (s.correct / s.predicted) >= NEST_GRADE_MIN_PRECISION ? 'claim' : 'propose'
   }
+  /* Plain form for profile persistence: role counts, affinities, and the
+     precomputed self-grades. */
+  const plainRoles = {}
+  for (const cls of new Set([...asParent.keys(), ...asChild.keys()]))
+    plainRoles[cls] = [asParent.get(cls) || 0, asChild.get(cls) || 0]
+  const plainGrades = {}
+  for (const cls of scores.keys()) plainGrades[cls] = model.gradeOf(cls)
+  model.plain = { roles: plainRoles, affinity: Object.fromEntries(affinity), grades: plainGrades }
   return model
 }
 
@@ -10816,7 +10880,19 @@ function buildCanonicalModel(){
     compilerImTable=learnItemMasterTable();
     S.imAudit=compilerImTable.audit||[];
     assignClassifications(records,compilerImTable);
-    inferNesting(records,learnNestingModel());
+    const nestingModel=learnNestingModel();
+    inferNesting(records,nestingModel);
+    /* Persist freshly learned rules into the profile so later sessions apply
+       them without re-uploading the registry. learnedModels is excluded from
+       the execution signature, so this never triggers a rebuild flag; the
+       write only happens when the learning actually changed. */
+    if(compilerImTable.fresh&&nestingModel.plain){
+      const learnedModels={version:1,descClass:serializeDescClass(compilerImTable.descClass),nesting:nestingModel.plain};
+      const currentProfile=activeProfile();
+      if(!currentProfile.locked&&JSON.stringify(currentProfile.learnedModels||null)!==JSON.stringify(learnedModels)){
+        currentProfile.learnedModels=learnedModels;persistProfiles();
+      }
+    }
   }else{
     S.imAudit=[];
   }
@@ -12233,7 +12309,7 @@ async function buildHierarchy(expectedProfileRevision=S.profileBuildRevision){
     toast('Build stopped safely. Your previous hierarchy is still available.');
     return false;
   }
-  if(!S.roots.length){toast('No hierarchy rows found in the selected tabs');return;}
+  if(!S.roots.length&&!S.ssmCombined.length){toast('No hierarchy rows found in the selected tabs');return;}
   S.search='';S.idOnly=false;S.showSpares=true;S.showSpaces=true;S.showDeps=!!(S.stats&&S.stats.deps);S.showPmdMatches=true;
   S.cmpFilter='all';S.cmpSearch='';S.cmpDiff='all';S.cmpSort=null;S.tab='tree';go('result');return true;
 }
@@ -12418,6 +12494,28 @@ function similarNestingMoves(equipmentTag,parentTag){
     moves.push({tag:candidate.tag,parent:best.tag});
   }
   return moves;
+}
+/* Match one tag against a reference parent: prefer the number-matched instance
+   of the reference's kind in the tag's own block; fall back to the reference
+   itself when that placement is valid. Powers the drag-to-teach search box. */
+function nestingMatchFor(tag,referenceParentTag){
+  const candidate=canonicalRecord(tag),reference=canonicalRecord(referenceParentTag);
+  if(!candidate||!reference||candidate.key===reference.key)return null;
+  const parentKind=massageMatchKey(reference);
+  const partition=recordPartitionKey(candidate);
+  if(parentKind&&partition){
+    const peers=[...S.canonicalModel.values()].filter(peer=>peer.key!==candidate.key&&peer.includeInRegister
+      &&!peer.isSyntheticRollup&&recordPartitionKey(peer)===partition&&massageMatchKey(peer)===parentKind);
+    const rc=coordsOf(candidate.tag);
+    const scored=peers.map(peer=>[peer,sharedRun(rc,coordsOf(peer.tag))]).filter(([,run])=>run>=1).sort((a,b)=>b[1]-a[1]);
+    if(scored.length){
+      const [best,run]=scored[0];
+      if(!scored.some(entry=>entry[0]!==best&&entry[1]===run)&&!validateReparent(candidate,best.tag))
+        return {tag:candidate.tag,parent:best.tag};
+    }
+  }
+  if(!validateReparent(candidate,reference.tag))return {tag:candidate.tag,parent:reference.tag};
+  return null;
 }
 function applyManualReparentBatch(moves){
   const prepared=[];
@@ -14072,7 +14170,7 @@ function toggleEditPanel(key,row){
 function updateSelInfo(){
   const n=S.selected.size,c=S.cableSel.size,p=S.pmdSel.size,m=S.melSel.size,info=$('#selinfo');
   if(info)info.textContent=(n?`${n} hierarchy tab${n!==1?'s':''}`:'No hierarchy tabs')+(c?` · ${c} cable schedule`:'')+(p?` · ${p} PMD tab${p!==1?'s':''}`:'')+(m?` · ${m} MEL tab${m!==1?'s':''}`:'');
-  const b=$('#build');if(b)b.disabled=n===0;
+  const b=$('#build');if(b)b.disabled=n===0&&m===0;
 }
 
 /* ==== src/ui/legend-trainer.js ==== */
@@ -17556,6 +17654,14 @@ function hierarchyCrosslinkHtml(){
   return `<button class="btn view-crosslink" id="switchDetailView">${ic(next.icon||'folder-tree')}Show in ${esc(hierarchyModeLabel(next))}</button>`;
 }
 function renderResult(){
+  /* MEL-only compiles have no electrical spine: the raw flow view is empty, so
+     default to the projected SSM view where the full register lives. */
+  if(!S.roots.length){
+    const projected=activeModes(activeProfile()).find(mode=>mode.executor!=='raw');
+    if(projected&&modeById(activeProfile(),S.hierarchyMode).executor==='raw'){
+      S.hierarchyMode=projected.id;S.hierarchyExportMode=projected.id;
+    }
+  }
   const st=activeHierarchyStats()||S.stats,placementCount=activePlacements().length;
   const tab=(t,label,icon,count)=>`<button class="tabbtn ${S.tab===t?'on':''}" data-tab="${t}">${ic(icon)}${esc(label)}${count!=null?`<span class="tabcount">${count}</span>`:''}</button>`;
   $('#view').innerHTML=`
@@ -17972,19 +18078,46 @@ function onTreeDrop(e){
   if(similar.length)offerSimilarMoves(state.tag,parentName,similar);
 }
 /* Drag-to-teach prompt: one drag can nest every sibling of the same kind, each
-   matched to its own parent instance by tag numbers. */
+   matched to its own parent instance by tag numbers. Every match is a checkbox
+   the reviewer can flip, and the search box pulls in tags the matcher missed
+   (each shown with the parent it would get). */
 function offerSimilarMoves(draggedTag,parentTag,similar){
   const back=$('#modal');if(!back)return;
   $('#modalTitle').textContent='Apply to similar tags?';
-  const sample=similar.slice(0,6).map(move=>`<div class="mono" style="font-size:12px">${esc(move.tag)} → ${esc(move.parent)}</div>`).join('');
-  $('#modalMsg').innerHTML=`Nested <b>${esc(draggedTag)}</b> under <b>${esc(parentTag)}</b>.<br>`+
-    `${similar.length} similar tag${similar.length===1?'':'s'} ha${similar.length===1?'s':'ve'} a matching parent in their own system (by tag numbers):<br><br>${sample}`+
-    (similar.length>6?`<div class="mono" style="font-size:12px">… and ${similar.length-6} more</div>`:'');
+  const itemHtml=move=>`<label class="simitem" style="display:flex;gap:8px;align-items:center;font-size:12px;padding:2px 0">
+    <input type="checkbox" checked data-tag="${esc(move.tag)}" data-parent="${esc(move.parent)}">
+    <span class="mono">${esc(move.tag)} → ${esc(move.parent)}</span></label>`;
+  $('#modalMsg').innerHTML=`Nested <b>${esc(draggedTag)}</b> under <b>${esc(parentTag)}</b>. `+
+    `Review the ${similar.length} matched sibling${similar.length===1?'':'s'} (each paired to its own parent by tag numbers):`+
+    `<div id="simList" style="max-height:220px;overflow:auto;margin:10px 0;padding:6px 8px;border:1px solid rgba(0,0,0,.12);border-radius:8px">${similar.map(itemHtml).join('')}</div>`+
+    `<input id="simSearch" type="text" placeholder="Search to add a tag the matcher missed…" autocomplete="off" spellcheck="false" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid rgba(0,0,0,.18);border-radius:8px">`+
+    `<div id="simResults" style="max-height:120px;overflow:auto"></div>`;
   const acts=$('#modalActions');
   acts.innerHTML=`<button class="btn ghost" data-v="one">Just this one</button>
-    <button class="btn primary" data-v="all">${ic('check-check')}Nest ${similar.length} similar</button>`;
+    <button class="btn primary" data-v="all">${ic('check-check')}Nest selected</button>`;
+  const listEl=$('#simList'),searchEl=$('#simSearch'),resultsEl=$('#simResults');
+  const listed=()=>new Set([...listEl.querySelectorAll('input[data-tag]')].map(input=>input.dataset.tag.toLowerCase()));
+  searchEl.oninput=()=>{
+    const query=searchEl.value.trim().toLowerCase();
+    resultsEl.innerHTML='';
+    if(query.length<2)return;
+    const have=listed();have.add(draggedTag.toLowerCase());
+    const matches=[...S.canonicalModel.values()]
+      .filter(record=>record.includeInRegister&&!record.isSyntheticRollup&&record.tag.toLowerCase().includes(query)&&!have.has(record.tag.toLowerCase()))
+      .slice(0,8);
+    resultsEl.innerHTML=matches.map(record=>`<button class="btn ghost sm" data-add="${esc(record.tag)}" style="display:block;width:100%;text-align:left;font-size:12px;margin-top:4px">${esc(record.tag)}</button>`).join('');
+    resultsEl.querySelectorAll('[data-add]').forEach(btn=>btn.onclick=()=>{
+      const move=nestingMatchFor(btn.dataset.add,parentTag);
+      if(!move){toast('No valid placement for '+btn.dataset.add+' from this drag');return;}
+      listEl.insertAdjacentHTML('beforeend',itemHtml(move));
+      btn.remove();
+    });
+  };
   const close=apply=>{back.classList.remove('show');back.onclick=null;document.removeEventListener('keydown',onKey);
-    if(apply)applyManualReparentBatch(similar);};
+    if(apply){
+      const chosen=[...listEl.querySelectorAll('input[data-tag]:checked')].map(input=>({tag:input.dataset.tag,parent:input.dataset.parent}));
+      if(chosen.length)applyManualReparentBatch(chosen);
+    }};
   acts.querySelectorAll('button').forEach(btn=>btn.onclick=()=>close(btn.dataset.v==='all'));
   const onKey=event=>{if(event.key==='Escape')close(false);};
   back.onclick=event=>{if(event.target===back)close(false);};
