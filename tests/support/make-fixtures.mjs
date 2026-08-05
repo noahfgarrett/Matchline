@@ -59,6 +59,8 @@ const SHEETS = {
       ['B14-RIO-6500', 'Remote IO panel', '650', 'B14', '', 'I&C', 'FMS Network', 'New'],
       ['B14-FCU-7101', 'Fan coil unit', '2201', 'B14', 'B14-AHU-7001', 'Mechanical', 'Screening', 'New'],
       ['B14-DDC-7301', 'DDC controller', '650', 'B14', '', 'I&C', 'FMS Network', 'New'],
+      ['B14-TT-7001-02A', 'Temperature transmitter', '2201', 'B14', '', 'Mechanical', 'Screening', 'New'],
+      ['B14-RIO-6500-PS1', 'RIO power supply', '650', 'B14', '', 'I&C', 'FMS Network', 'New'],
     ],
   },
   /* Optional EXTO-layer fixtures: a prior registry export (item-master
@@ -72,6 +74,10 @@ const SHEETS = {
       ['E-3', 'B1', 'B14', '2201', 'MECHANICAL', '2201 Screening', 'X-M1', 'Supply fan motor', 'MTR', 'X-AHU-9', 'VF_MECH_FAN'],
       ['E-4', 'B1', 'B14', '2201', 'MECHANICAL', '2201 Screening', 'X-M2', 'Supply fan motor', 'MTR', 'X-AHU-9', 'VF_MECH_PUMP'],
       ['E-5', 'B1', 'B14', '241', 'UPW', '241 UPW Makeup', 'X-BAD', 'Makeup pump', 'PMP', '241 UPW Makeup', 'CA_NB_EL_MV_GEAR'],
+      // role-teaching rows: TT is a child-only class (>=10 sightings) that
+      // conventionally nests under AHU-class equipment (affinity >= 3)
+      ...Array.from({ length: 10 }, (_, i) =>
+        ['E-T' + i, 'B1', 'B14', '2201', 'MECHANICAL', '2201 Screening', 'X-TT-' + i, 'Temperature transmitter', 'TT', 'X-AHU-9', 'VF_I&C_TRANSMITTER']),
       ['E-6', 'B1', 'B14', '266', 'WASTE', '266 HFW Treatment', 'X-BLANK', 'Isolation valve', 'XV', '266 HFW Treatment', 'VF_Blank'],
     ],
   },
