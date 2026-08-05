@@ -15,8 +15,12 @@ import { createDurableProfileStorage, parsePortableProfileEnvelope, serializePor
    PROFILE_SCHEMA_VERSION used to sit here at 1, so a freshly created profile
    reported 1 while a migrated one reported 2, and an exported envelope
    declared 1 while the profile inside it declared 2. */
-export const PROFILE_STORAGE_KEY='ssmanagement.site-profiles.v1';
-export const PROFILE_DURABLE_STORAGE_KEY='ssmanagement.site-profiles.v2';
+/* Compiler-owned storage. The fork originally kept SSManagement's keys, so on
+   a machine running both apps the compiler silently loaded SSManagement's
+   profile store — including a legacy-frozen active profile that gates every
+   compiler behavior off. The two apps must never share profile state. */
+export const PROFILE_STORAGE_KEY='ssmcompiler.site-profiles.v1';
+export const PROFILE_DURABLE_STORAGE_KEY='ssmcompiler.site-profiles.v2';
 export const PROFILE_SOURCE_LABELS={cable:'Cable Schedule',mel:'Master Equipment List',easyPower:'Easy Power',pmd:'Point Master Database'};
 export const PROFILE_FIELD_SETS={
   easyPower:[
@@ -103,25 +107,31 @@ export function profileExecutionSignature(profile){
   return JSON.stringify({mappings:value.mappings||{},anatomies:value.anatomies||[],rules:value.rules||{},tagRules:value.tagRules||[],
     hierarchy:value.hierarchy||{},modes:value.modes||[],overrides:value.overrides||{}});
 }
+export const COMPILER_PROFILE_NAME='SSM Compiler Default';
 export function makeDefaultProfile(name){
   const now=new Date().toISOString();
   const eagle=makeEagleRuleProfile(),isBuiltIn=!clean(name);
   return {
     schemaVersion:RULES_SCHEMA_VERSION,
-    id:isBuiltIn?'builtin-eagle':profileId(),name:name||EAGLE_PROFILE_NAME,siteCode:'',description:isBuiltIn?'Original SSM Builder behavior for the Eagle project.':'',
+    id:isBuiltIn?'builtin-eagle':profileId(),name:name||COMPILER_PROFILE_NAME,siteCode:'',
+    description:isBuiltIn?'Universal compiler defaults. Builds the SSM from any site\'s documents out of the box; duplicate it to teach site-specific nomenclature.':'',
     presetId:EAGLE_PRESET_ID,presetVersion:EAGLE_PRESET_VERSION,builtIn:isBuiltIn,locked:isBuiltIn,
     basePreset:{id:EAGLE_PRESET_ID,version:String(EAGLE_PRESET_VERSION),fingerprint:null},attributes:[],
     revision:1,publishedAt:now,updatedAt:now,mappings:{},tagRules:[],
     overrides:{relationships:[],attributes:[]},
     anatomies:profileClone(eagle.anatomies),rules:profileClone(eagle.rules),modes:profileClone(eagle.modes),
+    /* The built-in and every named profile share the SAME universal compiler
+       behavior — the shipped default must build an SSM no matter which site's
+       documents come in (the built-in differs only in being locked). The frozen
+       SSM Builder behavior lives in makeLegacyEagleProfile() below, for the
+       compatibility regression suite — it is not offered in the picker. */
     hierarchy:{
       unassignedBuilding:'Unassigned Building',
       disciplineFallbacks:{instrument:'I&C',default:'Electrical'},
       systemFallbacks:{Electrical:'602 Medium Voltage','I&C':'Instrumentation',default:'Unassigned System'},
       parentSourcePriority:['cable','mel','easyPower','pmd'],
-      /* Compiler fork: the MEL is the seed universe (spec §4). Off for Eagle,
-         which reproduces the frozen Easy-Power-seeded SSM Builder register. */
-      melSeed:{enabled:!isBuiltIn,excludedPhases:['Future']},
+      /* Compiler: the MEL is the seed universe (spec §4). */
+      melSeed:{enabled:true,excludedPhases:['Future']},
       /* Milestone ladder (spec §6a): custom UPN pattern is optional — blank
          uses the built-in default. Polarity map overrides the discipline-name
          heuristic (top-down for electrical/LSS/security, bottom-up otherwise). */
@@ -131,30 +141,23 @@ export function makeDefaultProfile(name){
          deliverable; sites on other Cx software disable this and only the
          plain SSM outputs are produced. itemMasters further gates checklist
          auto-assignment inside the EXTO layer. */
-      exto:{enabled:true,itemMasters:!isBuiltIn},
-      /* EXTO upload column indexes (0-based). Project profiles follow the
-         Standardized Upload File Template Rev21 (UPN=G, Equipment ID=K,
-         Closest Parent=P, Milestone=Y, Item Master UID=AA, Dependencies=AN);
-         Eagle keeps the frozen historical G/K/P/AM layout. -1 = not emitted. */
-      extoColumns:isBuiltIn
-        ?{upn:6,equipmentId:10,closestParent:15,dependencies:38,milestone:-1,itemMaster:-1,classification:-1}
-        :{upn:6,equipmentId:10,closestParent:15,milestone:24,itemMaster:26,classification:35,dependencies:39},
+      exto:{enabled:true,itemMasters:true},
+      /* EXTO upload column indexes (0-based), following the Standardized
+         Upload File Template Rev21 (UPN=G, Equipment ID=K, Closest Parent=P,
+         Milestone=Y, Item Master UID=AA, Dependencies=AN). -1 = not emitted. */
+      extoColumns:{upn:6,equipmentId:10,closestParent:15,milestone:24,itemMaster:26,classification:35,dependencies:39},
       roleParents:{LVS:'XFM',XFM:'GIS',GIS:'SYSTEM'},
-      resolutionStrategy:isBuiltIn?'legacy-register':'source-priority',
-      downstreamGapPolicy:isBuiltIn?'truncate':'bridge-review',
-      caseVariantPolicy:isBuiltIn?'preserve':'merge',
-      duplicateRegisterPolicy:isBuiltIn?'first':'prefer-parent',
-      cableConflictPolicy:isBuiltIn?'legacy-chain-review':'first-review',
-      duplicateParentReviewPolicy:isBuiltIn?'first-silent':'first-review',
+      resolutionStrategy:'source-priority',
+      downstreamGapPolicy:'bridge-review',
+      caseVariantPolicy:'merge',
+      duplicateRegisterPolicy:'prefer-parent',
+      cableConflictPolicy:'first-review',
+      duplicateParentReviewPolicy:'first-review',
       workflow:{
         gisBusCompaction:true,
         cableParentChains:true,
         melUpnParents:true,
-        /* Off for Eagle, on for every project profile. Eagle reproduces the
-           frozen SSM Builder tree, where MEL only ever acted as a UPN-mismatch
-           correction; a project profile trusts MEL to parent whatever the Cable
-           Schedule does not cover. */
-        melSystemParentClaims:!isBuiltIn,
+        melSystemParentClaims:true,
         pmdInstrumentAttachment:true,
         enforceSystemRoot:true
       }
@@ -165,6 +168,31 @@ export function makeDefaultProfile(name){
     legendTraining:emptyLegendTraining(),
     history:[]
   };
+}
+/**
+ * The frozen SSM Builder behavior, exactly as the original Eagle-project app
+ * shipped it. Not offered in the profile picker — it exists so the golden
+ * compatibility suite (snapshots, frozen differential) keeps proving the
+ * shared plumbing still reproduces the approved legacy baseline.
+ */
+export function makeLegacyEagleProfile(){
+  const profile=makeDefaultProfile();
+  profile.id='legacy-eagle';profile.builtIn=false;profile.locked=true;
+  profile.name=EAGLE_PROFILE_NAME;
+  profile.description='Original SSM Builder behavior for the Eagle project (frozen compatibility baseline).';
+  Object.assign(profile.hierarchy,{
+    melSeed:{enabled:false,excludedPhases:['Future']},
+    exto:{enabled:true,itemMasters:false},
+    extoColumns:{upn:6,equipmentId:10,closestParent:15,dependencies:38,milestone:-1,itemMaster:-1,classification:-1},
+    resolutionStrategy:'legacy-register',
+    downstreamGapPolicy:'truncate',
+    caseVariantPolicy:'preserve',
+    duplicateRegisterPolicy:'first',
+    cableConflictPolicy:'legacy-chain-review',
+    duplicateParentReviewPolicy:'first-silent'
+  });
+  profile.hierarchy.workflow={...profile.hierarchy.workflow,melSystemParentClaims:false};
+  return profile;
 }
 export function normalizeProfile(raw){
   const base=makeDefaultProfile(clean(raw&&raw.name)||'Imported Site Profile'),src=raw&&typeof raw==='object'?raw:{};

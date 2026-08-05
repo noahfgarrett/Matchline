@@ -168,10 +168,12 @@ test('cable outranks MEL, so MEL only parents what the Cable Schedule leaves alo
  * Eagle
  * ------------------------------------------------------------------------- */
 
-test('Eagle declares the policy off, and a project profile declares it on', async () => {
+test('the legacy baseline declares the policy off, and shipped profiles declare it on', async () => {
   const instance = await app()
-  assert.equal(instance.eval(`makeDefaultProfile().hierarchy.workflow.melSystemParentClaims`), false,
-    'Eagle must not gain a parent source the frozen build never had')
+  assert.equal(instance.eval(`makeLegacyEagleProfile().hierarchy.workflow.melSystemParentClaims`), false,
+    'the frozen baseline must not gain a parent source the frozen build never had')
+  assert.equal(instance.eval(`makeDefaultProfile().hierarchy.workflow.melSystemParentClaims`), true,
+    'the shipped built-in trusts the MEL to parent whatever the Cable Schedule does not cover')
   assert.equal(instance.eval(`makeDefaultProfile('Project').hierarchy.workflow.melSystemParentClaims`), true)
 })
 

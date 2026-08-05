@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { detectMel, profileFieldsFromHeaders } from '../src/io/detect.js'
+import { detectMel, isMelSheet, profileFieldsFromHeaders } from '../src/io/detect.js'
+import { KEYSEP } from '../src/core/text.js'
 import { buildProjectApp, canonicalRecordOf } from './support/compiler-harness.mjs'
 
 
@@ -83,6 +84,34 @@ test('a MEL with preamble rows (headers in row 3) still compiles alone', async (
   assert.equal(chiller.system, '101 Chilled Water')
   const pump = canonicalRecordOf(app, 'B31-PMP-101-01')
   assert.equal(pump.ssmParentTag, 'B31-CH-101-01', 'System Parent assertion nests without any electrical source')
+})
+
+test('real-world tag headers detect: "Equipment Tag Number" with corroborating columns', () => {
+  const info = detectMel(['Equipment Tag Number', 'Equipment Description', 'Bldg', 'Discipline', 'UPN', 'System Description'])
+  assert.ok(info, 'the suffixed tag header must be recognized when the row is plainly a MEL')
+  assert.equal(info.tag, 0)
+  assert.equal(info.upn, 4)
+})
+
+test('loose tag headers cannot masquerade as a MEL without MEL-ish corroboration', () => {
+  assert.equal(detectMel(['Cable Tag', 'From', 'To']), null, 'a cable schedule is not a MEL')
+  assert.equal(detectMel(['Tag']), null, 'a lone tag cell is not a MEL')
+  assert.equal(detectMel(['Tag No.', 'Building', 'Description']), null, 'no UPN or System Parent column — not trusted')
+  assert.ok(detectMel(['Tag No.', 'UPN', 'Discipline']), 'UPN plus a second corroborating column qualifies')
+})
+
+test('MEL tab-name synonyms are recognized without header detection', () => {
+  assert.equal(isMelSheet('nofile' + KEYSEP + 'Master Equipment List'), true)
+  assert.equal(isMelSheet('nofile' + KEYSEP + 'MEL'), true)
+  assert.equal(isMelSheet('nofile' + KEYSEP + 'Cable Schedule'), false)
+})
+
+test('a real-world MEL (tab "Master Equipment List", "Equipment Tag Number") compiles alone', async () => {
+  const app = await buildProjectApp(['compiler-mel-tagnumber.xlsx'])
+  const pump = canonicalRecordOf(app, 'B31-PMP-101-01')
+  assert.ok(pump, 'the loose-header MEL seeded canonical records')
+  assert.equal(pump.ssmParentTag, 'B31-CH-101-01')
+  assert.equal(pump.system, '101 Chilled Water')
 })
 
 test('a MEL without the new columns still detects, with the new fields absent', () => {

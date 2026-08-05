@@ -151,18 +151,33 @@ export function pmdPanelMatchParts(value){
 export function pmdPanelKey(value){return pmdPanelMatchParts(value).key;}
 /* ---- Master Equipment List (Equipment Tag -> UPN) ---- */
 export const MEL_SHEET_NAME='equipmentlist';
+/* Real MELs name their tab many ways; any of these means "treat as MEL". */
+export const MEL_SHEET_NAMES=new Set([MEL_SHEET_NAME,'masterequipmentlist','mel','equipmentmasterlist','melequipmentlist']);
 export const _melCache=new Map();
-export function isMelSheet(key){const [fid,sheet]=key.split(KEYSEP);return normH(sheet)===MEL_SHEET_NAME||!!(fileById(fid)&&melInfo(key));}
+export function isMelSheet(key){const [fid,sheet]=key.split(KEYSEP);return MEL_SHEET_NAMES.has(normH(sheet))||!!(fileById(fid)&&melInfo(key));}
+/* Loose tag-header forms ("Equipment Tag Number", "Tag No.", "Asset Tag") are
+   only trusted alongside a UPN or System Parent column plus a second
+   corroborating MEL column, so a cable schedule's "Cable Tag", an EXTO
+   registry's "Equipment ID", or a lone title cell can't masquerade as a MEL. */
+const MEL_LOOSE_TAG=/^(equipment|equip|asset)?tag(s|no|num|number)?$/;
 export function detectMel(headers){
-  const norm=headers.map(normH),tag=norm.findIndex(h=>h==='equipmenttag'||(h.endsWith('equipmenttag')&&!h.startsWith('systemparent')));
-  const upn=norm.findIndex(h=>h==='upn'||h.startsWith('upn'));
+  const norm=headers.map(normH);
+  const strongTag=h=>h==='equipmenttag'||(h.endsWith('equipmenttag')&&!h.startsWith('systemparent'));
+  let tag=norm.findIndex(strongTag),loose=false;
+  if(tag<0){tag=norm.findIndex(h=>MEL_LOOSE_TAG.test(h));loose=true;}
+  const upn=norm.findIndex(h=>h==='upn'||h.startsWith('upn')||h.endsWith('upn'));
   const building=norm.findIndex(h=>h==='bldg'||h==='building'||h.startsWith('building'));
-  const systemParent=norm.findIndex(h=>h.startsWith('systemparent')&&h.includes('equipmenttag'));
+  const systemParent=norm.findIndex(h=>h.startsWith('systemparent')&&h.includes('tag'));
   const discipline=norm.findIndex(h=>h==='discipline'||h.startsWith('discipline'));
   const systemDescription=norm.findIndex(h=>h==='systemdescription'||(h.startsWith('system')&&h.includes('description')));
   const projectPhase=norm.findIndex(h=>h==='projectphase'||h.startsWith('projectphase'));
   const description=norm.findIndex(h=>h==='equipmentdescription'||h==='description');
-  return tag>=0?{tag,upn,building,systemParent,discipline,systemDescription,projectPhase,description}:null;
+  if(tag<0)return null;
+  if(loose){
+    const corroborating=[upn,building,systemParent,discipline,systemDescription,projectPhase,description].filter(i=>i>=0).length;
+    if(corroborating<2||(upn<0&&systemParent<0))return null;
+  }
+  return {tag,upn,building,systemParent,discipline,systemDescription,projectPhase,description};
 }
 export function melInfo(key){
   if(_melCache.has(key))return _melCache.get(key);

@@ -355,7 +355,7 @@ test('an embedded update profile handoff is committed to durable storage on firs
     activeRevision: 7,
     durableOk: true,
     durableActiveId: 'transferred-site',
-    durableProfileNames: ['Eagle - SSM Builder Legacy', 'Transferred Site'],
+    durableProfileNames: ['SSM Compiler Default', 'Transferred Site'],
   })
 })
 

@@ -42,13 +42,17 @@ export async function captureScenario(scenario, htmlPath) {
   app.eval(`globalThis.__workCopy = ${JSON.stringify(workCopy)}`)
 
   return JSON.parse(await app.evalAsync(`
-    /* Goldens are the Eagle compatibility baseline. This harness reaches Eagle
-       through the PROFILE_FALLBACK that activeProfile() builds when no store has
-       been initialised -- implicit, and worth stating out loud: if that ever
-       resolved to a different profile, every golden would be recaptured against
-       the wrong behaviour without a single test going red. */
-    if (activeProfile().id !== 'builtin-eagle') {
-      throw new Error('golden capture must run the Eagle compatibility profile, got ' + activeProfile().name);
+    /* Goldens are the Eagle compatibility baseline. The shipped built-in is
+       now the universal compiler profile, so the frozen behavior must be
+       selected EXPLICITLY via its factory — relying on any default would
+       recapture every golden against the wrong behaviour without a single
+       test going red. */
+    const LEGACY = normalizeProfile(makeLegacyEagleProfile());
+    PROFILE_STORE.profiles = [LEGACY];
+    PROFILE_STORE.activeId = LEGACY.id;
+    setRuleProfile(activeProfile());
+    if (activeProfile().hierarchy.resolutionStrategy !== 'legacy-register') {
+      throw new Error('golden capture must run the frozen Eagle baseline, got ' + activeProfile().name);
     }
     for (const fx of __fixtures) {
       const bytes = new Uint8Array(fx.bytes);
