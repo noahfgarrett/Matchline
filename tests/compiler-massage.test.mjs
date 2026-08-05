@@ -70,6 +70,21 @@ test('a new move clears the redo stack; manual badge keys track overrides', asyn
     `override key present for the badge, got: ${keys}`)
 })
 
+test('drag-to-teach: one move generalizes to siblings of the same kind, each matched by numbers', async () => {
+  const app = await buildProjectApp(EXTO)
+  const similar = JSON.parse(app.eval(`JSON.stringify(similarNestingMoves('B14-PT-7001-01','B14-AHU-7001'))`))
+  assert.deepEqual(similar, [{ tag: 'B14-PT-7001-02', parent: 'B14-AHU-7001' }],
+    'the sibling PT with the matching number is offered, nothing else')
+  app.eval(`applyManualReparent('B14-PT-7001-01','B14-AHU-7001')`)
+  const applied = JSON.parse(app.eval(`JSON.stringify(applyManualReparentBatch(${JSON.stringify(similar)}))`))
+  assert.equal(applied, 1)
+  assert.equal(canonicalRecordOf(app, 'B14-PT-7001-02').ssmParentTag, 'B14-AHU-7001')
+  // the batch is ONE history entry: a single undo reverts the whole generalization
+  app.eval(`undoManualReparent()`)
+  assert.equal(canonicalRecordOf(app, 'B14-PT-7001-02').ssmParentTag, '', 'batch undone in one step')
+  assert.equal(canonicalRecordOf(app, 'B14-PT-7001-01').ssmParentTag, 'B14-AHU-7001', 'the original drag survives its own undo entry')
+})
+
 test('equipment rows render draggable; folder rows do not', async () => {
   const app = await buildProjectApp(EXTO)
   const rows = JSON.parse(app.eval(`

@@ -25,9 +25,9 @@ const NEST_MIN_AFFINITY = 3
 const NEST_GRADE_MIN_ROWS = 10
 const NEST_GRADE_MIN_PRECISION = 0.85
 
-function coordsOf(tag) { return (clean(tag).toLowerCase().match(/\d+/g) || []) }
+export function coordsOf(tag) { return (clean(tag).toLowerCase().match(/\d+/g) || []) }
 function tagBody(tag) { return clean(tag).toLowerCase().replace(/[^a-z0-9]/g, '') }
-function sharedRun(a, b) {
+export function sharedRun(a, b) {
   let best = 0
   for (let i = 0; i < a.length; i++) for (let j = 0; j < b.length; j++) {
     let n = 0
