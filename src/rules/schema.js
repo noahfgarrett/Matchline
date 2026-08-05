@@ -79,5 +79,9 @@ export function migrateProfile(raw) {
 
 /** A rule is enabled unless explicitly disabled, and must carry an id. */
 export function isRuleEnabled(rule) {
-  return !!rule && rule.enabled !== false && !!clean(rule.id)
+  /* Checked per rule per resolve; the String() coercion inside clean() was
+     measurable at scale, so string ids (the only kind real profiles carry)
+     take the direct path. */
+  if (!rule || rule.enabled === false) return false
+  return typeof rule.id === 'string' ? rule.id.trim().length !== 0 : !!clean(rule.id)
 }

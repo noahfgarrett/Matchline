@@ -1,5 +1,11 @@
 [
   {
+    "version": "1.3.1",
+    "date": "2026-08-05T00:00:00Z",
+    "type": "fix",
+    "notes": "- Large-workbook imports and builds are ~35% faster end to end (measured on 260,000 rows: about 22s down to about 14s), with byte-identical output\n- Workbooks parse in SheetJS dense mode and the sheet scan takes a row-array fast path, cutting import and tab-scanning time roughly in half\n- Tag identity resolution (cleanTag, tagKey, register tags) now memoizes per input with rule-engine-generation invalidation, and the rule engine caches by caller input, precompiles suffix endings and exclude lists, and skips redundant re-cleaning in per-rule checks\n- No behavior changes: the golden compatibility suite and new dense-vs-sparse identity tests prove identical output on every fixture"
+  },
+  {
     "version": "1.3.0",
     "date": "2026-08-05T00:00:00Z",
     "type": "fix",

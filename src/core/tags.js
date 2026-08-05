@@ -1,11 +1,30 @@
 import { clean } from './text.js';
-import { ruleEngine } from '../rules/provider.js';
+import { ruleEngine, ruleEngineGeneration } from '../rules/provider.js';
 
 // cleanTagRaw: unicode normalisation and separator cleanup only -- genuinely
 // universal, no site convention.
 // cleanTag: the active profile's complete identity, including Tag Anatomy.
 export const cleanTagRaw=v=>clean(v).normalize('NFKC').replace(/[\u200B-\u200D\uFEFF]/g,'').replace(/[\u2010-\u2015\u2212]/g,'-').replace(/\s*-\s*/g,'-');
-export const cleanTag=v=>ruleEngine().resolve(cleanTagRaw(v)).identity;
+/* cleanTag and cleanRegisterTag sit under every row loop in the app, so both
+   memoize by raw input. The memo is only valid for one engine: any profile or
+   rule change bumps ruleEngineGeneration() and the next call clears it. */
+let tagMemoGeneration=-1;
+const cleanTagMemo=new Map(),registerTagMemo=new Map();
+function freshTagMemos(){
+  const generation=ruleEngineGeneration();
+  if(generation!==tagMemoGeneration){tagMemoGeneration=generation;cleanTagMemo.clear();registerTagMemo.clear();}
+}
+export const cleanTag=v=>{
+  const key=typeof v==='string'?v:String(v==null?'':v);
+  freshTagMemos();
+  let identity=cleanTagMemo.get(key);
+  if(identity===undefined){
+    identity=ruleEngine().resolve(cleanTagRaw(key)).identity;
+    if(cleanTagMemo.size>1500000)cleanTagMemo.clear();
+    cleanTagMemo.set(key,identity);
+  }
+  return identity;
+};
 
 /* A Relate rule can compose a parent that ends in literal text the profile
    deliberately spelled with spaces, e.g. "<Building> - RACK". cleanTagRaw
@@ -16,14 +35,30 @@ export const cleanTag=v=>ruleEngine().resolve(cleanTagRaw(v)).identity;
    The list is read from the active profile's own rules
    (engine.registerLiteralSuffixes), never named here -- which is what lets this
    file stay free of site vocabulary. */
-const suffixMatcher=literal=>new RegExp('^(.*?)'+literal.replace(/[.*+?^${}()|[\]\\]/g,'\\$&').replace(/\s+/g,'\\s+')+'$','i');
+const suffixMatcherMemo=new Map();
+const suffixMatcher=literal=>{
+  let matcher=suffixMatcherMemo.get(literal);
+  if(!matcher){
+    matcher=new RegExp('^(.*?)'+literal.replace(/[.*+?^${}()|[\]\\]/g,'\\$&').replace(/\s+/g,'\\s+')+'$','i');
+    suffixMatcherMemo.set(literal,matcher);
+  }
+  return matcher;
+};
 export function cleanRegisterTag(value){
-  const raw=clean(value);
+  const key=typeof value==='string'?value:String(value==null?'':value);
+  freshTagMemos();
+  let cleaned=registerTagMemo.get(key);
+  if(cleaned!==undefined)return cleaned;
+  const raw=clean(key);
+  cleaned=null;
   for(const literal of ruleEngine().registerLiteralSuffixes()){
     const hit=raw.match(suffixMatcher(literal));
-    if(hit)return cleanTag(hit[1])+literal;
+    if(hit){cleaned=cleanTag(hit[1])+literal;break;}
   }
-  return cleanTag(raw);
+  if(cleaned===null)cleaned=cleanTag(raw);
+  if(registerTagMemo.size>1500000)registerTagMemo.clear();
+  registerTagMemo.set(key,cleaned);
+  return cleaned;
 }
 
 /* separator-aware fuzzy matching: "ABC-1" vs "ABC_1" reads as 100% */

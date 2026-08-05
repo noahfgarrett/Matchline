@@ -63,6 +63,7 @@ export function extractStrikeCells(bytes){
    source of a "page unresponsive" report. The synchronous entry point runs
    every chunk back to back and produces byte-identical output. */
 const AOA_CHUNK=20000;
+const AOA_DENSE_ROW_CHUNK=2000;
 function scanCells(ws,addresses,from,to,state){
   for(let i=from;i<to;i++){
     const address=addresses[i];
@@ -73,20 +74,51 @@ function scanCells(ws,addresses,from,to,state){
     row.set(pos.c,value);if(pos.c>state.maxCol)state.maxCol=pos.c;
   }
 }
+/* Dense worksheets (XLSX.read {dense:true}) are arrays of row arrays, so the
+   per-cell address regex, decode_cell, and the giant Object.keys walk all
+   disappear. Feeds the same state shape as scanCells, so assembleAoa keeps
+   producing byte-identical output either way. */
+function scanDenseRows(data,from,to,state){
+  for(let r=from;r<to;r++){
+    const cells=data[r];if(!cells)continue;
+    let row=null;
+    for(let c=0;c<cells.length;c++){
+      const cell=cells[c];if(!cell||(cell.v==null&&cell.f==null&&cell.w==null))continue;
+      if(row===null){row=state.rows.get(r);if(!row){row=new Map();state.rows.set(r,row);}}
+      row.set(c,cell.w!=null?cell.w:XLSX.utils.format_cell(cell));if(c>state.maxCol)state.maxCol=c;
+    }
+  }
+}
 function assembleAoa(state){
   const rowNums=[...state.rows.keys()].sort((a,b)=>a-b);
-  const aoa=rowNums.map(r=>Array.from({length:state.maxCol+1},(_,c)=>state.rows.get(r).get(c)??''));
+  const width=state.maxCol+1,aoa=new Array(rowNums.length);
+  for(let i=0;i<rowNums.length;i++){
+    const cells=state.rows.get(rowNums[i]),row=new Array(width);
+    for(let c=0;c<width;c++){const value=cells.get(c);row[c]=value===undefined?'':value;}
+    aoa[i]=row;
+  }
   return {aoa,rowNums};
 }
 export function sheetAoa(ws){
   if(!ws||!ws['!ref'])return {aoa:[],rowNums:[]};
-  const addresses=Object.keys(ws),state={rows:new Map(),maxCol:0};
+  const state={rows:new Map(),maxCol:0};
+  if(Array.isArray(ws)){scanDenseRows(ws,0,ws.length,state);return assembleAoa(state);}
+  const addresses=Object.keys(ws);
   scanCells(ws,addresses,0,addresses.length,state);
   return assembleAoa(state);
 }
 export async function sheetAoaAsync(ws,onChunk){
   if(!ws||!ws['!ref'])return {aoa:[],rowNums:[]};
-  const addresses=Object.keys(ws),state={rows:new Map(),maxCol:0};
+  const state={rows:new Map(),maxCol:0};
+  if(Array.isArray(ws)){
+    for(let i=0;i<ws.length;i+=AOA_DENSE_ROW_CHUNK){
+      const end=Math.min(i+AOA_DENSE_ROW_CHUNK,ws.length);
+      scanDenseRows(ws,i,end,state);
+      if(onChunk&&end<ws.length)await onChunk(end,ws.length);
+    }
+    return assembleAoa(state);
+  }
+  const addresses=Object.keys(ws);
   for(let i=0;i<addresses.length;i+=AOA_CHUNK){
     const end=Math.min(i+AOA_CHUNK,addresses.length);
     scanCells(ws,addresses,i,end,state);

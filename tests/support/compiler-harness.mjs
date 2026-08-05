@@ -18,7 +18,7 @@ async function ingestFixtures(app, files) {
         continue;
       }
       const bytes = new Uint8Array(fx.bytes);
-      const wb = XLSX.read(bytes, { type: 'array' });
+      const wb = XLSX.read(bytes, { type: 'array', dense: true });
       S.files.push({ id: 'f' + S.files.length, name: fx.name, ext: 'xlsx', size: bytes.length, wb,
         sheets: wb.SheetNames.slice(), strikes: extractStrikeCells(bytes), error: null });
     }

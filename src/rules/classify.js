@@ -7,12 +7,14 @@ import { isRuleEnabled } from './schema.js'
 // modules collide.
 const classifyPatternCache = new Map()
 function compileClassifyPattern(pattern) {
+  /* Keyed by the pattern as given: cleaning before the cache lookup put a
+     String()+trim on every single rule evaluation. Distinct patterns are
+     bounded by the profile's rule set, so raw keys cost nothing. */
+  if (classifyPatternCache.has(pattern)) return classifyPatternCache.get(pattern)
   const source = clean(pattern)
-  if (!source) return null
-  if (classifyPatternCache.has(source)) return classifyPatternCache.get(source)
   let re = null
-  try { re = new RegExp(source, 'i') } catch (_) { re = null }
-  classifyPatternCache.set(source, re)
+  if (source) { try { re = new RegExp(source, 'i') } catch (_) { re = null } }
+  classifyPatternCache.set(pattern, re)
   return re
 }
 
@@ -55,6 +57,19 @@ function ruleValue(rule, tag, segments) {
  * (e.g. 'NOTE-A' is not a note, but stripping '-A' first would make it
  * look like one).
  */
+/* Per-rules-array compilation of the excludeTags lists: applyClassifyDetailed
+   runs once per resolve() miss, and lowercasing every exclude entry (and the
+   tag itself, once per entry) on every call dominated the rule checks at
+   scale. `enabled`, `target`, and `sourceKind` stay per-call, as before. */
+const classifyMetaCache = new WeakMap()
+function classifyMeta(rules) {
+  let meta = classifyMetaCache.get(rules)
+  if (meta) return meta
+  meta = rules.map(rule => ({ rule, exclude: new Set((rule.excludeTags || []).map(value => clean(value).toLowerCase())) }))
+  classifyMetaCache.set(rules, meta)
+  return meta
+}
+
 export function applyClassifyDetailed(rawTag, canonicalTag, rules, segments, context) {
   const raw = clean(rawTag)
   const canonical = clean(canonicalTag)
@@ -62,11 +77,22 @@ export function applyClassifyDetailed(rawTag, canonicalTag, rules, segments, con
   const matches=[]
   if (!raw && !canonical) return {attributes:out,matches}
   const seg = segments || {}
-  for (const rule of rules || []) {
+  let rawLower = null, canonicalLower = null, contextKind = null
+  for (const entry of classifyMeta(rules || [])) {
+    const rule = entry.rule
     if (!isRuleEnabled(rule) || !rule.target || out[rule.target] !== undefined) continue
-    if (rule.sourceKind && rule.sourceKind !== clean(context && context.sourceKind)) continue
-    const tag = rule.source === 'raw' ? raw : canonical
-    if((rule.excludeTags||[]).some(value=>clean(value).toLowerCase()===tag.toLowerCase()))continue
+    if (rule.sourceKind) {
+      if (contextKind === null) contextKind = clean(context && context.sourceKind)
+      if (rule.sourceKind !== contextKind) continue
+    }
+    const useRaw = rule.source === 'raw'
+    const tag = useRaw ? raw : canonical
+    if (entry.exclude.size) {
+      const lower = useRaw
+        ? (rawLower === null ? (rawLower = raw.toLowerCase()) : rawLower)
+        : (canonicalLower === null ? (canonicalLower = canonical.toLowerCase()) : canonicalLower)
+      if (entry.exclude.has(lower)) continue
+    }
     const resolved = ruleValue(rule, tag, seg)
     if (resolved){out[rule.target] = resolved;matches.push({id:rule.id,name:rule.name,target:rule.target,value:resolved})}
   }

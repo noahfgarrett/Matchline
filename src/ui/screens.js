@@ -187,7 +187,7 @@ export async function addWorkCopy(file){
   await raf();
   try{
     const buf=await readArrayBuffer(file);await raf();
-    const bytes=new Uint8Array(buf),wb=XLSX.read(bytes,{type:'array'});S.workCopy={name:file.name,wb};
+    const bytes=new Uint8Array(buf),wb=XLSX.read(bytes,{type:'array',dense:true});S.workCopy={name:file.name,wb};
     await raf();parseWorkCopy();invalidateHierarchyBuild();
   }catch(e){S.workCopy=null;S.wcRows=null;toast('Could not read working copy');}
   renderWorkCopy();
@@ -236,7 +236,7 @@ export async function addFiles(fileObjs){
           rec.p6=parseXer(new TextDecoder().decode(bytes));
           if(!rec.p6.tasks.length)rec.error='No TASK rows found in this XER file';
         }else{
-          const wb=XLSX.read(bytes,{type:'array'});
+          const wb=XLSX.read(bytes,{type:'array',dense:true});
           rec.wb=wb;rec.strikes=extractStrikeCells(bytes);rec.sheets=wb.SheetNames.slice();if(!rec.sheets.length)rec.error='No readable tabs found';
         }
       }catch(err){rec.error='Could not read this file';}
