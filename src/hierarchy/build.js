@@ -1018,6 +1018,7 @@ export async function buildHierarchy(expectedProfileRevision=S.profileBuildRevis
 
     report(.02,'Reading source data');await raf();
     S.cableStruckTags=new Set();S.placements=[];S._placementByKey=new Map();S._placementId=0;S._melPlacementSeeds=new Map();S._reviewFlagSeeds=[];S.placementScrollTop=0;S.lastPlacementMove=null;
+    S.ssmCombinedRaw=null;S.massageUndo=[];S.massageRedo=[];
     resetSourceParentClaims();
     const loadTags=await collectLoadDescriptionTags(keys,tick);
     await buildMel(tick);
@@ -1313,15 +1314,56 @@ export function applyManualReparent(equipmentTag,newParentTag){
     }
   }
   const profile=activeProfile(),override={id:'massage-'+record.key,equipment:cleanTag(record.tag),parent:parentTag,savedAt:new Date().toISOString()};
-  if(profile.locked)S.sessionRelationshipOverrides=[...S.sessionRelationshipOverrides.filter(item=>tagKey(item.equipment)!==record.key),override];
-  else{
-    profile.overrides={...(profile.overrides||{}),relationships:[...(profile.overrides&&profile.overrides.relationships||[]).filter(item=>tagKey(item.equipment)!==record.key),override]};
-    profile.revision=Math.max(1,Number(profile.revision)||1)+1;profile.updatedAt=override.savedAt;persistProfiles();
-  }
+  const before=relationshipOverrideFor(record.key);
+  setRelationshipOverrideState(profile,record.key,override);
+  S.massageUndo.push({profileId:profile.id,key:record.key,tag:record.tag,before,after:override});
+  if(S.massageUndo.length>100)S.massageUndo.shift();
+  S.massageRedo=[];
   rebuildProfileProjections();
   if(typeof renderResult==='function'&&S.screen==='result')renderResult();
   toast(parentTag?record.tag+' nested under '+parentTag:record.tag+' made a system root'+(profile.locked?' for this session':''));
   return true;
+}
+export function relationshipOverrideFor(key){
+  const profile=activeProfile();
+  return (S.sessionRelationshipOverrides||[]).find(item=>tagKey(item.equipment)===key)
+    ||((profile.overrides&&profile.overrides.relationships)||[]).find(item=>tagKey(item.equipment)===key)
+    ||null;
+}
+export function setRelationshipOverrideState(profile,key,override){
+  if(profile.locked){
+    S.sessionRelationshipOverrides=[...(S.sessionRelationshipOverrides||[]).filter(item=>tagKey(item.equipment)!==key),...(override?[override]:[])];
+    return;
+  }
+  profile.overrides={...(profile.overrides||{}),relationships:[...((profile.overrides&&profile.overrides.relationships)||[]).filter(item=>tagKey(item.equipment)!==key),...(override?[override]:[])]};
+  profile.revision=Math.max(1,Number(profile.revision)||1)+1;profile.updatedAt=new Date().toISOString();persistProfiles();
+}
+function shiftMassage(fromStack,toStack,useBefore,label){
+  const entry=fromStack.pop();
+  if(!entry)return null;
+  const profile=activeProfile();
+  if(entry.profileId!==profile.id){toast('The active profile changed since that move');return null;}
+  setRelationshipOverrideState(profile,entry.key,useBefore?entry.before:entry.after);
+  toStack.push(entry);
+  rebuildProfileProjections();
+  if(typeof renderResult==='function'&&S.screen==='result')renderResult();
+  const state=useBefore?entry.before:entry.after;
+  toast(label+': '+entry.tag+(state?(clean(state.parent)?' under '+state.parent:' as a system root'):' back to derived placement'));
+  return entry;
+}
+export function undoManualReparent(){return shiftMassage(S.massageUndo,S.massageRedo,true,'Undid move');}
+export function redoManualReparent(){return shiftMassage(S.massageRedo,S.massageUndo,false,'Redid move');}
+/* tagKeys carrying a manual relationship override, memoized for row badges. */
+export let _manualKeyCache=null;
+export function manualOverrideKeySet(){
+  const profile=activeProfile();
+  const stamp=profile.id+':'+profile.revision+':'+(S.sessionRelationshipOverrides||[]).length;
+  if(_manualKeyCache&&_manualKeyCache.stamp===stamp)return _manualKeyCache.keys;
+  const keys=new Set();
+  for(const item of (profile.overrides&&profile.overrides.relationships)||[])keys.add(tagKey(item.equipment));
+  for(const item of S.sessionRelationshipOverrides||[])keys.add(tagKey(item.equipment));
+  _manualKeyCache={stamp,keys};
+  return keys;
 }
 export async function movePlacementBranch(issueId,parentNodeId){
   const issue=S.placements.find(item=>item.id===issueId&&!item.resolved),parent=S.nodeById.get(parentNodeId);if(!issue||!parent||!validPlacementParent(issue,parent))return toast('Choose a valid parent for this branch');

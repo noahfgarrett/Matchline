@@ -38,6 +38,38 @@ test('cross-block moves and cycles are refused', async () => {
   assert.equal(cycle, false, 'FCU is a child of the AHU — nesting the AHU under it would cycle')
 })
 
+test('undo and redo walk the massage history, restoring prior overrides exactly', async () => {
+  const app = await buildProjectApp(EXTO)
+  // move 1: TT (inferred under AHU) manually under MTR; move 2: manually rooted
+  app.eval(`applyManualReparent('B14-TT-7001-02A','MTR-9001')`)
+  app.eval(`applyManualReparent('B14-TT-7001-02A','')`)
+  assert.equal(canonicalRecordOf(app, 'B14-TT-7001-02A').ssmParentTag, '')
+  app.eval(`undoManualReparent()`)
+  assert.equal(canonicalRecordOf(app, 'B14-TT-7001-02A').ssmParentTag, 'MTR-9001', 'first undo restores the earlier override')
+  app.eval(`undoManualReparent()`)
+  assert.equal(canonicalRecordOf(app, 'B14-TT-7001-02A').ssmParentTag, 'B14-AHU-7001', 'second undo removes the override entirely — inferred claim returns')
+  const cleared = JSON.parse(app.eval(`
+    JSON.stringify(((activeProfile().overrides.relationships)||[]).some(o => /TT-7001-02A/.test(o.equipment)))
+  `))
+  assert.equal(cleared, false, 'no override remains after full undo')
+  app.eval(`redoManualReparent()`)
+  assert.equal(canonicalRecordOf(app, 'B14-TT-7001-02A').ssmParentTag, 'MTR-9001', 'redo re-applies the first move')
+  const stacks = JSON.parse(app.eval(`JSON.stringify({ undo: S.massageUndo.length, redo: S.massageRedo.length })`))
+  assert.deepEqual(stacks, { undo: 1, redo: 1 })
+})
+
+test('a new move clears the redo stack; manual badge keys track overrides', async () => {
+  const app = await buildProjectApp(EXTO)
+  app.eval(`applyManualReparent('B14-TT-7001-02A','MTR-9001')`)
+  app.eval(`undoManualReparent()`)
+  app.eval(`applyManualReparent('B14-PT-7001-01','B14-AHU-7001')`)
+  const stacks = JSON.parse(app.eval(`JSON.stringify({ undo: S.massageUndo.length, redo: S.massageRedo.length })`))
+  assert.deepEqual(stacks, { undo: 1, redo: 0 }, 'new move invalidates redo history')
+  const keys = JSON.parse(app.eval(`JSON.stringify([...manualOverrideKeySet()])`))
+  assert.ok(keys.includes('b14-pt-7001-01'.replace(/-/g, '')) || keys.some(k => /pt7001/.test(k.replace(/[^a-z0-9]/g, ''))),
+    `override key present for the badge, got: ${keys}`)
+})
+
 test('equipment rows render draggable; folder rows do not', async () => {
   const app = await buildProjectApp(EXTO)
   const rows = JSON.parse(app.eval(`

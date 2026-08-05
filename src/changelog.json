@@ -1,5 +1,11 @@
 [
   {
+    "version": "1.0.0",
+    "date": "2026-08-05T00:00:00Z",
+    "type": "major",
+    "notes": "- Added undo/redo for hierarchy massaging: toolbar buttons plus Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z, restoring prior overrides exactly (including walking back to derived placement)\n- Manually placed rows now carry a pin badge so hand-made moves are visible at a glance\n- Spring-loaded folders: hovering a collapsed branch mid-drag opens it\n- Fixed a rebuild feedback loop where the resolved register re-ingested its own output as evidence, preventing undo from restoring derived placements\n- 1.0: the full loop is complete \u2014 documents in, hierarchy compiled with evidence and self-graded inference, weak spots proposed, drag-and-drop massaging with undo, and every correction saved as durable profile knowledge"
+  },
+  {
     "version": "0.9.0",
     "date": "2026-08-05T00:00:00Z",
     "type": "feature",

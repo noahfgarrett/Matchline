@@ -1,7 +1,7 @@
 import { $, KEYSEP } from './core/text.js'
 import { cleanTag } from './core/tags.js'
 
-export const S={screen:'upload',files:[],selected:new Set(),cableSel:new Set(),pmdSel:new Set(),melSel:new Set(),p6Sel:new Set(),lineSel:new Set(),extoSel:new Set(),imSel:new Set(),override:{},aoaCache:new Map(),
+export const S={screen:'upload',files:[],selected:new Set(),cableSel:new Set(),pmdSel:new Set(),melSel:new Set(),p6Sel:new Set(),lineSel:new Set(),extoSel:new Set(),imSel:new Set(),override:{},aoaCache:new Map(),massageUndo:[],massageRedo:[],
   roots:[],rawCombined:null,sheets:[],ssmCombined:[],nodeById:new Map(),stats:null,search:'',idOnly:false,
   showSpares:true,showSpaces:true,showDeps:true,showPmdMatches:true,deps:new Map(),depDetail:new Map(),hasCable:false,
   cableStruckTags:new Set(),

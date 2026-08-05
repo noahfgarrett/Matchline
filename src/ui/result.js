@@ -8,7 +8,7 @@ import { kidsOf, nodeDep, nodeHidden } from '../profile/classify.js'
 import { activeModes, modeById } from '../hierarchy/modes.js'
 import { activeHierarchyNodeMap, activeHierarchyRoots, activeHierarchyStats } from '../hierarchy/tree.js'
 import { canonicalRecord } from '../hierarchy/projection.js'
-import { acceptPlacement, activePlacements, applyManualReparent, equipmentRole, firstSystemParentTag, melResolvedRecord, movePlacementBranch, nodePath, placementCandidates, placementExpectedParentRole, rawSubtreeCount, resetSourceParentClaims, undoPlacement } from '../hierarchy/build.js'
+import { acceptPlacement, activePlacements, applyManualReparent, equipmentRole, firstSystemParentTag, manualOverrideKeySet, melResolvedRecord, movePlacementBranch, nodePath, placementCandidates, placementExpectedParentRole, rawSubtreeCount, redoManualReparent, resetSourceParentClaims, undoManualReparent, undoPlacement } from '../hierarchy/build.js'
 import { comparePanelCacheKey, placementState, refreshCompare, refreshReview, renderComparePanel, renderReviewPanel, reviewPanelCacheKey } from '../review/panels.js'
 import { exportExtoSSMXlsx, exportHierarchyXlsx, exportOutlineTxt, exportSSMXlsx } from '../export/xlsx.js'
 import { go, render } from './screens.js'
@@ -77,6 +77,8 @@ export function renderResult(){
       <div class="toolbar">
         <button class="btn sm" id="expandAll">${ic('chevrons-down')}Expand all</button>
         <button class="btn sm" id="collapseAll">${ic('chevrons-up')}Collapse</button>
+        <button class="btn sm icon-btn" id="massageUndo" title="Undo placement move (${navigator.platform&&navigator.platform.includes('Mac')?'⌘':'Ctrl+'}Z)" aria-label="Undo placement move" ${S.massageUndo.length?'':'disabled'}>${ic('undo-2')}</button>
+        <button class="btn sm icon-btn" id="massageRedo" title="Redo placement move (⇧${navigator.platform&&navigator.platform.includes('Mac')?'⌘':'Ctrl+'}Z)" aria-label="Redo placement move" ${S.massageRedo.length?'':'disabled'}>${ic('redo-2')}</button>
         <div class="exp"><span class="lab">Export</span>
           <label class="selectctl" title="Hierarchy view for hierarchy and outline exports"><select id="hierarchyExportMode" aria-label="Hierarchy export view">
             ${activeModes(activeProfile()).map(mode=>`<option value="${esc(mode.id)}" ${S.hierarchyExportMode===mode.id?'selected':''}>${esc(mode.name)}</option>`).join('')}
@@ -107,6 +109,8 @@ export function wireResult(){
   $('#backSheets').onclick=()=>go('sheets');
   $('#startover').onclick=()=>{S.roots=[];S.stats=null;S.workCopy=null;S.wcRows=null;S.canonicalModel=new Map();S.projections={};S.profileNeedsRebuild=false;resetSourceParentClaims();clearResultCache();go('upload');};
   $('#expandAll').onclick=()=>expandAll();
+  const massageUndoBtn=$('#massageUndo');if(massageUndoBtn)massageUndoBtn.onclick=()=>undoManualReparent();
+  const massageRedoBtn=$('#massageRedo');if(massageRedoBtn)massageRedoBtn.onclick=()=>redoManualReparent();
   $('#collapseAll').onclick=()=>collapseAll();
   $('#expHier').onclick=exportHierarchyXlsx;
   $('#expExto').onclick=exportExtoSSMXlsx;
@@ -327,6 +331,8 @@ export function rowInner(node,prefixArr,isLast,isRoot,hl){
      suppressed every placement flag in a view that legitimately has them. */
   const placementBtn=node.placementId?`<button class="placement-flag icon-btn" type="button" data-placement="${node.placementId}" title="Review this branch placement" aria-label="Review placement for ${esc(node.name)}">${ic('triangle-alert')}</button>`:'';
   const kindClass=node.kind?' kind-'+node.kind:'';
+  const manualBadge=(node.kind==='equipment'&&manualOverrideKeySet().has(tagKey(node.name)))
+    ?`<span class="badge-manual" title="Manually placed — drag to change, or undo">${ic('pin')}</span>`:'';
   if(isRoot){
     return `<div class="row root${kindClass} ${hasKids?'':'leafrow'}" data-id="${node.id}" ${hasKids?'data-exp="1"':''} tabindex="0" role="treeitem" aria-expanded="${hasKids?'false':''}">
       ${hasKids?`<span class="twist">${ic('chevron-right')}</span>`:'<span class="twist"></span>'}
@@ -339,7 +345,7 @@ export function rowInner(node,prefixArr,isLast,isRoot,hl){
     <span class="gut">${gutterHtml(prefixArr,isLast)}</span>
     ${hasKids?`<span class="twist">${ic('chevron-right')}</span>`:'<span class="twist"></span>'}
     ${marker}<span class="lbl copy-tag ${hasKids?'':'lbl-leaf'}" data-copy-tag="${esc(node.name)}"${labelTitle}>${lblHtml(node.name,hl)}</span>
-    ${depBadge}${pmdBadge}${hasKids?`<span class="cnt">${kids.length}</span>`:''}${placementBtn}${infoBtn}</div>`;
+    ${manualBadge}${depBadge}${pmdBadge}${hasKids?`<span class="cnt">${kids.length}</span>`:''}${placementBtn}${infoBtn}</div>`;
 }
 export function makeNode(node,prefixArr,isLast,isRoot){
   node._prefix=prefixArr;node._isLast=isLast;node._isRoot=isRoot;node._built=false;
@@ -352,7 +358,9 @@ export function wireTree(tree){
   wireCopyTags(tree);tree.addEventListener('click',onTreeClick);tree.addEventListener('keydown',onTreeKey);
   tree.addEventListener('dragstart',onTreeDragStart);tree.addEventListener('dragover',onTreeDragOver);
   tree.addEventListener('dragleave',onTreeDragLeave);tree.addEventListener('drop',onTreeDrop);
-  tree.addEventListener('dragend',clearDragState);tree._wired=true;
+  tree.addEventListener('dragend',clearDragState);
+  if(!window.__massageKeysWired&&typeof window.addEventListener==='function'){window.__massageKeysWired=true;window.addEventListener('keydown',onMassageKeys);}
+  tree._wired=true;
 }
 export function renderTreeCollapsed(){
   cancelExpand();
@@ -385,11 +393,21 @@ export function toggleNode(row,node){if(row.classList.contains('open'))collapseN
    reparent it, or onto a system folder to make it a root. The move saves as a
    relationship override in the active profile and outranks every claim.
    Validation lives in applyManualReparent (cycles, cross-block, unknown tags). */
-export let _dragState=null;
+export let _dragState=null,_springTimer=0,_springRow=null;
 export function clearDragState(){
   $$('#tree .row.drag-over').forEach(row=>row.classList.remove('drag-over'));
   $$('#tree .row.drag-src').forEach(row=>row.classList.remove('drag-src'));
+  clearTimeout(_springTimer);_springRow=null;
   _dragState=null;
+}
+/* Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z on the result screen. */
+export function onMassageKeys(e){
+  if(S.screen!=='result')return;
+  const target=e.target;
+  if(target&&(target.tagName==='INPUT'||target.tagName==='TEXTAREA'||target.isContentEditable))return;
+  if(!(e.metaKey||e.ctrlKey)||e.key.toLowerCase()!=='z')return;
+  e.preventDefault();
+  if(e.shiftKey)redoManualReparent();else undoManualReparent();
 }
 export function onTreeDragStart(e){
   const row=e.target.closest('.row');if(!row)return;
@@ -412,6 +430,13 @@ export function onTreeDragOver(e){
   e.preventDefault();e.dataTransfer.dropEffect='move';
   $$('#tree .row.drag-over').forEach(row=>{if(row!==target.row)row.classList.remove('drag-over');});
   target.row.classList.add('drag-over');
+  /* spring-loaded folders: hovering a collapsed branch mid-drag opens it */
+  if(target.row.dataset.exp&&!target.row.classList.contains('open')){
+    if(_springRow!==target.row){
+      clearTimeout(_springTimer);_springRow=target.row;
+      _springTimer=setTimeout(()=>{expandNode(target.row,target.node);},500);
+    }
+  }else if(_springRow&&_springRow!==target.row){clearTimeout(_springTimer);_springRow=null;}
 }
 export function onTreeDragLeave(e){
   const row=e.target.closest('.row');if(row)row.classList.remove('drag-over');
