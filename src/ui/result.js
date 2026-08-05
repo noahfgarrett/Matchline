@@ -8,7 +8,7 @@ import { kidsOf, nodeDep, nodeHidden } from '../profile/classify.js'
 import { activeModes, modeById } from '../hierarchy/modes.js'
 import { activeHierarchyNodeMap, activeHierarchyRoots, activeHierarchyStats } from '../hierarchy/tree.js'
 import { canonicalRecord } from '../hierarchy/projection.js'
-import { acceptPlacement, activePlacements, applyManualReparent, equipmentRole, firstSystemParentTag, manualOverrideKeySet, melResolvedRecord, movePlacementBranch, nodePath, placementCandidates, placementExpectedParentRole, rawSubtreeCount, redoManualReparent, resetSourceParentClaims, undoManualReparent, undoPlacement } from '../hierarchy/build.js'
+import { acceptPlacement, activePlacements, applyManualReparent, applyManualReparentBatch, equipmentRole, firstSystemParentTag, manualOverrideKeySet, melResolvedRecord, movePlacementBranch, nodePath, placementCandidates, placementExpectedParentRole, rawSubtreeCount, redoManualReparent, resetSourceParentClaims, similarNestingMoves, undoManualReparent, undoPlacement } from '../hierarchy/build.js'
 import { comparePanelCacheKey, placementState, refreshCompare, refreshReview, renderComparePanel, renderReviewPanel, reviewPanelCacheKey } from '../review/panels.js'
 import { exportExtoSSMXlsx, exportHierarchyXlsx, exportOutlineTxt, exportSSMXlsx } from '../export/xlsx.js'
 import { go, render } from './screens.js'
@@ -446,7 +446,33 @@ export function onTreeDrop(e){
   clearDragState();
   if(!target||!state)return;
   e.preventDefault();
-  if(applyManualReparent(state.tag,target.asRoot?'':target.node.name))revealCanonicalRecord(state.canonicalKey);
+  const parentName=target.asRoot?'':target.node.name;
+  /* Compute the generalization BEFORE applying: the drag itself changes the
+     dragged record's state, but siblings are judged against pre-drop reality. */
+  const similar=target.asRoot?[]:similarNestingMoves(state.tag,parentName);
+  if(!applyManualReparent(state.tag,parentName))return;
+  revealCanonicalRecord(state.canonicalKey);
+  if(similar.length)offerSimilarMoves(state.tag,parentName,similar);
+}
+/* Drag-to-teach prompt: one drag can nest every sibling of the same kind, each
+   matched to its own parent instance by tag numbers. */
+export function offerSimilarMoves(draggedTag,parentTag,similar){
+  const back=$('#modal');if(!back)return;
+  $('#modalTitle').textContent='Apply to similar tags?';
+  const sample=similar.slice(0,6).map(move=>`<div class="mono" style="font-size:12px">${esc(move.tag)} → ${esc(move.parent)}</div>`).join('');
+  $('#modalMsg').innerHTML=`Nested <b>${esc(draggedTag)}</b> under <b>${esc(parentTag)}</b>.<br>`+
+    `${similar.length} similar tag${similar.length===1?'':'s'} ha${similar.length===1?'s':'ve'} a matching parent in their own system (by tag numbers):<br><br>${sample}`+
+    (similar.length>6?`<div class="mono" style="font-size:12px">… and ${similar.length-6} more</div>`:'');
+  const acts=$('#modalActions');
+  acts.innerHTML=`<button class="btn ghost" data-v="one">Just this one</button>
+    <button class="btn primary" data-v="all">${ic('check-check')}Nest ${similar.length} similar</button>`;
+  const close=apply=>{back.classList.remove('show');back.onclick=null;document.removeEventListener('keydown',onKey);
+    if(apply)applyManualReparentBatch(similar);};
+  acts.querySelectorAll('button').forEach(btn=>btn.onclick=()=>close(btn.dataset.v==='all'));
+  const onKey=event=>{if(event.key==='Escape')close(false);};
+  back.onclick=event=>{if(event.target===back)close(false);};
+  document.addEventListener('keydown',onKey);
+  back.classList.add('show');
 }
 export function onTreeClick(e){
   const placement=e.target.closest('.placement-flag');

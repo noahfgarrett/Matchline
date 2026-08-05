@@ -10,8 +10,10 @@ import { withLoading, toast } from '../ui/progress.js'
 import { resolveCols, cableInfo, PMD_FIELDS, pmdInfo, pmdPanelMatchParts, pmdPanelKey, melInfo } from '../io/detect.js'
 import { getAoa, cellIsStruck, rowTag, collectLoadDescriptionTags } from '../io/workbook.js'
 import { rowToPath, loadSsmRelation, insertPath, addLoadChild, finalize, computeStats, countTreeDependencies } from './tree.js'
-import { rebuildProfileProjections } from './projection.js'
+import { rebuildProfileProjections, canonicalRecord } from './projection.js'
 import { activeModes } from './modes.js'
+import { recordPartitionKey } from '../compiler/fold.js'
+import { coordsOf, sharedRun } from '../compiler/nesting.js'
 
 /* ---- build ---- */
 export function resetSourceParentClaims(){
@@ -1293,36 +1295,101 @@ export async function refreshPlacementModels(){
    claim, and survives rebuilds. An empty parent makes the record an explicit
    root of its own system block. Cross-block moves are refused — that
    relationship belongs in Dependencies per the SOP. */
-export function applyManualReparent(equipmentTag,newParentTag){
-  const record=canonicalRecord(equipmentTag);
-  if(!record){toast('Unknown equipment: '+clean(equipmentTag));return false;}
-  const parentTag=cleanRegisterTag(newParentTag||'');
-  if(parentTag){
-    const parent=canonicalRecord(parentTag);
-    if(!parent){toast('Unknown parent: '+parentTag);return false;}
-    if(parent.key===record.key){toast('A tag cannot nest under itself');return false;}
-    const seen=new Set([record.key]);
-    for(let cursor=parent;cursor;cursor=canonicalRecord(cursor.ssmParentTag||'')){
-      if(seen.has(cursor.key)){toast('That move would create a cycle');return false;}
-      seen.add(cursor.key);
-      if(!cursor.ssmParentTag)break;
-    }
-    for(const attr of ['building','discipline','system']){
-      if(clean(record[attr])!==clean(parent[attr])){
-        toast('Different system block — cross-system relationships belong in Dependencies');return false;
-      }
-    }
+export function validateReparent(record,parentTag){
+  if(!parentTag)return '';
+  const parent=canonicalRecord(parentTag);
+  if(!parent)return 'Unknown parent: '+parentTag;
+  if(parent.key===record.key)return 'A tag cannot nest under itself';
+  const seen=new Set([record.key]);
+  for(let cursor=parent;cursor;cursor=canonicalRecord(cursor.ssmParentTag||'')){
+    if(seen.has(cursor.key))return 'That move would create a cycle';
+    seen.add(cursor.key);
+    if(!cursor.ssmParentTag)break;
   }
-  const profile=activeProfile(),override={id:'massage-'+record.key,equipment:cleanTag(record.tag),parent:parentTag,savedAt:new Date().toISOString()};
-  const before=relationshipOverrideFor(record.key);
-  setRelationshipOverrideState(profile,record.key,override);
-  S.massageUndo.push({profileId:profile.id,key:record.key,tag:record.tag,before,after:override});
+  for(const attr of ['building','discipline','system']){
+    if(clean(record[attr])!==clean(parent[attr]))return 'Different system block — cross-system relationships belong in Dependencies';
+  }
+  return '';
+}
+function commitMassageMoves(moves,summary){
+  const profile=activeProfile(),applied=[];
+  for(const move of moves){
+    const override={id:'massage-'+move.record.key,equipment:cleanTag(move.record.tag),parent:move.parentTag,savedAt:new Date().toISOString()};
+    const before=relationshipOverrideFor(move.record.key);
+    setRelationshipOverrideState(profile,move.record.key,override);
+    applied.push({key:move.record.key,tag:move.record.tag,before,after:override});
+  }
+  if(!applied.length)return 0;
+  S.massageUndo.push({profileId:profile.id,moves:applied});
   if(S.massageUndo.length>100)S.massageUndo.shift();
   S.massageRedo=[];
   rebuildProfileProjections();
   if(typeof renderResult==='function'&&S.screen==='result')renderResult();
-  toast(parentTag?record.tag+' nested under '+parentTag:record.tag+' made a system root'+(profile.locked?' for this session':''));
+  toast(summary+(profile.locked?' (this session only)':''));
+  return applied.length;
+}
+export function applyManualReparent(equipmentTag,newParentTag){
+  const record=canonicalRecord(equipmentTag);
+  if(!record){toast('Unknown equipment: '+clean(equipmentTag));return false;}
+  const parentTag=cleanRegisterTag(newParentTag||'');
+  const error=validateReparent(record,parentTag);
+  if(error){toast(error);return false;}
+  commitMassageMoves([{record,parentTag}],parentTag?record.tag+' nested under '+parentTag:record.tag+' made a system root');
   return true;
+}
+/* Drag-to-teach: one drag generalizes to every sibling of the same kind. Kind
+   comes from the learned Equipment Classification (or the digit-masked
+   description); each sibling gets ITS OWN parent instance — the record of the
+   parent's kind in the sibling's system block sharing a tag-number run. */
+function massageMatchKey(record){
+  const cls=clean(record.attributes&&record.attributes.equipmentClassification);
+  if(cls)return 'c:'+cls.toLowerCase();
+  const description=record.description||(record.mel&&record.mel.description)||'';
+  const masked=clean(description).toLowerCase().replace(/\d+/g,'#');
+  return masked?'d:'+masked:'';
+}
+export function similarNestingMoves(equipmentTag,parentTag){
+  const dragged=canonicalRecord(equipmentTag),parent=canonicalRecord(parentTag);
+  if(!dragged||!parent)return [];
+  const childKind=massageMatchKey(dragged),parentKind=massageMatchKey(parent);
+  if(!childKind||!parentKind)return [];
+  const manualKeys=manualOverrideKeySet();
+  const byPartition=new Map();
+  for(const record of S.canonicalModel.values()){
+    if(!record.includeInRegister||record.isSyntheticRollup)continue;
+    const partition=recordPartitionKey(record);if(!partition)continue;
+    if(!byPartition.has(partition))byPartition.set(partition,[]);
+    byPartition.get(partition).push(record);
+  }
+  const moves=[];
+  for(const candidate of S.canonicalModel.values()){
+    if(candidate.key===dragged.key||!candidate.includeInRegister||candidate.isSyntheticRollup)continue;
+    if(massageMatchKey(candidate)!==childKind)continue;
+    if(manualKeys.has(candidate.key))continue;
+    const partition=recordPartitionKey(candidate);if(!partition)continue;
+    const peers=(byPartition.get(partition)||[]).filter(peer=>peer.key!==candidate.key&&massageMatchKey(peer)===parentKind);
+    if(!peers.length)continue;
+    const rc=coordsOf(candidate.tag);
+    const scored=peers.map(peer=>[peer,sharedRun(rc,coordsOf(peer.tag))]).filter(([,run])=>run>=1).sort((a,b)=>b[1]-a[1]);
+    if(!scored.length)continue;
+    const [best,run]=scored[0];
+    if(scored.some(entry=>entry[0]!==best&&entry[1]===run))continue;
+    if(tagKey(candidate.ssmParentTag)===best.key)continue;
+    if(validateReparent(candidate,best.tag))continue;
+    moves.push({tag:candidate.tag,parent:best.tag});
+  }
+  return moves;
+}
+export function applyManualReparentBatch(moves){
+  const prepared=[];
+  for(const move of moves||[]){
+    const record=canonicalRecord(move.tag);if(!record)continue;
+    const parentTag=cleanRegisterTag(move.parent||'');
+    if(validateReparent(record,parentTag))continue;
+    prepared.push({record,parentTag});
+  }
+  if(!prepared.length)return 0;
+  return commitMassageMoves(prepared,'Nested '+prepared.length+' similar tag'+(prepared.length===1?'':'s'));
 }
 export function relationshipOverrideFor(key){
   const profile=activeProfile();
@@ -1343,12 +1410,14 @@ function shiftMassage(fromStack,toStack,useBefore,label){
   if(!entry)return null;
   const profile=activeProfile();
   if(entry.profileId!==profile.id){toast('The active profile changed since that move');return null;}
-  setRelationshipOverrideState(profile,entry.key,useBefore?entry.before:entry.after);
+  for(const move of entry.moves)setRelationshipOverrideState(profile,move.key,useBefore?move.before:move.after);
   toStack.push(entry);
   rebuildProfileProjections();
   if(typeof renderResult==='function'&&S.screen==='result')renderResult();
-  const state=useBefore?entry.before:entry.after;
-  toast(label+': '+entry.tag+(state?(clean(state.parent)?' under '+state.parent:' as a system root'):' back to derived placement'));
+  if(entry.moves.length===1){
+    const move=entry.moves[0],state=useBefore?move.before:move.after;
+    toast(label+': '+move.tag+(state?(clean(state.parent)?' under '+state.parent:' as a system root'):' back to derived placement'));
+  }else toast(label+': '+entry.moves.length+' tags');
   return entry;
 }
 export function undoManualReparent(){return shiftMassage(S.massageUndo,S.massageRedo,true,'Undid move');}

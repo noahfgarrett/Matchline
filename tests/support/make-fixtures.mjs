@@ -62,6 +62,7 @@ const SHEETS = {
       ['B14-TT-7001-02A', 'Temperature transmitter', '2201', 'B14', '', 'Mechanical', 'Screening', 'New'],
       ['B14-RIO-6500-PS1', 'RIO power supply', '650', 'B14', '', 'I&C', 'FMS Network', 'New'],
       ['B14-PT-7001-01', 'Pressure transmitter', '2201', 'B14', '', 'Mechanical', 'Screening', 'New'],
+      ['B14-PT-7001-02', 'Pressure transmitter', '2201', 'B14', '', 'Mechanical', 'Screening', 'New'],
     ],
   },
   /* Optional EXTO-layer fixtures: a prior registry export (item-master

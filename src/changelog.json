@@ -1,5 +1,11 @@
 [
   {
+    "version": "1.1.0",
+    "date": "2026-08-05T00:00:00Z",
+    "type": "feature",
+    "notes": "- Drag-to-teach: after nesting one tag, the app offers to nest every sibling of the same kind (learned classification or description pattern), each matched to its own parent instance by shared tag numbers\n- The generalization shows exactly what it will do (tag \u2192 parent list) before applying, applies as a single undo step, and skips anything ambiguous, already placed by hand, or already correct"
+  },
+  {
     "version": "1.0.0",
     "date": "2026-08-05T00:00:00Z",
     "type": "major",
