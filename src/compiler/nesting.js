@@ -2,6 +2,7 @@ import { clean } from '../core/text.js'
 import { S, tagKey } from '../state.js'
 import { extoRegistryRows } from '../io/exto.js'
 import { recordPartitionKey } from './fold.js'
+import { activeProfile } from '../profile/schema.js'
 
 /* ---- Graded nesting inference (spec §5) ----
    Equipment Description decides the ROLE (parent-capable equipment vs child
@@ -70,10 +71,28 @@ function pickParent(item, peers, model) {
     runnersUp: scored.slice(1, 3).map(([peer]) => peer.tag) }
 }
 
+/* Rebuild a working model from the plain form persisted in the profile, so the
+   registry's rules keep applying in sessions where it is not uploaded. */
+function hydrateNestingModel(plain) {
+  const roles = plain.roles || {}, affinity = plain.affinity || {}, grades = plain.grades || {}
+  const ratio = cls => { const [p, c] = roles[cls] || [0, 0]; return (p + c) ? p / (p + c) : 0 }
+  return {
+    learned: true,
+    isChildClass: cls => !!cls && ratio(cls) < 0.05 && ((roles[cls] || [0, 0])[1]) >= NEST_GRADE_MIN_ROWS,
+    isParentCapable: cls => !!cls && ratio(cls) >= 0.15 && ((roles[cls] || [0, 0])[0]) >= 5,
+    affinity: (childClass, parentClass) => affinity[childClass + '|' + parentClass] || 0,
+    gradeOf: cls => grades[cls] || 'propose',
+  }
+}
+
 export function learnNestingModel() {
   const rows = []
   for (const key of S.extoSel || []) rows.push(...extoRegistryRows(key))
-  if (!rows.length) return { learned: false }
+  if (!rows.length) {
+    const persisted = activeProfile().learnedModels
+    if (persisted && persisted.nesting) return hydrateNestingModel(persisted.nesting)
+    return { learned: false }
+  }
   const byId = new Map()
   for (const row of rows) { const k = tagKey(row.equipmentId); if (k && !byId.has(k)) byId.set(k, row) }
   const asParent = new Map(), asChild = new Map(), affinity = new Map(), truthPairs = []
@@ -122,6 +141,14 @@ export function learnNestingModel() {
     if (!s || s.predicted < NEST_GRADE_MIN_ROWS) return 'propose'
     return (s.correct / s.predicted) >= NEST_GRADE_MIN_PRECISION ? 'claim' : 'propose'
   }
+  /* Plain form for profile persistence: role counts, affinities, and the
+     precomputed self-grades. */
+  const plainRoles = {}
+  for (const cls of new Set([...asParent.keys(), ...asChild.keys()]))
+    plainRoles[cls] = [asParent.get(cls) || 0, asChild.get(cls) || 0]
+  const plainGrades = {}
+  for (const cls of scores.keys()) plainGrades[cls] = model.gradeOf(cls)
+  model.plain = { roles: plainRoles, affinity: Object.fromEntries(affinity), grades: plainGrades }
   return model
 }
 

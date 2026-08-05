@@ -76,6 +76,15 @@ test('a MEL-only compile still builds the register (no electrical sources at all
   assert.ok(registerRows >= 10, `register populated from the MEL alone, got ${registerRows}`)
 })
 
+test('a MEL with preamble rows (headers in row 3) still compiles alone', async () => {
+  const app = await buildProjectApp(['compiler-mel-row3.xlsx'])
+  const chiller = canonicalRecordOf(app, 'B31-CH-101-01')
+  assert.ok(chiller, 'row-3 headers detected; MEL-only build produced records')
+  assert.equal(chiller.system, '101 Chilled Water')
+  const pump = canonicalRecordOf(app, 'B31-PMP-101-01')
+  assert.equal(pump.ssmParentTag, 'B31-CH-101-01', 'System Parent assertion nests without any electrical source')
+})
+
 test('a MEL without the new columns still detects, with the new fields absent', () => {
   const info = detectMel(['Equipment Tag', 'UPN', 'Bldg'])
   assert.ok(info)

@@ -85,6 +85,29 @@ test('drag-to-teach: one move generalizes to siblings of the same kind, each mat
   assert.equal(canonicalRecordOf(app, 'B14-PT-7001-01').ssmParentTag, 'B14-AHU-7001', 'the original drag survives its own undo entry')
 })
 
+test('learned rules persist into the profile and apply without the registry', async () => {
+  const app = await buildProjectApp(EXTO)
+  const persisted = JSON.parse(app.eval(`JSON.stringify({
+    hasDescClass: !!(activeProfile().learnedModels && Object.keys(activeProfile().learnedModels.descClass).length),
+    hasNesting: !!(activeProfile().learnedModels && activeProfile().learnedModels.nesting),
+    ttGrade: activeProfile().learnedModels.nesting.grades.TT || null })`))
+  assert.equal(persisted.hasDescClass, true, 'classification table persisted')
+  assert.equal(persisted.hasNesting, true, 'nesting model persisted')
+  assert.equal(persisted.ttGrade, 'claim')
+  // drop the registry and rebuild: the profile-persisted rules must keep working
+  await app.evalAsync(`S.extoSel.clear(); await buildHierarchy(); return '';`)
+  const tt = canonicalRecordOf(app, 'B14-TT-7001-02A')
+  assert.equal(tt.ssmParentTag, 'B14-AHU-7001', 'hydrated model still nests the TT (claim grade)')
+})
+
+test('the search matcher pairs an added tag to its own parent, falling back to the reference', async () => {
+  const app = await buildProjectApp(EXTO)
+  const matched = JSON.parse(app.eval(`JSON.stringify(nestingMatchFor('B14-PT-7001-02','B14-AHU-7001'))`))
+  assert.deepEqual(matched, { tag: 'B14-PT-7001-02', parent: 'B14-AHU-7001' }, 'number-matched instance')
+  const cross = JSON.parse(app.eval(`JSON.stringify(nestingMatchFor('B14-RIO-6500','B14-AHU-7001'))`))
+  assert.equal(cross, null, 'cross-block additions are refused')
+})
+
 test('equipment rows render draggable; folder rows do not', async () => {
   const app = await buildProjectApp(EXTO)
   const rows = JSON.parse(app.eval(`

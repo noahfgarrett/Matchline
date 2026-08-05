@@ -1,7 +1,7 @@
 import { clean, natCmp, KEYSEP } from '../core/text.js'
 import { cleanRegisterTag, normSep } from '../core/tags.js'
 import { S, tagKey, clearResultCache } from '../state.js'
-import { profileTrimmedTag, activeProfile, profileAssignments, profileAttributeOverride } from '../profile/schema.js'
+import { profileTrimmedTag, activeProfile, persistProfiles, profileAssignments, profileAttributeOverride } from '../profile/schema.js'
 import { isSpareName, isSpaceName, nodeDep } from '../profile/classify.js'
 import { isSystemName, legacyEquipmentRole, melResolvedRecord, melSources, melTagLookup, pmdExportTag, ssmResolve, activePlacements } from './build.js'
 import { groupingLevels, activeModes } from './modes.js'
@@ -12,7 +12,7 @@ import { foldClaimsByPartition, recordPartitionKey } from '../compiler/fold.js'
 import { recordCompilerCableEdges, recordCompilerMelClaims } from '../compiler/edges.js'
 import { assignMilestones } from '../compiler/ladders.js'
 import { synthesizeLineRollups, finalizeLineRollups } from '../compiler/rollups.js'
-import { learnItemMasterTable, assignItemMasters, assignClassifications } from '../compiler/itemmasters.js'
+import { learnItemMasterTable, assignItemMasters, assignClassifications, serializeDescClass } from '../compiler/itemmasters.js'
 import { learnNestingModel, inferNesting, attachControlsRefs } from '../compiler/nesting.js'
 import { computeSequence, upnPrecedence } from '../compiler/sequence.js'
 
@@ -222,7 +222,19 @@ export function buildCanonicalModel(){
     compilerImTable=learnItemMasterTable();
     S.imAudit=compilerImTable.audit||[];
     assignClassifications(records,compilerImTable);
-    inferNesting(records,learnNestingModel());
+    const nestingModel=learnNestingModel();
+    inferNesting(records,nestingModel);
+    /* Persist freshly learned rules into the profile so later sessions apply
+       them without re-uploading the registry. learnedModels is excluded from
+       the execution signature, so this never triggers a rebuild flag; the
+       write only happens when the learning actually changed. */
+    if(compilerImTable.fresh&&nestingModel.plain){
+      const learnedModels={version:1,descClass:serializeDescClass(compilerImTable.descClass),nesting:nestingModel.plain};
+      const currentProfile=activeProfile();
+      if(!currentProfile.locked&&JSON.stringify(currentProfile.learnedModels||null)!==JSON.stringify(learnedModels)){
+        currentProfile.learnedModels=learnedModels;persistProfiles();
+      }
+    }
   }else{
     S.imAudit=[];
   }

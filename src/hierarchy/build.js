@@ -1194,7 +1194,7 @@ export async function buildHierarchy(expectedProfileRevision=S.profileBuildRevis
     toast('Build stopped safely. Your previous hierarchy is still available.');
     return false;
   }
-  if(!S.roots.length){toast('No hierarchy rows found in the selected tabs');return;}
+  if(!S.roots.length&&!S.ssmCombined.length){toast('No hierarchy rows found in the selected tabs');return;}
   S.search='';S.idOnly=false;S.showSpares=true;S.showSpaces=true;S.showDeps=!!(S.stats&&S.stats.deps);S.showPmdMatches=true;
   S.cmpFilter='all';S.cmpSearch='';S.cmpDiff='all';S.cmpSort=null;S.tab='tree';go('result');return true;
 }
@@ -1379,6 +1379,28 @@ export function similarNestingMoves(equipmentTag,parentTag){
     moves.push({tag:candidate.tag,parent:best.tag});
   }
   return moves;
+}
+/* Match one tag against a reference parent: prefer the number-matched instance
+   of the reference's kind in the tag's own block; fall back to the reference
+   itself when that placement is valid. Powers the drag-to-teach search box. */
+export function nestingMatchFor(tag,referenceParentTag){
+  const candidate=canonicalRecord(tag),reference=canonicalRecord(referenceParentTag);
+  if(!candidate||!reference||candidate.key===reference.key)return null;
+  const parentKind=massageMatchKey(reference);
+  const partition=recordPartitionKey(candidate);
+  if(parentKind&&partition){
+    const peers=[...S.canonicalModel.values()].filter(peer=>peer.key!==candidate.key&&peer.includeInRegister
+      &&!peer.isSyntheticRollup&&recordPartitionKey(peer)===partition&&massageMatchKey(peer)===parentKind);
+    const rc=coordsOf(candidate.tag);
+    const scored=peers.map(peer=>[peer,sharedRun(rc,coordsOf(peer.tag))]).filter(([,run])=>run>=1).sort((a,b)=>b[1]-a[1]);
+    if(scored.length){
+      const [best,run]=scored[0];
+      if(!scored.some(entry=>entry[0]!==best&&entry[1]===run)&&!validateReparent(candidate,best.tag))
+        return {tag:candidate.tag,parent:best.tag};
+    }
+  }
+  if(!validateReparent(candidate,reference.tag))return {tag:candidate.tag,parent:reference.tag};
+  return null;
 }
 export function applyManualReparentBatch(moves){
   const prepared=[];

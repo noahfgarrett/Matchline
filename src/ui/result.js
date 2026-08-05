@@ -8,7 +8,7 @@ import { kidsOf, nodeDep, nodeHidden } from '../profile/classify.js'
 import { activeModes, modeById } from '../hierarchy/modes.js'
 import { activeHierarchyNodeMap, activeHierarchyRoots, activeHierarchyStats } from '../hierarchy/tree.js'
 import { canonicalRecord } from '../hierarchy/projection.js'
-import { acceptPlacement, activePlacements, applyManualReparent, applyManualReparentBatch, equipmentRole, firstSystemParentTag, manualOverrideKeySet, melResolvedRecord, movePlacementBranch, nodePath, placementCandidates, placementExpectedParentRole, rawSubtreeCount, redoManualReparent, resetSourceParentClaims, similarNestingMoves, undoManualReparent, undoPlacement } from '../hierarchy/build.js'
+import { acceptPlacement, activePlacements, applyManualReparent, applyManualReparentBatch, nestingMatchFor, equipmentRole, firstSystemParentTag, manualOverrideKeySet, melResolvedRecord, movePlacementBranch, nodePath, placementCandidates, placementExpectedParentRole, rawSubtreeCount, redoManualReparent, resetSourceParentClaims, similarNestingMoves, undoManualReparent, undoPlacement } from '../hierarchy/build.js'
 import { comparePanelCacheKey, placementState, refreshCompare, refreshReview, renderComparePanel, renderReviewPanel, reviewPanelCacheKey } from '../review/panels.js'
 import { exportExtoSSMXlsx, exportHierarchyXlsx, exportOutlineTxt, exportSSMXlsx } from '../export/xlsx.js'
 import { go, render } from './screens.js'
@@ -39,6 +39,14 @@ export function hierarchyCrosslinkHtml(){
   return `<button class="btn view-crosslink" id="switchDetailView">${ic(next.icon||'folder-tree')}Show in ${esc(hierarchyModeLabel(next))}</button>`;
 }
 export function renderResult(){
+  /* MEL-only compiles have no electrical spine: the raw flow view is empty, so
+     default to the projected SSM view where the full register lives. */
+  if(!S.roots.length){
+    const projected=activeModes(activeProfile()).find(mode=>mode.executor!=='raw');
+    if(projected&&modeById(activeProfile(),S.hierarchyMode).executor==='raw'){
+      S.hierarchyMode=projected.id;S.hierarchyExportMode=projected.id;
+    }
+  }
   const st=activeHierarchyStats()||S.stats,placementCount=activePlacements().length;
   const tab=(t,label,icon,count)=>`<button class="tabbtn ${S.tab===t?'on':''}" data-tab="${t}">${ic(icon)}${esc(label)}${count!=null?`<span class="tabcount">${count}</span>`:''}</button>`;
   $('#view').innerHTML=`
@@ -455,19 +463,46 @@ export function onTreeDrop(e){
   if(similar.length)offerSimilarMoves(state.tag,parentName,similar);
 }
 /* Drag-to-teach prompt: one drag can nest every sibling of the same kind, each
-   matched to its own parent instance by tag numbers. */
+   matched to its own parent instance by tag numbers. Every match is a checkbox
+   the reviewer can flip, and the search box pulls in tags the matcher missed
+   (each shown with the parent it would get). */
 export function offerSimilarMoves(draggedTag,parentTag,similar){
   const back=$('#modal');if(!back)return;
   $('#modalTitle').textContent='Apply to similar tags?';
-  const sample=similar.slice(0,6).map(move=>`<div class="mono" style="font-size:12px">${esc(move.tag)} → ${esc(move.parent)}</div>`).join('');
-  $('#modalMsg').innerHTML=`Nested <b>${esc(draggedTag)}</b> under <b>${esc(parentTag)}</b>.<br>`+
-    `${similar.length} similar tag${similar.length===1?'':'s'} ha${similar.length===1?'s':'ve'} a matching parent in their own system (by tag numbers):<br><br>${sample}`+
-    (similar.length>6?`<div class="mono" style="font-size:12px">… and ${similar.length-6} more</div>`:'');
+  const itemHtml=move=>`<label class="simitem" style="display:flex;gap:8px;align-items:center;font-size:12px;padding:2px 0">
+    <input type="checkbox" checked data-tag="${esc(move.tag)}" data-parent="${esc(move.parent)}">
+    <span class="mono">${esc(move.tag)} → ${esc(move.parent)}</span></label>`;
+  $('#modalMsg').innerHTML=`Nested <b>${esc(draggedTag)}</b> under <b>${esc(parentTag)}</b>. `+
+    `Review the ${similar.length} matched sibling${similar.length===1?'':'s'} (each paired to its own parent by tag numbers):`+
+    `<div id="simList" style="max-height:220px;overflow:auto;margin:10px 0;padding:6px 8px;border:1px solid rgba(0,0,0,.12);border-radius:8px">${similar.map(itemHtml).join('')}</div>`+
+    `<input id="simSearch" type="text" placeholder="Search to add a tag the matcher missed…" autocomplete="off" spellcheck="false" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid rgba(0,0,0,.18);border-radius:8px">`+
+    `<div id="simResults" style="max-height:120px;overflow:auto"></div>`;
   const acts=$('#modalActions');
   acts.innerHTML=`<button class="btn ghost" data-v="one">Just this one</button>
-    <button class="btn primary" data-v="all">${ic('check-check')}Nest ${similar.length} similar</button>`;
+    <button class="btn primary" data-v="all">${ic('check-check')}Nest selected</button>`;
+  const listEl=$('#simList'),searchEl=$('#simSearch'),resultsEl=$('#simResults');
+  const listed=()=>new Set([...listEl.querySelectorAll('input[data-tag]')].map(input=>input.dataset.tag.toLowerCase()));
+  searchEl.oninput=()=>{
+    const query=searchEl.value.trim().toLowerCase();
+    resultsEl.innerHTML='';
+    if(query.length<2)return;
+    const have=listed();have.add(draggedTag.toLowerCase());
+    const matches=[...S.canonicalModel.values()]
+      .filter(record=>record.includeInRegister&&!record.isSyntheticRollup&&record.tag.toLowerCase().includes(query)&&!have.has(record.tag.toLowerCase()))
+      .slice(0,8);
+    resultsEl.innerHTML=matches.map(record=>`<button class="btn ghost sm" data-add="${esc(record.tag)}" style="display:block;width:100%;text-align:left;font-size:12px;margin-top:4px">${esc(record.tag)}</button>`).join('');
+    resultsEl.querySelectorAll('[data-add]').forEach(btn=>btn.onclick=()=>{
+      const move=nestingMatchFor(btn.dataset.add,parentTag);
+      if(!move){toast('No valid placement for '+btn.dataset.add+' from this drag');return;}
+      listEl.insertAdjacentHTML('beforeend',itemHtml(move));
+      btn.remove();
+    });
+  };
   const close=apply=>{back.classList.remove('show');back.onclick=null;document.removeEventListener('keydown',onKey);
-    if(apply)applyManualReparentBatch(similar);};
+    if(apply){
+      const chosen=[...listEl.querySelectorAll('input[data-tag]:checked')].map(input=>({tag:input.dataset.tag,parent:input.dataset.parent}));
+      if(chosen.length)applyManualReparentBatch(chosen);
+    }};
   acts.querySelectorAll('button').forEach(btn=>btn.onclick=()=>close(btn.dataset.v==='all'));
   const onKey=event=>{if(event.key==='Escape')close(false);};
   back.onclick=event=>{if(event.target===back)close(false);};
