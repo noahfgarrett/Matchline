@@ -27,7 +27,10 @@ function cloneData(value, seen = new Map()) {
 function deepFreeze(value, seen = new WeakSet()) {
   if (value == null || typeof value !== 'object' || seen.has(value)) return value
   seen.add(value)
-  for (const key of Reflect.ownKeys(value)) deepFreeze(value[key], seen)
+  /* Object.keys, not Reflect.ownKeys: cloneData guarantees plain data with
+     enumerable string keys only, and this walk covers every record and claim
+     in the snapshot — the symbol machinery was pure overhead at scale. */
+  for (const key of Object.keys(value)) deepFreeze(value[key], seen)
   return Object.freeze(value)
 }
 

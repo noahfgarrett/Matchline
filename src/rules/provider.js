@@ -4,6 +4,9 @@ import { migrateProfile } from './schema.js'
 
 let activeRuleProfile = null
 let cachedEngine = null
+/* Bumped whenever the active engine can change, so tag-level memo caches
+   (cleanTag, cleanRegisterTag) know their entries are stale. */
+let engineGeneration = 0
 
 function effectiveProfile() {
   /* Profiles are executable documents, not hints. The old provider silently
@@ -17,10 +20,16 @@ function effectiveProfile() {
 export function setRuleProfile(profile) {
   activeRuleProfile = profile || null
   cachedEngine = null
+  engineGeneration++
 }
 
 export function invalidateRuleEngine() {
   cachedEngine = null
+  engineGeneration++
+}
+
+export function ruleEngineGeneration() {
+  return engineGeneration
 }
 
 export function ruleEngine() {

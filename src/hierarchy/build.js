@@ -48,8 +48,8 @@ export async function buildMel(tick){
       S.melByTag.set(keyTag,rec);
       const normKey=normSep(tag);if(normKey&&!S.melByNorm.has(normKey))S.melByNorm.set(normKey,rec);
       indexMelLookupRecord(rec);
-      const suffixKeys=new Set([normSep(stripPowerVariant(tag))]),separators=[...stripPowerVariant(tag).matchAll(/[\s\-_\/.]+/g)];
-      for(const match of separators){const suffixKey=normSep(stripPowerVariant(tag).slice(match.index+match[0].length));if(suffixKey)suffixKeys.add(suffixKey);}
+      const variant=stripPowerVariant(tag),suffixKeys=new Set([normSep(variant)]);
+      for(const match of variant.matchAll(/[\s\-_\/.]+/g)){const suffixKey=normSep(variant.slice(match.index+match[0].length));if(suffixKey)suffixKeys.add(suffixKey);}
       for(const suffixKey of suffixKeys){if(!suffixKey)continue;const list=S.melBySuffix.get(suffixKey)||[];list.push(rec);S.melBySuffix.set(suffixKey,list);}
     }
   }

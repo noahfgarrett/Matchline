@@ -56,14 +56,14 @@ export async function captureScenario(scenario, htmlPath) {
     }
     for (const fx of __fixtures) {
       const bytes = new Uint8Array(fx.bytes);
-      const wb = XLSX.read(bytes, { type: 'array' });
+      const wb = XLSX.read(bytes, { type: 'array', dense: true });
       const id = 'f' + S.files.length;
       S.files.push({ id, name: fx.name, ext: 'xlsx', size: bytes.length, wb,
         sheets: wb.SheetNames.slice(), strikes: extractStrikeCells(bytes), error: null });
     }
     await prewarmSheets();
     if (__workCopy) {
-      S.workCopy = { name: __workCopy.name, wb: XLSX.read(new Uint8Array(__workCopy.bytes), { type: 'array' }) };
+      S.workCopy = { name: __workCopy.name, wb: XLSX.read(new Uint8Array(__workCopy.bytes), { type: 'array', dense: true }) };
       parseWorkCopy();
     }
     for (const k of allHierKeys()) S.selected.add(k);

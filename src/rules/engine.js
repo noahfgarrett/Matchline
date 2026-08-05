@@ -16,25 +16,44 @@ export function createEngine(profile) {
   const cache = new Map()
   let hits = 0, misses = 0
 
+  /* Keyed by the caller's input string verbatim, before clean(). resolve()
+     sits under every row loop in the app, and on the hot path even the
+     clean + key-concat + double Map hash of the canonical cache dominated
+     profiles at scale. Whitespace variants of one tag cost one duplicate
+     entry each; both maps stay bounded by the distinct strings seen. */
+  const inputCache = new Map()
+
   function resolve(tag, context) {
+    const sourceKind = context && context.sourceKind ? clean(context.sourceKind) : ''
+    const fastKey = !sourceKind && typeof tag === 'string' ? tag : null
+    if (fastKey !== null) {
+      const fast = inputCache.get(fastKey)
+      if (fast !== undefined) { hits++; return fast }
+    }
     const raw = clean(tag)
-    const sourceKind = clean(context && context.sourceKind)
     const cacheKey = raw + '\u001f' + sourceKind
-    if (cache.has(cacheKey)) { hits++; return cache.get(cacheKey) }
-    misses++
-    const anatomy = selectAnatomy(raw, anatomies)
-    const segments = anatomy ? segmentTag(raw, anatomy) : {}
-    const trimmed = anatomy ? canonicalFromAnatomy(raw, anatomy) : raw
-    const identity = applyNormalize(trimmed, rules.normalize, 'identity', {sourceKind})
-    const canonical = applyNormalize(identity, rules.normalize, 'matching', {sourceKind})
-    const classified = applyClassifyDetailed(raw, canonical, rules.classify, segments, { sourceKind })
-    const attributes = classified.attributes
-    const result = Object.freeze({
-      raw, identity, canonical, segments, attributes, classificationRules:classified.matches,
-      anatomyId: anatomy ? anatomy.id : '',
-      unmatched: !anatomy,
-    })
-    cache.set(cacheKey, result)
+    let result = cache.get(cacheKey)
+    if (result !== undefined) { hits++ }
+    else {
+      misses++
+      const anatomy = selectAnatomy(raw, anatomies)
+      const segments = anatomy ? segmentTag(raw, anatomy) : {}
+      const trimmed = anatomy ? canonicalFromAnatomy(raw, anatomy) : raw
+      const identity = applyNormalize(trimmed, rules.normalize, 'identity', {sourceKind})
+      const canonical = applyNormalize(identity, rules.normalize, 'matching', {sourceKind})
+      const classified = applyClassifyDetailed(raw, canonical, rules.classify, segments, { sourceKind })
+      const attributes = classified.attributes
+      result = Object.freeze({
+        raw, identity, canonical, segments, attributes, classificationRules:classified.matches,
+        anatomyId: anatomy ? anatomy.id : '',
+        unmatched: !anatomy,
+      })
+      cache.set(cacheKey, result)
+    }
+    if (fastKey !== null) {
+      if (inputCache.size > 1500000) inputCache.clear()
+      inputCache.set(fastKey, result)
+    }
     return result
   }
 

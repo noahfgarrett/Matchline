@@ -1,5 +1,6 @@
 import { $, KEYSEP } from './core/text.js'
 import { cleanTag } from './core/tags.js'
+import { ruleEngineGeneration } from './rules/provider.js'
 
 export const S={screen:'upload',files:[],selected:new Set(),cableSel:new Set(),pmdSel:new Set(),melSel:new Set(),p6Sel:new Set(),lineSel:new Set(),extoSel:new Set(),imSel:new Set(),override:{},aoaCache:new Map(),massageUndo:[],massageRedo:[],
   roots:[],rawCombined:null,sheets:[],ssmCombined:[],nodeById:new Map(),stats:null,search:'',idOnly:false,
@@ -25,7 +26,23 @@ export const S={screen:'upload',files:[],selected:new Set(),cableSel:new Set(),p
   viewCache:{tree:null,review:new Map(),reviewRows:new Map(),placementRows:new Map(),compare:new Map(),compareRows:new Map()}};
 export let _uid=0,_nid=0;
 export const fileById=id=>S.files.find(f=>f.id===id);
-export const tagKey=value=>cleanTag(value).toLowerCase();
+/* tagKey sits under every canonical-map access; the toLowerCase allocation on
+   millions of repeat calls dominated build profiles at scale, so it memoizes
+   by raw input and follows cleanTag's engine-generation invalidation. */
+let tagKeyGeneration=-1;
+const tagKeyMemo=new Map();
+export const tagKey=value=>{
+  const key=typeof value==='string'?value:String(value==null?'':value);
+  const generation=ruleEngineGeneration();
+  if(generation!==tagKeyGeneration){tagKeyGeneration=generation;tagKeyMemo.clear();}
+  let out=tagKeyMemo.get(key);
+  if(out===undefined){
+    out=cleanTag(key).toLowerCase();
+    if(tagKeyMemo.size>1500000)tagKeyMemo.clear();
+    tagKeyMemo.set(key,out);
+  }
+  return out;
+};
 export function invalidateHierarchyBuild(){
   S.profileBuildRevision++;
   S.profileNeedsRebuild=!!S.roots.length;
