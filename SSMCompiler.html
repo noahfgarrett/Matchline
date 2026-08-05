@@ -1190,6 +1190,12 @@ body.visual-trainer-fullscreen{overflow:hidden}
 .legend-lasso-nav{display:flex;align-items:center;gap:6px;flex:0 0 auto;flex-wrap:nowrap}
 .legend-lasso-frame{position:relative;display:block;line-height:0;max-width:100%}
 
+/* drag-and-drop massaging */
+.row.kind-equipment[draggable="true"]{cursor:grab}
+.row.kind-equipment[draggable="true"]:active{cursor:grabbing}
+.row.drag-src{opacity:.45}
+.row.drag-over{box-shadow:inset 0 0 0 2px #e57324;border-radius:6px}
+
 </style>
 </head>
 <body>
@@ -1286,6 +1292,12 @@ const LEGEND_PDFJS_WORKER="/**\n * @licstart The following is the entire license
 <script>
 "use strict";
 const CHANGELOG = [
+  {
+    "version": "0.9.0",
+    "date": "2026-08-05T00:00:00Z",
+    "type": "feature",
+    "notes": "- Added drag-and-drop hierarchy massaging in the SSM view: drag an equipment row onto another to reparent it, or onto its system folder to make it a root\n- Moves persist as relationship overrides in the active profile (session-only on locked profiles), outrank every claim including inferred nesting, and survive rebuilds\n- Cross-system-block drops are refused with guidance (those belong in Dependencies), and cycle-creating moves are blocked\n- The moved row is revealed and focused after the tree rebuilds"
+  },
   {
     "version": "0.8.0",
     "date": "2026-08-05T00:00:00Z",
@@ -4741,7 +4753,7 @@ function createDurableProfileStorage(options = {}) {
 
 
 
-const APP_VERSION = '0.8.0';
+const APP_VERSION = '0.9.0';
 const UPDATE_REPOSITORY = 'noahfgarrett/SSMCompiler-Releases';
 const UPDATE_RELEASE_API = 'https://api.github.com/repos/'+UPDATE_REPOSITORY+'/releases/latest';
 const UPDATE_API_VERSION = '2026-03-10';
@@ -10830,7 +10842,15 @@ function buildCanonicalModel(){
   const relationshipOverrides=new Map();
   for(const override of [...(profile.overrides&&profile.overrides.relationships||[]),...(S.sessionRelationshipOverrides||[])])relationshipOverrides.set(tagKey(override.equipment),override);
   for(const override of relationshipOverrides.values()){
-    const subject=records.get(tagKey(override.equipment)),target=ensure(override.parent);if(!subject||!target)continue;
+    const subject=records.get(tagKey(override.equipment));if(!subject)continue;
+    /* An empty parent is an explicit MANUAL ROOT: the record sits at the top
+       of its own system block (claims model: structural claim, null target). */
+    if(!clean(override.parent)){
+      manualOverrides.push({id:`manual:${override.id||subject.key}`,kind:HIERARCHY_CLAIM_KIND.STRUCTURAL_PARENT,subjectId:subject.key,targetId:null,
+        provenance:{source:'Manual placement',savedAt:override.savedAt||''}});
+      continue;
+    }
+    const target=ensure(override.parent);if(!target)continue;
     target.isSyntheticParent=true;
     manualOverrides.push({id:`manual:${override.id||subject.key}`,kind:HIERARCHY_CLAIM_KIND.STRUCTURAL_PARENT,subjectId:subject.key,targetId:target.key,
       provenance:{source:'Placement Review',savedAt:override.savedAt||''}});
@@ -12284,6 +12304,43 @@ async function refreshPlacementModels(){
   const previous=S.stats||{},computed=computeStats(S.roots);S.stats={...previous,...computed,review:S.review.length+activePlacements().length};
   if(S.tab==='review'&&!S.hasCable&&!activePlacements().length)S.tab='tree';
   renderResult();
+}
+/* ---- Drag-and-drop massaging (compiler fork) ----
+   Reparent one record by hand: the move persists as a relationship override in
+   the active profile (session-only when the profile is locked), outranks every
+   claim, and survives rebuilds. An empty parent makes the record an explicit
+   root of its own system block. Cross-block moves are refused — that
+   relationship belongs in Dependencies per the SOP. */
+function applyManualReparent(equipmentTag,newParentTag){
+  const record=canonicalRecord(equipmentTag);
+  if(!record){toast('Unknown equipment: '+clean(equipmentTag));return false;}
+  const parentTag=cleanRegisterTag(newParentTag||'');
+  if(parentTag){
+    const parent=canonicalRecord(parentTag);
+    if(!parent){toast('Unknown parent: '+parentTag);return false;}
+    if(parent.key===record.key){toast('A tag cannot nest under itself');return false;}
+    const seen=new Set([record.key]);
+    for(let cursor=parent;cursor;cursor=canonicalRecord(cursor.ssmParentTag||'')){
+      if(seen.has(cursor.key)){toast('That move would create a cycle');return false;}
+      seen.add(cursor.key);
+      if(!cursor.ssmParentTag)break;
+    }
+    for(const attr of ['building','discipline','system']){
+      if(clean(record[attr])!==clean(parent[attr])){
+        toast('Different system block — cross-system relationships belong in Dependencies');return false;
+      }
+    }
+  }
+  const profile=activeProfile(),override={id:'massage-'+record.key,equipment:cleanTag(record.tag),parent:parentTag,savedAt:new Date().toISOString()};
+  if(profile.locked)S.sessionRelationshipOverrides=[...S.sessionRelationshipOverrides.filter(item=>tagKey(item.equipment)!==record.key),override];
+  else{
+    profile.overrides={...(profile.overrides||{}),relationships:[...(profile.overrides&&profile.overrides.relationships||[]).filter(item=>tagKey(item.equipment)!==record.key),override]};
+    profile.revision=Math.max(1,Number(profile.revision)||1)+1;profile.updatedAt=override.savedAt;persistProfiles();
+  }
+  rebuildProfileProjections();
+  if(typeof renderResult==='function'&&S.screen==='result')renderResult();
+  toast(parentTag?record.tag+' nested under '+parentTag:record.tag+' made a system root'+(profile.locked?' for this session':''));
+  return true;
 }
 async function movePlacementBranch(issueId,parentNodeId){
   const issue=S.placements.find(item=>item.id===issueId&&!item.resolved),parent=S.nodeById.get(parentNodeId);if(!issue||!parent||!validPlacementParent(issue,parent))return toast('Choose a valid parent for this branch');
@@ -17664,7 +17721,7 @@ function rowInner(node,prefixArr,isLast,isRoot,hl){
       ${depBadge}${pmdBadge}${hasKids?`<span class="cnt">${kids.length}</span>`:''}${placementBtn}${infoBtn}</div>`;
   }
   const marker=hasKids?'<span class="marker branch"></span>':(node.isInstrument?`<span class="marker instrument">${ic('database')}</span>`:node.isLoad?`<span class="marker load">${ic('corner-down-right')}</span>`:node.isId?`<span class="marker leaf">${ic('tag')}</span>`:'<span class="marker dot"></span>');
-  return `<div class="row${kindClass} ${hasKids?'':'leafrow'} ${node.isLoad?'is-load':''} ${node.isInstrument?'is-instrument':''} ${node.isSpare?'is-spare':''} ${node.isSpace?'is-space':''}" data-id="${node.id}" ${hasKids?'data-exp="1"':''} tabindex="0" role="treeitem" aria-expanded="${hasKids?'false':''}">
+  return `<div class="row${kindClass} ${hasKids?'':'leafrow'} ${node.isLoad?'is-load':''} ${node.isInstrument?'is-instrument':''} ${node.isSpare?'is-spare':''} ${node.isSpace?'is-space':''}" data-id="${node.id}" ${node.kind==='equipment'?'draggable="true" ':''}${hasKids?'data-exp="1"':''} tabindex="0" role="treeitem" aria-expanded="${hasKids?'false':''}">
     <span class="gut">${gutterHtml(prefixArr,isLast)}</span>
     ${hasKids?`<span class="twist">${ic('chevron-right')}</span>`:'<span class="twist"></span>'}
     ${marker}<span class="lbl copy-tag ${hasKids?'':'lbl-leaf'}" data-copy-tag="${esc(node.name)}"${labelTitle}>${lblHtml(node.name,hl)}</span>
@@ -17678,7 +17735,10 @@ function makeNode(node,prefixArr,isLast,isRoot){
 }
 function wireTree(tree){
   if(!tree||tree._wired)return;
-  wireCopyTags(tree);tree.addEventListener('click',onTreeClick);tree.addEventListener('keydown',onTreeKey);tree._wired=true;
+  wireCopyTags(tree);tree.addEventListener('click',onTreeClick);tree.addEventListener('keydown',onTreeKey);
+  tree.addEventListener('dragstart',onTreeDragStart);tree.addEventListener('dragover',onTreeDragOver);
+  tree.addEventListener('dragleave',onTreeDragLeave);tree.addEventListener('drop',onTreeDrop);
+  tree.addEventListener('dragend',clearDragState);tree._wired=true;
 }
 function renderTreeCollapsed(){
   cancelExpand();
@@ -17706,6 +17766,49 @@ function expandNode(row,node){
 }
 function collapseNode(row){const kids=row.parentElement.querySelector(':scope > .kids');kids.hidden=true;row.classList.remove('open');row.setAttribute('aria-expanded','false');}
 function toggleNode(row,node){if(row.classList.contains('open'))collapseNode(row);else expandNode(row,node);}
+/* ---- Drag-and-drop massaging ----
+   Drag an equipment row onto another equipment row (same system block) to
+   reparent it, or onto a system folder to make it a root. The move saves as a
+   relationship override in the active profile and outranks every claim.
+   Validation lives in applyManualReparent (cycles, cross-block, unknown tags). */
+let _dragState=null;
+function clearDragState(){
+  $$('#tree .row.drag-over').forEach(row=>row.classList.remove('drag-over'));
+  $$('#tree .row.drag-src').forEach(row=>row.classList.remove('drag-src'));
+  _dragState=null;
+}
+function onTreeDragStart(e){
+  const row=e.target.closest('.row');if(!row)return;
+  const node=activeHierarchyNodeMap().get(row.dataset.id);
+  if(!node||node.kind!=='equipment'){e.preventDefault();return;}
+  _dragState={tag:node.name,canonicalKey:node.canonicalKey};
+  e.dataTransfer.setData('text/plain',node.name);e.dataTransfer.effectAllowed='move';
+  row.classList.add('drag-src');
+}
+function treeDropTarget(e){
+  if(!_dragState)return null;
+  const row=e.target.closest('.row');if(!row)return null;
+  const node=activeHierarchyNodeMap().get(row.dataset.id);if(!node)return null;
+  if(node.kind==='equipment'&&node.name!==_dragState.tag)return {row,node,asRoot:false};
+  if(node.kind==='system')return {row,node,asRoot:true};
+  return null;
+}
+function onTreeDragOver(e){
+  const target=treeDropTarget(e);if(!target)return;
+  e.preventDefault();e.dataTransfer.dropEffect='move';
+  $$('#tree .row.drag-over').forEach(row=>{if(row!==target.row)row.classList.remove('drag-over');});
+  target.row.classList.add('drag-over');
+}
+function onTreeDragLeave(e){
+  const row=e.target.closest('.row');if(row)row.classList.remove('drag-over');
+}
+function onTreeDrop(e){
+  const target=treeDropTarget(e),state=_dragState;
+  clearDragState();
+  if(!target||!state)return;
+  e.preventDefault();
+  if(applyManualReparent(state.tag,target.asRoot?'':target.node.name))revealCanonicalRecord(state.canonicalKey);
+}
 function onTreeClick(e){
   const placement=e.target.closest('.placement-flag');
   if(placement){e.stopPropagation();openPlacementDrawer(placement.dataset.placement);return;}

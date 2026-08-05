@@ -8,7 +8,7 @@ import { kidsOf, nodeDep, nodeHidden } from '../profile/classify.js'
 import { activeModes, modeById } from '../hierarchy/modes.js'
 import { activeHierarchyNodeMap, activeHierarchyRoots, activeHierarchyStats } from '../hierarchy/tree.js'
 import { canonicalRecord } from '../hierarchy/projection.js'
-import { acceptPlacement, activePlacements, equipmentRole, firstSystemParentTag, melResolvedRecord, movePlacementBranch, nodePath, placementCandidates, placementExpectedParentRole, rawSubtreeCount, resetSourceParentClaims, undoPlacement } from '../hierarchy/build.js'
+import { acceptPlacement, activePlacements, applyManualReparent, equipmentRole, firstSystemParentTag, melResolvedRecord, movePlacementBranch, nodePath, placementCandidates, placementExpectedParentRole, rawSubtreeCount, resetSourceParentClaims, undoPlacement } from '../hierarchy/build.js'
 import { comparePanelCacheKey, placementState, refreshCompare, refreshReview, renderComparePanel, renderReviewPanel, reviewPanelCacheKey } from '../review/panels.js'
 import { exportExtoSSMXlsx, exportHierarchyXlsx, exportOutlineTxt, exportSSMXlsx } from '../export/xlsx.js'
 import { go, render } from './screens.js'
@@ -335,7 +335,7 @@ export function rowInner(node,prefixArr,isLast,isRoot,hl){
       ${depBadge}${pmdBadge}${hasKids?`<span class="cnt">${kids.length}</span>`:''}${placementBtn}${infoBtn}</div>`;
   }
   const marker=hasKids?'<span class="marker branch"></span>':(node.isInstrument?`<span class="marker instrument">${ic('database')}</span>`:node.isLoad?`<span class="marker load">${ic('corner-down-right')}</span>`:node.isId?`<span class="marker leaf">${ic('tag')}</span>`:'<span class="marker dot"></span>');
-  return `<div class="row${kindClass} ${hasKids?'':'leafrow'} ${node.isLoad?'is-load':''} ${node.isInstrument?'is-instrument':''} ${node.isSpare?'is-spare':''} ${node.isSpace?'is-space':''}" data-id="${node.id}" ${hasKids?'data-exp="1"':''} tabindex="0" role="treeitem" aria-expanded="${hasKids?'false':''}">
+  return `<div class="row${kindClass} ${hasKids?'':'leafrow'} ${node.isLoad?'is-load':''} ${node.isInstrument?'is-instrument':''} ${node.isSpare?'is-spare':''} ${node.isSpace?'is-space':''}" data-id="${node.id}" ${node.kind==='equipment'?'draggable="true" ':''}${hasKids?'data-exp="1"':''} tabindex="0" role="treeitem" aria-expanded="${hasKids?'false':''}">
     <span class="gut">${gutterHtml(prefixArr,isLast)}</span>
     ${hasKids?`<span class="twist">${ic('chevron-right')}</span>`:'<span class="twist"></span>'}
     ${marker}<span class="lbl copy-tag ${hasKids?'':'lbl-leaf'}" data-copy-tag="${esc(node.name)}"${labelTitle}>${lblHtml(node.name,hl)}</span>
@@ -349,7 +349,10 @@ export function makeNode(node,prefixArr,isLast,isRoot){
 }
 export function wireTree(tree){
   if(!tree||tree._wired)return;
-  wireCopyTags(tree);tree.addEventListener('click',onTreeClick);tree.addEventListener('keydown',onTreeKey);tree._wired=true;
+  wireCopyTags(tree);tree.addEventListener('click',onTreeClick);tree.addEventListener('keydown',onTreeKey);
+  tree.addEventListener('dragstart',onTreeDragStart);tree.addEventListener('dragover',onTreeDragOver);
+  tree.addEventListener('dragleave',onTreeDragLeave);tree.addEventListener('drop',onTreeDrop);
+  tree.addEventListener('dragend',clearDragState);tree._wired=true;
 }
 export function renderTreeCollapsed(){
   cancelExpand();
@@ -377,6 +380,49 @@ export function expandNode(row,node){
 }
 export function collapseNode(row){const kids=row.parentElement.querySelector(':scope > .kids');kids.hidden=true;row.classList.remove('open');row.setAttribute('aria-expanded','false');}
 export function toggleNode(row,node){if(row.classList.contains('open'))collapseNode(row);else expandNode(row,node);}
+/* ---- Drag-and-drop massaging ----
+   Drag an equipment row onto another equipment row (same system block) to
+   reparent it, or onto a system folder to make it a root. The move saves as a
+   relationship override in the active profile and outranks every claim.
+   Validation lives in applyManualReparent (cycles, cross-block, unknown tags). */
+export let _dragState=null;
+export function clearDragState(){
+  $$('#tree .row.drag-over').forEach(row=>row.classList.remove('drag-over'));
+  $$('#tree .row.drag-src').forEach(row=>row.classList.remove('drag-src'));
+  _dragState=null;
+}
+export function onTreeDragStart(e){
+  const row=e.target.closest('.row');if(!row)return;
+  const node=activeHierarchyNodeMap().get(row.dataset.id);
+  if(!node||node.kind!=='equipment'){e.preventDefault();return;}
+  _dragState={tag:node.name,canonicalKey:node.canonicalKey};
+  e.dataTransfer.setData('text/plain',node.name);e.dataTransfer.effectAllowed='move';
+  row.classList.add('drag-src');
+}
+export function treeDropTarget(e){
+  if(!_dragState)return null;
+  const row=e.target.closest('.row');if(!row)return null;
+  const node=activeHierarchyNodeMap().get(row.dataset.id);if(!node)return null;
+  if(node.kind==='equipment'&&node.name!==_dragState.tag)return {row,node,asRoot:false};
+  if(node.kind==='system')return {row,node,asRoot:true};
+  return null;
+}
+export function onTreeDragOver(e){
+  const target=treeDropTarget(e);if(!target)return;
+  e.preventDefault();e.dataTransfer.dropEffect='move';
+  $$('#tree .row.drag-over').forEach(row=>{if(row!==target.row)row.classList.remove('drag-over');});
+  target.row.classList.add('drag-over');
+}
+export function onTreeDragLeave(e){
+  const row=e.target.closest('.row');if(row)row.classList.remove('drag-over');
+}
+export function onTreeDrop(e){
+  const target=treeDropTarget(e),state=_dragState;
+  clearDragState();
+  if(!target||!state)return;
+  e.preventDefault();
+  if(applyManualReparent(state.tag,target.asRoot?'':target.node.name))revealCanonicalRecord(state.canonicalKey);
+}
 export function onTreeClick(e){
   const placement=e.target.closest('.placement-flag');
   if(placement){e.stopPropagation();openPlacementDrawer(placement.dataset.placement);return;}
