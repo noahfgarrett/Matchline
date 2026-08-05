@@ -2,7 +2,7 @@ import { $, $$, esc } from '../core/text.js'
 import { saveUpdateHtml } from '../core/download.js'
 import { portableProfileTransferBase64 } from '../profile/schema.js'
 
-export const APP_VERSION = '0.8.0';
+export const APP_VERSION = '0.9.0';
 export const UPDATE_REPOSITORY = 'noahfgarrett/SSMCompiler-Releases';
 export const UPDATE_RELEASE_API = 'https://api.github.com/repos/'+UPDATE_REPOSITORY+'/releases/latest';
 export const UPDATE_API_VERSION = '2026-03-10';

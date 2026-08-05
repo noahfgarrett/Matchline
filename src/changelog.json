@@ -1,5 +1,11 @@
 [
   {
+    "version": "0.9.0",
+    "date": "2026-08-05T00:00:00Z",
+    "type": "feature",
+    "notes": "- Added drag-and-drop hierarchy massaging in the SSM view: drag an equipment row onto another to reparent it, or onto its system folder to make it a root\n- Moves persist as relationship overrides in the active profile (session-only on locked profiles), outrank every claim including inferred nesting, and survive rebuilds\n- Cross-system-block drops are refused with guidance (those belong in Dependencies), and cycle-creating moves are blocked\n- The moved row is revealed and focused after the tree rebuilds"
+  },
+  {
     "version": "0.8.0",
     "date": "2026-08-05T00:00:00Z",
     "type": "feature",

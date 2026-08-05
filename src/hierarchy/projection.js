@@ -264,7 +264,15 @@ export function buildCanonicalModel(){
   const relationshipOverrides=new Map();
   for(const override of [...(profile.overrides&&profile.overrides.relationships||[]),...(S.sessionRelationshipOverrides||[])])relationshipOverrides.set(tagKey(override.equipment),override);
   for(const override of relationshipOverrides.values()){
-    const subject=records.get(tagKey(override.equipment)),target=ensure(override.parent);if(!subject||!target)continue;
+    const subject=records.get(tagKey(override.equipment));if(!subject)continue;
+    /* An empty parent is an explicit MANUAL ROOT: the record sits at the top
+       of its own system block (claims model: structural claim, null target). */
+    if(!clean(override.parent)){
+      manualOverrides.push({id:`manual:${override.id||subject.key}`,kind:HIERARCHY_CLAIM_KIND.STRUCTURAL_PARENT,subjectId:subject.key,targetId:null,
+        provenance:{source:'Manual placement',savedAt:override.savedAt||''}});
+      continue;
+    }
+    const target=ensure(override.parent);if(!target)continue;
     target.isSyntheticParent=true;
     manualOverrides.push({id:`manual:${override.id||subject.key}`,kind:HIERARCHY_CLAIM_KIND.STRUCTURAL_PARENT,subjectId:subject.key,targetId:target.key,
       provenance:{source:'Placement Review',savedAt:override.savedAt||''}});

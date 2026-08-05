@@ -1286,6 +1286,43 @@ export async function refreshPlacementModels(){
   if(S.tab==='review'&&!S.hasCable&&!activePlacements().length)S.tab='tree';
   renderResult();
 }
+/* ---- Drag-and-drop massaging (compiler fork) ----
+   Reparent one record by hand: the move persists as a relationship override in
+   the active profile (session-only when the profile is locked), outranks every
+   claim, and survives rebuilds. An empty parent makes the record an explicit
+   root of its own system block. Cross-block moves are refused — that
+   relationship belongs in Dependencies per the SOP. */
+export function applyManualReparent(equipmentTag,newParentTag){
+  const record=canonicalRecord(equipmentTag);
+  if(!record){toast('Unknown equipment: '+clean(equipmentTag));return false;}
+  const parentTag=cleanRegisterTag(newParentTag||'');
+  if(parentTag){
+    const parent=canonicalRecord(parentTag);
+    if(!parent){toast('Unknown parent: '+parentTag);return false;}
+    if(parent.key===record.key){toast('A tag cannot nest under itself');return false;}
+    const seen=new Set([record.key]);
+    for(let cursor=parent;cursor;cursor=canonicalRecord(cursor.ssmParentTag||'')){
+      if(seen.has(cursor.key)){toast('That move would create a cycle');return false;}
+      seen.add(cursor.key);
+      if(!cursor.ssmParentTag)break;
+    }
+    for(const attr of ['building','discipline','system']){
+      if(clean(record[attr])!==clean(parent[attr])){
+        toast('Different system block — cross-system relationships belong in Dependencies');return false;
+      }
+    }
+  }
+  const profile=activeProfile(),override={id:'massage-'+record.key,equipment:cleanTag(record.tag),parent:parentTag,savedAt:new Date().toISOString()};
+  if(profile.locked)S.sessionRelationshipOverrides=[...S.sessionRelationshipOverrides.filter(item=>tagKey(item.equipment)!==record.key),override];
+  else{
+    profile.overrides={...(profile.overrides||{}),relationships:[...(profile.overrides&&profile.overrides.relationships||[]).filter(item=>tagKey(item.equipment)!==record.key),override]};
+    profile.revision=Math.max(1,Number(profile.revision)||1)+1;profile.updatedAt=override.savedAt;persistProfiles();
+  }
+  rebuildProfileProjections();
+  if(typeof renderResult==='function'&&S.screen==='result')renderResult();
+  toast(parentTag?record.tag+' nested under '+parentTag:record.tag+' made a system root'+(profile.locked?' for this session':''));
+  return true;
+}
 export async function movePlacementBranch(issueId,parentNodeId){
   const issue=S.placements.find(item=>item.id===issueId&&!item.resolved),parent=S.nodeById.get(parentNodeId);if(!issue||!parent||!validPlacementParent(issue,parent))return toast('Choose a valid parent for this branch');
   if(rawKidEntry(parent._raw.kids,issue.branchName))return toast('That parent already contains this branch');

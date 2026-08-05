@@ -1182,3 +1182,9 @@ body.visual-trainer-fullscreen{overflow:hidden}
 .legend-lasso-title .legend-lasso-sub{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 auto}
 .legend-lasso-nav{display:flex;align-items:center;gap:6px;flex:0 0 auto;flex-wrap:nowrap}
 .legend-lasso-frame{position:relative;display:block;line-height:0;max-width:100%}
+
+/* drag-and-drop massaging */
+.row.kind-equipment[draggable="true"]{cursor:grab}
+.row.kind-equipment[draggable="true"]:active{cursor:grabbing}
+.row.drag-src{opacity:.45}
+.row.drag-over{box-shadow:inset 0 0 0 2px #e57324;border-radius:6px}
