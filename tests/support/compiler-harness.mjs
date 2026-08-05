@@ -5,18 +5,7 @@ import { loadApp } from './harness.mjs'
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
-/* Compiler-fork test harness: boot the app, activate an editable project
-   profile (the harness default is the locked Eagle legacy profile, which keeps
-   MEL-first behavior off), ingest fixtures, build. */
-export async function buildProjectApp(files) {
-  const app = await loadApp()
-  app.eval(`
-    initProfiles();
-    const SITE = normalizeProfile(makeDefaultProfile('Compiler Site'));
-    PROFILE_STORE.profiles.push(SITE);
-    PROFILE_STORE.activeId = SITE.id;
-    setRuleProfile(activeProfile());
-  `)
+async function ingestFixtures(app, files) {
   const payload = files.map(f => f.endsWith('.xer')
     ? { name: f, text: readFileSync(resolve(rootDir, 'tests/fixtures', f), 'utf8') }
     : { name: f, bytes: [...readFileSync(resolve(rootDir, 'tests/fixtures', f))] })
@@ -38,6 +27,34 @@ export async function buildProjectApp(files) {
     await buildHierarchy();
     return '';
   `)
+}
+
+/* Compiler-fork test harness: boot the app, activate an editable project
+   profile (the harness default is the locked Eagle legacy profile, which keeps
+   MEL-first behavior off), ingest fixtures, build. */
+export async function buildProjectApp(files) {
+  const app = await loadApp()
+  app.eval(`
+    initProfiles();
+    const SITE = normalizeProfile(makeDefaultProfile('Compiler Site'));
+    PROFILE_STORE.profiles.push(SITE);
+    PROFILE_STORE.activeId = SITE.id;
+    setRuleProfile(activeProfile());
+  `)
+  await ingestFixtures(app, files)
+  return app
+}
+
+/** Locked-Eagle variant: same ingestion, but the built-in legacy profile stays
+    active, so MEL seeding is off. For testing profile-gated diagnostics. */
+export async function buildEagleApp(files) {
+  const app = await loadApp()
+  app.eval(`
+    initProfiles();
+    PROFILE_STORE.activeId = 'builtin-eagle';
+    setRuleProfile(activeProfile());
+  `)
+  await ingestFixtures(app, files)
   return app
 }
 

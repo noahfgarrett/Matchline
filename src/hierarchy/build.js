@@ -7,7 +7,7 @@ import { ruleEngine } from '../rules/provider.js'
 import { createMemoryLookup } from '../rules/lookup.js'
 import { validLoad, topFuzzy, gisBusCut, isGisTag, depOf } from '../profile/classify.js'
 import { withLoading, toast } from '../ui/progress.js'
-import { resolveCols, cableInfo, PMD_FIELDS, pmdInfo, pmdPanelMatchParts, pmdPanelKey, melInfo } from '../io/detect.js'
+import { resolveCols, cableInfo, PMD_FIELDS, pmdInfo, pmdPanelMatchParts, pmdPanelKey, melInfo, detectMel, scanMappedHeader } from '../io/detect.js'
 import { getAoa, cellIsStruck, rowTag, collectLoadDescriptionTags } from '../io/workbook.js'
 import { rowToPath, loadSsmRelation, insertPath, addLoadChild, finalize, computeStats, countTreeDependencies } from './tree.js'
 import { rebuildProfileProjections, canonicalRecord } from './projection.js'
@@ -1194,9 +1194,35 @@ export async function buildHierarchy(expectedProfileRevision=S.profileBuildRevis
     toast('Build stopped safely. Your previous hierarchy is still available.');
     return false;
   }
-  if(!S.roots.length&&!S.ssmCombined.length){toast('No hierarchy rows found in the selected tabs');return;}
+  if(!S.roots.length&&!S.ssmCombined.length){toast(emptyBuildDiagnosis());return;}
   S.search='';S.idOnly=false;S.showSpares=true;S.showSpaces=true;S.showDeps=!!(S.stats&&S.stats.deps);S.showPmdMatches=true;
   S.cmpFilter='all';S.cmpSearch='';S.cmpDiff='all';S.cmpSort=null;S.tab='tree';go('result');return true;
+}
+/* An empty build has distinct causes that the old blanket "no rows" toast hid:
+   a MEL whose header row was never recognized, a locked profile with MEL
+   seeding off, or a MEL-looking tab sitting in the hierarchy selection. Name
+   the actual blocker and the fix. */
+export function emptyBuildDiagnosis(){
+  const profile=activeProfile(),melSeed=profile.hierarchy&&profile.hierarchy.melSeed;
+  const melKeys=[...S.melSel].filter(k=>fileById(k.split(KEYSEP)[0]));
+  if(melKeys.length){
+    const unmapped=melKeys.filter(k=>!melInfo(k));
+    if(unmapped.length===melKeys.length){
+      const names=unmapped.map(k=>k.split(KEYSEP)[1]).join(', ');
+      return `MEL tab "${names}" is selected, but no Equipment Tag header row was recognized — map its columns in Site profile → Data Mapping → Master Equipment List`;
+    }
+    if(!(melSeed&&melSeed.enabled!==false)){
+      return `MEL seeding is off in the active profile "${profile.name}"${profile.locked?' (locked built-in)':''} — switch to an editable site profile to compile from the MEL`;
+    }
+    if(!S.melRows.length)return 'The MEL header row was recognized, but no equipment tag rows were read below it';
+  }
+  for(const key of S.selected){
+    if(!fileById(key.split(KEYSEP)[0]))continue;
+    if(scanMappedHeader(getAoa(key).aoa,detectMel,200)){
+      return `Tab "${key.split(KEYSEP)[1]}" looks like a Master Equipment List but is selected as a hierarchy sheet — untick it and select it under Master Equipment List instead`;
+    }
+  }
+  return 'No hierarchy rows found in the selected tabs';
 }
 /* Cable Schedule loads with no exact match in Easy Power. Uses normalized-separator
    and prefix-bucket indexes so the fuzzy step stays cheap even on 75k+ names. */

@@ -1,5 +1,11 @@
 [
   {
+    "version": "1.3.0",
+    "date": "2026-08-05T00:00:00Z",
+    "type": "fix",
+    "notes": "- The shipped built-in profile is now the universal SSM Compiler ruleset (renamed \"SSM Compiler Default\"): MEL seeding, modern source-priority resolution, and Rev21 EXTO columns are on out of the box, so a MEL-only build works no matter which profile is selected\n- The compiler now keeps its own profile storage. It previously shared SSManagement's, so on a machine running both apps it silently loaded SSManagement's store \u2014 including a legacy-frozen active profile that produced an empty build\n- Real-world MEL headers now detect: tag columns like \"Equipment Tag Number\" / \"Tag No.\" are recognized when UPN or System Parent columns corroborate, and tabs named \"Master Equipment List\" or \"MEL\" are treated as MELs by name\n- An empty build now names its actual blocker (unrecognized MEL header row, seeding disabled in the active profile, or a MEL-looking tab in the wrong selection group) instead of the blanket \"no hierarchy rows\" toast\n- The frozen Eagle legacy behavior survives as an internal compatibility baseline for the regression suite; it is no longer offered in the picker"
+  },
+  {
     "version": "1.2.0",
     "date": "2026-08-05T00:00:00Z",
     "type": "feature",

@@ -106,6 +106,21 @@ const SHEETS = {
       ['B31-TK-101-01', 'CHW buffer tank', 'B31', 'Mechanical', '101', 'Chilled Water', '', 'New'],
     ],
   },
+  'compiler-mel-tagnumber.xlsx': {
+    'Master Equipment List': [
+      ['Equipment Tag Number', 'Equipment Description', 'Bldg', 'Discipline', 'UPN', 'System Description', 'System Parent Equipment Tag(s)'],
+      ['B31-CH-101-01', 'Centrifugal chiller', 'B31', 'Mechanical', '101', 'Chilled Water', ''],
+      ['B31-PMP-101-01', 'CHW primary pump', 'B31', 'Mechanical', '101', 'Chilled Water', 'B31-CH-101-01'],
+      ['B31-TK-101-01', 'CHW buffer tank', 'B31', 'Mechanical', '101', 'Chilled Water', ''],
+    ],
+  },
+  'compiler-mel-noheaders.xlsx': {
+    'Equipment List': [
+      ['Asset', 'Ref', 'Name'],
+      ['B31-CH-101-01', 'A1', 'Centrifugal chiller'],
+      ['B31-PMP-101-01', 'A2', 'CHW primary pump'],
+    ],
+  },
   'compiler-wc.xlsx': {
     SSM: [
       ['Equipment ID', 'Closest Parent', 'Dependencies'],

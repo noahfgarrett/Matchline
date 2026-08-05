@@ -67,45 +67,73 @@ test('Eagle is an explicit named compatibility-profile factory', () => {
   assert.equal(eagle.locked, true, 'the compatibility baseline must be immutable')
 })
 
-test('a first-run profile store exposes Eagle as a selectable self-contained profile', async () => {
+test('a first-run profile store ships a universal, compiler-first built-in', async () => {
   const app = await loadSourceApp()
   app.eval('initProfiles()')
   const profiles = JSON.parse(app.eval('JSON.stringify(PROFILE_STORE.profiles)'))
-  const eagle = profiles.find(profile => profile.name === EAGLE_NAME)
+  const builtIn = profiles.find(profile => profile.builtIn)
 
-  assert.ok(eagle, 'a fresh install must visibly offer a profile named Eagle')
-  assert.equal(eagle.locked, true)
-  assert.ok(Object.hasOwn(eagle, 'anatomies'), 'Eagle must own its anatomy definitions')
-  assert.ok(Object.hasOwn(eagle, 'modes'), 'Eagle must own its hierarchy modes')
-  assert.ok(Object.hasOwn(eagle, 'rules'), 'Eagle must own its rules instead of inheriting hidden defaults')
-  assert.deepEqual(Object.keys(eagle.rules).sort(), ['classify', 'normalize', 'relate'])
+  assert.ok(builtIn, 'a fresh install must offer the locked built-in reference')
+  assert.equal(builtIn.name, 'SSM Compiler Default')
+  assert.equal(builtIn.locked, true)
+  assert.ok(Object.hasOwn(builtIn, 'anatomies'), 'the built-in must own its anatomy definitions')
+  assert.ok(Object.hasOwn(builtIn, 'modes'), 'the built-in must own its hierarchy modes')
+  assert.ok(Object.hasOwn(builtIn, 'rules'), 'the built-in must own its rules instead of inheriting hidden defaults')
+  assert.deepEqual(Object.keys(builtIn.rules).sort(), ['classify', 'normalize', 'relate'])
+  /* The shipped default must build an SSM no matter which site's documents come
+     in — MEL seeding on, modern resolution, Rev21 EXTO columns. Noah hit a
+     work machine where the active profile was the legacy-frozen Eagle and a
+     MEL-only compile silently produced nothing. */
+  assert.equal(builtIn.hierarchy.melSeed.enabled, true, 'the shipped default must compile from a MEL alone')
   assert.deepEqual({
-    resolutionStrategy:eagle.hierarchy.resolutionStrategy,
-    downstreamGapPolicy:eagle.hierarchy.downstreamGapPolicy,
-    caseVariantPolicy:eagle.hierarchy.caseVariantPolicy,
-    duplicateRegisterPolicy:eagle.hierarchy.duplicateRegisterPolicy,
-    cableConflictPolicy:eagle.hierarchy.cableConflictPolicy,
-    duplicateParentReviewPolicy:eagle.hierarchy.duplicateParentReviewPolicy,
-    workflow:eagle.hierarchy.workflow,
+    resolutionStrategy:builtIn.hierarchy.resolutionStrategy,
+    downstreamGapPolicy:builtIn.hierarchy.downstreamGapPolicy,
+    caseVariantPolicy:builtIn.hierarchy.caseVariantPolicy,
+    duplicateRegisterPolicy:builtIn.hierarchy.duplicateRegisterPolicy,
+    cableConflictPolicy:builtIn.hierarchy.cableConflictPolicy,
+    duplicateParentReviewPolicy:builtIn.hierarchy.duplicateParentReviewPolicy,
+    melSystemParentClaims:builtIn.hierarchy.workflow.melSystemParentClaims,
+    extoDependencies:builtIn.hierarchy.extoColumns.dependencies,
   },{
+    resolutionStrategy:'source-priority',
+    downstreamGapPolicy:'bridge-review',
+    caseVariantPolicy:'merge',
+    duplicateRegisterPolicy:'prefer-parent',
+    cableConflictPolicy:'first-review',
+    duplicateParentReviewPolicy:'first-review',
+    melSystemParentClaims:true,
+    extoDependencies:39,
+  },'the built-in must carry the universal compiler policies, not the frozen legacy set')
+})
+
+test('the frozen Eagle baseline survives as an explicit factory with the legacy policy set', async () => {
+  const app = await loadSourceApp()
+  const legacy = JSON.parse(app.eval('JSON.stringify(normalizeProfile(makeLegacyEagleProfile()))'))
+  assert.equal(legacy.name, EAGLE_NAME)
+  assert.equal(legacy.locked, true)
+  assert.deepEqual({
+    melSeed:legacy.hierarchy.melSeed.enabled,
+    resolutionStrategy:legacy.hierarchy.resolutionStrategy,
+    downstreamGapPolicy:legacy.hierarchy.downstreamGapPolicy,
+    caseVariantPolicy:legacy.hierarchy.caseVariantPolicy,
+    duplicateRegisterPolicy:legacy.hierarchy.duplicateRegisterPolicy,
+    cableConflictPolicy:legacy.hierarchy.cableConflictPolicy,
+    duplicateParentReviewPolicy:legacy.hierarchy.duplicateParentReviewPolicy,
+    melSystemParentClaims:legacy.hierarchy.workflow.melSystemParentClaims,
+    extoColumns:legacy.hierarchy.extoColumns,
+  },{
+    melSeed:false,
     resolutionStrategy:'legacy-register',
     downstreamGapPolicy:'truncate',
     caseVariantPolicy:'preserve',
     duplicateRegisterPolicy:'first',
     cableConflictPolicy:'legacy-chain-review',
     duplicateParentReviewPolicy:'first-silent',
-    workflow:{
-      gisBusCompaction:true,
-      cableParentChains:true,
-      melUpnParents:true,
-      /* Off for Eagle specifically. The frozen SSM Builder only ever used MEL
-         as a UPN-mismatch correction, never as a general parent source, so a
-         project profile's default would move the frozen tree. */
-      melSystemParentClaims:false,
-      pmdInstrumentAttachment:true,
-      enforceSystemRoot:true,
-    },
-  },'Eagle must declare its legacy execution policies instead of inheriting hidden behavior')
+    melSystemParentClaims:false,
+    extoColumns:{upn:6,equipmentId:10,closestParent:15,dependencies:38,milestone:-1,itemMaster:-1,classification:-1},
+  },'the factory must declare the exact frozen SSM Builder policies')
+  const store = JSON.parse(app.eval('initProfiles(); JSON.stringify(PROFILE_STORE.profiles.map(p => p.name))'))
+  assert.ok(!store.includes(EAGLE_NAME), 'the legacy baseline is not offered in the shipped picker')
 })
 
 test('Eagle materializes every shipped normalize, classify, and relate rule', () => {
@@ -158,12 +186,11 @@ test('Eagle keeps the staged MEL result ahead of raw source claims', async () =>
   const app=await loadSourceApp()
   const result=JSON.parse(app.eval(`
     JSON.stringify((function(){
-      initProfiles();
-      /* Eagle explicitly. This pins Eagle's legacy-register staging, and a first
-         run now lands on an editable starter that resolves by source priority
-         instead -- so relying on the default would silently test the wrong
-         resolution strategy. */
-      PROFILE_STORE.activeId='builtin-eagle';
+      /* The frozen baseline explicitly — the shipped built-in is now the
+         universal compiler profile, so legacy-register staging only exists
+         behind the factory. */
+      const LEGACY=normalizeProfile(makeLegacyEagleProfile());
+      PROFILE_STORE.profiles=[LEGACY];PROFILE_STORE.activeId=LEGACY.id;
       const profile=activeProfile();profile.rules={normalize:[],classify:[],relate:[]};setRuleProfile(profile);
       const parent={id:'parent',name:'EP-PARENT',parent:null,children:[],isId:false,isLoad:false,isInstrument:false};
       const equipment={id:'equipment',name:'EQUIP-1',parent,children:[],isId:true,isLoad:false,isInstrument:false};

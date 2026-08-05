@@ -1296,6 +1296,12 @@ const LEGEND_PDFJS_WORKER="/**\n * @licstart The following is the entire license
 "use strict";
 const CHANGELOG = [
   {
+    "version": "1.3.0",
+    "date": "2026-08-05T00:00:00Z",
+    "type": "fix",
+    "notes": "- The shipped built-in profile is now the universal SSM Compiler ruleset (renamed \"SSM Compiler Default\"): MEL seeding, modern source-priority resolution, and Rev21 EXTO columns are on out of the box, so a MEL-only build works no matter which profile is selected\n- The compiler now keeps its own profile storage. It previously shared SSManagement's, so on a machine running both apps it silently loaded SSManagement's store \u2014 including a legacy-frozen active profile that produced an empty build\n- Real-world MEL headers now detect: tag columns like \"Equipment Tag Number\" / \"Tag No.\" are recognized when UPN or System Parent columns corroborate, and tabs named \"Master Equipment List\" or \"MEL\" are treated as MELs by name\n- An empty build now names its actual blocker (unrecognized MEL header row, seeding disabled in the active profile, or a MEL-looking tab in the wrong selection group) instead of the blanket \"no hierarchy rows\" toast\n- The frozen Eagle legacy behavior survives as an internal compatibility baseline for the regression suite; it is no longer offered in the picker"
+  },
+  {
     "version": "1.2.0",
     "date": "2026-08-05T00:00:00Z",
     "type": "feature",
@@ -4774,7 +4780,7 @@ function createDurableProfileStorage(options = {}) {
 
 
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 const UPDATE_REPOSITORY = 'noahfgarrett/SSMCompiler-Releases';
 const UPDATE_RELEASE_API = 'https://api.github.com/repos/'+UPDATE_REPOSITORY+'/releases/latest';
 const UPDATE_API_VERSION = '2026-03-10';
@@ -5455,8 +5461,12 @@ function clearLegendProvenance(profile) {
    PROFILE_SCHEMA_VERSION used to sit here at 1, so a freshly created profile
    reported 1 while a migrated one reported 2, and an exported envelope
    declared 1 while the profile inside it declared 2. */
-const PROFILE_STORAGE_KEY='ssmanagement.site-profiles.v1';
-const PROFILE_DURABLE_STORAGE_KEY='ssmanagement.site-profiles.v2';
+/* Compiler-owned storage. The fork originally kept SSManagement's keys, so on
+   a machine running both apps the compiler silently loaded SSManagement's
+   profile store — including a legacy-frozen active profile that gates every
+   compiler behavior off. The two apps must never share profile state. */
+const PROFILE_STORAGE_KEY='ssmcompiler.site-profiles.v1';
+const PROFILE_DURABLE_STORAGE_KEY='ssmcompiler.site-profiles.v2';
 const PROFILE_SOURCE_LABELS={cable:'Cable Schedule',mel:'Master Equipment List',easyPower:'Easy Power',pmd:'Point Master Database'};
 const PROFILE_FIELD_SETS={
   easyPower:[
@@ -5543,25 +5553,31 @@ function profileExecutionSignature(profile){
   return JSON.stringify({mappings:value.mappings||{},anatomies:value.anatomies||[],rules:value.rules||{},tagRules:value.tagRules||[],
     hierarchy:value.hierarchy||{},modes:value.modes||[],overrides:value.overrides||{}});
 }
+const COMPILER_PROFILE_NAME='SSM Compiler Default';
 function makeDefaultProfile(name){
   const now=new Date().toISOString();
   const eagle=makeEagleRuleProfile(),isBuiltIn=!clean(name);
   return {
     schemaVersion:RULES_SCHEMA_VERSION,
-    id:isBuiltIn?'builtin-eagle':profileId(),name:name||EAGLE_PROFILE_NAME,siteCode:'',description:isBuiltIn?'Original SSM Builder behavior for the Eagle project.':'',
+    id:isBuiltIn?'builtin-eagle':profileId(),name:name||COMPILER_PROFILE_NAME,siteCode:'',
+    description:isBuiltIn?'Universal compiler defaults. Builds the SSM from any site\'s documents out of the box; duplicate it to teach site-specific nomenclature.':'',
     presetId:EAGLE_PRESET_ID,presetVersion:EAGLE_PRESET_VERSION,builtIn:isBuiltIn,locked:isBuiltIn,
     basePreset:{id:EAGLE_PRESET_ID,version:String(EAGLE_PRESET_VERSION),fingerprint:null},attributes:[],
     revision:1,publishedAt:now,updatedAt:now,mappings:{},tagRules:[],
     overrides:{relationships:[],attributes:[]},
     anatomies:profileClone(eagle.anatomies),rules:profileClone(eagle.rules),modes:profileClone(eagle.modes),
+    /* The built-in and every named profile share the SAME universal compiler
+       behavior — the shipped default must build an SSM no matter which site's
+       documents come in (the built-in differs only in being locked). The frozen
+       SSM Builder behavior lives in makeLegacyEagleProfile() below, for the
+       compatibility regression suite — it is not offered in the picker. */
     hierarchy:{
       unassignedBuilding:'Unassigned Building',
       disciplineFallbacks:{instrument:'I&C',default:'Electrical'},
       systemFallbacks:{Electrical:'602 Medium Voltage','I&C':'Instrumentation',default:'Unassigned System'},
       parentSourcePriority:['cable','mel','easyPower','pmd'],
-      /* Compiler fork: the MEL is the seed universe (spec §4). Off for Eagle,
-         which reproduces the frozen Easy-Power-seeded SSM Builder register. */
-      melSeed:{enabled:!isBuiltIn,excludedPhases:['Future']},
+      /* Compiler: the MEL is the seed universe (spec §4). */
+      melSeed:{enabled:true,excludedPhases:['Future']},
       /* Milestone ladder (spec §6a): custom UPN pattern is optional — blank
          uses the built-in default. Polarity map overrides the discipline-name
          heuristic (top-down for electrical/LSS/security, bottom-up otherwise). */
@@ -5571,30 +5587,23 @@ function makeDefaultProfile(name){
          deliverable; sites on other Cx software disable this and only the
          plain SSM outputs are produced. itemMasters further gates checklist
          auto-assignment inside the EXTO layer. */
-      exto:{enabled:true,itemMasters:!isBuiltIn},
-      /* EXTO upload column indexes (0-based). Project profiles follow the
-         Standardized Upload File Template Rev21 (UPN=G, Equipment ID=K,
-         Closest Parent=P, Milestone=Y, Item Master UID=AA, Dependencies=AN);
-         Eagle keeps the frozen historical G/K/P/AM layout. -1 = not emitted. */
-      extoColumns:isBuiltIn
-        ?{upn:6,equipmentId:10,closestParent:15,dependencies:38,milestone:-1,itemMaster:-1,classification:-1}
-        :{upn:6,equipmentId:10,closestParent:15,milestone:24,itemMaster:26,classification:35,dependencies:39},
+      exto:{enabled:true,itemMasters:true},
+      /* EXTO upload column indexes (0-based), following the Standardized
+         Upload File Template Rev21 (UPN=G, Equipment ID=K, Closest Parent=P,
+         Milestone=Y, Item Master UID=AA, Dependencies=AN). -1 = not emitted. */
+      extoColumns:{upn:6,equipmentId:10,closestParent:15,milestone:24,itemMaster:26,classification:35,dependencies:39},
       roleParents:{LVS:'XFM',XFM:'GIS',GIS:'SYSTEM'},
-      resolutionStrategy:isBuiltIn?'legacy-register':'source-priority',
-      downstreamGapPolicy:isBuiltIn?'truncate':'bridge-review',
-      caseVariantPolicy:isBuiltIn?'preserve':'merge',
-      duplicateRegisterPolicy:isBuiltIn?'first':'prefer-parent',
-      cableConflictPolicy:isBuiltIn?'legacy-chain-review':'first-review',
-      duplicateParentReviewPolicy:isBuiltIn?'first-silent':'first-review',
+      resolutionStrategy:'source-priority',
+      downstreamGapPolicy:'bridge-review',
+      caseVariantPolicy:'merge',
+      duplicateRegisterPolicy:'prefer-parent',
+      cableConflictPolicy:'first-review',
+      duplicateParentReviewPolicy:'first-review',
       workflow:{
         gisBusCompaction:true,
         cableParentChains:true,
         melUpnParents:true,
-        /* Off for Eagle, on for every project profile. Eagle reproduces the
-           frozen SSM Builder tree, where MEL only ever acted as a UPN-mismatch
-           correction; a project profile trusts MEL to parent whatever the Cable
-           Schedule does not cover. */
-        melSystemParentClaims:!isBuiltIn,
+        melSystemParentClaims:true,
         pmdInstrumentAttachment:true,
         enforceSystemRoot:true
       }
@@ -5605,6 +5614,31 @@ function makeDefaultProfile(name){
     legendTraining:emptyLegendTraining(),
     history:[]
   };
+}
+/**
+ * The frozen SSM Builder behavior, exactly as the original Eagle-project app
+ * shipped it. Not offered in the profile picker — it exists so the golden
+ * compatibility suite (snapshots, frozen differential) keeps proving the
+ * shared plumbing still reproduces the approved legacy baseline.
+ */
+function makeLegacyEagleProfile(){
+  const profile=makeDefaultProfile();
+  profile.id='legacy-eagle';profile.builtIn=false;profile.locked=true;
+  profile.name=EAGLE_PROFILE_NAME;
+  profile.description='Original SSM Builder behavior for the Eagle project (frozen compatibility baseline).';
+  Object.assign(profile.hierarchy,{
+    melSeed:{enabled:false,excludedPhases:['Future']},
+    exto:{enabled:true,itemMasters:false},
+    extoColumns:{upn:6,equipmentId:10,closestParent:15,dependencies:38,milestone:-1,itemMaster:-1,classification:-1},
+    resolutionStrategy:'legacy-register',
+    downstreamGapPolicy:'truncate',
+    caseVariantPolicy:'preserve',
+    duplicateRegisterPolicy:'first',
+    cableConflictPolicy:'legacy-chain-review',
+    duplicateParentReviewPolicy:'first-silent'
+  });
+  profile.hierarchy.workflow={...profile.hierarchy.workflow,melSystemParentClaims:false};
+  return profile;
 }
 function normalizeProfile(raw){
   const base=makeDefaultProfile(clean(raw&&raw.name)||'Imported Site Profile'),src=raw&&typeof raw==='object'?raw:{};
@@ -7725,18 +7759,33 @@ function pmdPanelMatchParts(value){
 function pmdPanelKey(value){return pmdPanelMatchParts(value).key;}
 /* ---- Master Equipment List (Equipment Tag -> UPN) ---- */
 const MEL_SHEET_NAME='equipmentlist';
+/* Real MELs name their tab many ways; any of these means "treat as MEL". */
+const MEL_SHEET_NAMES=new Set([MEL_SHEET_NAME,'masterequipmentlist','mel','equipmentmasterlist','melequipmentlist']);
 const _melCache=new Map();
-function isMelSheet(key){const [fid,sheet]=key.split(KEYSEP);return normH(sheet)===MEL_SHEET_NAME||!!(fileById(fid)&&melInfo(key));}
+function isMelSheet(key){const [fid,sheet]=key.split(KEYSEP);return MEL_SHEET_NAMES.has(normH(sheet))||!!(fileById(fid)&&melInfo(key));}
+/* Loose tag-header forms ("Equipment Tag Number", "Tag No.", "Asset Tag") are
+   only trusted alongside a UPN or System Parent column plus a second
+   corroborating MEL column, so a cable schedule's "Cable Tag", an EXTO
+   registry's "Equipment ID", or a lone title cell can't masquerade as a MEL. */
+const MEL_LOOSE_TAG=/^(equipment|equip|asset)?tag(s|no|num|number)?$/;
 function detectMel(headers){
-  const norm=headers.map(normH),tag=norm.findIndex(h=>h==='equipmenttag'||(h.endsWith('equipmenttag')&&!h.startsWith('systemparent')));
-  const upn=norm.findIndex(h=>h==='upn'||h.startsWith('upn'));
+  const norm=headers.map(normH);
+  const strongTag=h=>h==='equipmenttag'||(h.endsWith('equipmenttag')&&!h.startsWith('systemparent'));
+  let tag=norm.findIndex(strongTag),loose=false;
+  if(tag<0){tag=norm.findIndex(h=>MEL_LOOSE_TAG.test(h));loose=true;}
+  const upn=norm.findIndex(h=>h==='upn'||h.startsWith('upn')||h.endsWith('upn'));
   const building=norm.findIndex(h=>h==='bldg'||h==='building'||h.startsWith('building'));
-  const systemParent=norm.findIndex(h=>h.startsWith('systemparent')&&h.includes('equipmenttag'));
+  const systemParent=norm.findIndex(h=>h.startsWith('systemparent')&&h.includes('tag'));
   const discipline=norm.findIndex(h=>h==='discipline'||h.startsWith('discipline'));
   const systemDescription=norm.findIndex(h=>h==='systemdescription'||(h.startsWith('system')&&h.includes('description')));
   const projectPhase=norm.findIndex(h=>h==='projectphase'||h.startsWith('projectphase'));
   const description=norm.findIndex(h=>h==='equipmentdescription'||h==='description');
-  return tag>=0?{tag,upn,building,systemParent,discipline,systemDescription,projectPhase,description}:null;
+  if(tag<0)return null;
+  if(loose){
+    const corroborating=[upn,building,systemParent,discipline,systemDescription,projectPhase,description].filter(i=>i>=0).length;
+    if(corroborating<2||(upn<0&&systemParent<0))return null;
+  }
+  return {tag,upn,building,systemParent,discipline,systemDescription,projectPhase,description};
 }
 function melInfo(key){
   if(_melCache.has(key))return _melCache.get(key);
@@ -12309,9 +12358,35 @@ async function buildHierarchy(expectedProfileRevision=S.profileBuildRevision){
     toast('Build stopped safely. Your previous hierarchy is still available.');
     return false;
   }
-  if(!S.roots.length&&!S.ssmCombined.length){toast('No hierarchy rows found in the selected tabs');return;}
+  if(!S.roots.length&&!S.ssmCombined.length){toast(emptyBuildDiagnosis());return;}
   S.search='';S.idOnly=false;S.showSpares=true;S.showSpaces=true;S.showDeps=!!(S.stats&&S.stats.deps);S.showPmdMatches=true;
   S.cmpFilter='all';S.cmpSearch='';S.cmpDiff='all';S.cmpSort=null;S.tab='tree';go('result');return true;
+}
+/* An empty build has distinct causes that the old blanket "no rows" toast hid:
+   a MEL whose header row was never recognized, a locked profile with MEL
+   seeding off, or a MEL-looking tab sitting in the hierarchy selection. Name
+   the actual blocker and the fix. */
+function emptyBuildDiagnosis(){
+  const profile=activeProfile(),melSeed=profile.hierarchy&&profile.hierarchy.melSeed;
+  const melKeys=[...S.melSel].filter(k=>fileById(k.split(KEYSEP)[0]));
+  if(melKeys.length){
+    const unmapped=melKeys.filter(k=>!melInfo(k));
+    if(unmapped.length===melKeys.length){
+      const names=unmapped.map(k=>k.split(KEYSEP)[1]).join(', ');
+      return `MEL tab "${names}" is selected, but no Equipment Tag header row was recognized — map its columns in Site profile → Data Mapping → Master Equipment List`;
+    }
+    if(!(melSeed&&melSeed.enabled!==false)){
+      return `MEL seeding is off in the active profile "${profile.name}"${profile.locked?' (locked built-in)':''} — switch to an editable site profile to compile from the MEL`;
+    }
+    if(!S.melRows.length)return 'The MEL header row was recognized, but no equipment tag rows were read below it';
+  }
+  for(const key of S.selected){
+    if(!fileById(key.split(KEYSEP)[0]))continue;
+    if(scanMappedHeader(getAoa(key).aoa,detectMel,200)){
+      return `Tab "${key.split(KEYSEP)[1]}" looks like a Master Equipment List but is selected as a hierarchy sheet — untick it and select it under Master Equipment List instead`;
+    }
+  }
+  return 'No hierarchy rows found in the selected tabs';
 }
 /* Cable Schedule loads with no exact match in Easy Power. Uses normalized-separator
    and prefix-bucket indexes so the fuzzy step stays cheap even on 75k+ names. */

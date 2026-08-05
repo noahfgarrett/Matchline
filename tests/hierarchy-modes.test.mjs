@@ -435,15 +435,35 @@ test('the MEL mapping carries Discipline and System Description', async () => {
   assert.equal(columns.SystemDescription, 'Screening')
 })
 
-test('the new MEL columns are read but not yet consumed by the shipped profile', async () => {
-  // Additive by design: wiring them into the shipped modes would change output
-  // and move the golden snapshots. This pins that they are inert for now.
-  const app = await buildWith(['easy-power.xlsx', 'mel.xlsx'])
+test('the new MEL columns stay inert under the frozen legacy baseline', async () => {
+  // The goldens are captured under makeLegacyEagleProfile — if the legacy
+  // baseline ever started composing System values from the new MEL columns,
+  // every snapshot would move. The shipped built-in consumes them by design.
+  const app = await loadApp()
+  app.eval(`
+    const LEGACY = normalizeProfile(makeLegacyEagleProfile());
+    PROFILE_STORE.profiles = [LEGACY]; PROFILE_STORE.activeId = LEGACY.id;
+    setRuleProfile(activeProfile());
+  `)
+  const payload = ['easy-power.xlsx', 'mel.xlsx'].map(f => ({ name: f, bytes: [...readFileSync(resolve(rootDir, 'tests/fixtures', f))] }))
+  app.eval(`globalThis.__fixtures = ${JSON.stringify(payload)}`)
+  await app.evalAsync(`
+    for (const fx of __fixtures) {
+      const bytes = new Uint8Array(fx.bytes);
+      const wb = XLSX.read(bytes, { type: 'array' });
+      S.files.push({ id: 'f' + S.files.length, name: fx.name, ext: 'xlsx', size: bytes.length, wb,
+        sheets: wb.SheetNames.slice(), strikes: extractStrikeCells(bytes), error: null });
+    }
+    await prewarmSheets();
+    for (const k of allHierKeys()) S.selected.add(k);
+    await buildHierarchy();
+    return '';
+  `)
   const contexts = JSON.parse(app.eval(`
     JSON.stringify([...S.canonicalModel.values()].map(r => r.system).filter(Boolean))
   `))
   assert.ok(!contexts.some(s => /Main Intake|Screening/.test(s)),
-    'no System value may be composed from the new columns until a profile asks for it')
+    'the legacy baseline must not compose System values from the new columns')
 })
 
 test('a saved MEL mapping still carries Discipline and System Description', async () => {

@@ -32,7 +32,16 @@ export async function captureLegacyComparableScenario(scenario, htmlPath) {
        a first run lands on, and the differential would pass or fail for reasons
        that have nothing to do with compatibility. */
     if (typeof initProfiles === 'function') initProfiles();
-    if (typeof PROFILE_STORE !== 'undefined' && PROFILE_STORE.profiles.some(profile => profile.id === 'builtin-eagle')) {
+    if (typeof makeLegacyEagleProfile === 'function') {
+      /* The shipped built-in is the universal compiler profile now; the frozen
+         Eagle behavior comes only from its explicit factory. */
+      const LEGACY = normalizeProfile(makeLegacyEagleProfile());
+      PROFILE_STORE.profiles = [LEGACY];
+      PROFILE_STORE.activeId = LEGACY.id;
+      if (typeof setRuleProfile === 'function') setRuleProfile(activeProfile());
+    } else if (typeof PROFILE_STORE !== 'undefined' && PROFILE_STORE.profiles.some(profile => profile.id === 'builtin-eagle')) {
+      /* The FROZEN SSM Builder HTML predates the factory — its built-in IS the
+         legacy behavior. */
       PROFILE_STORE.activeId = 'builtin-eagle';
       if (typeof setRuleProfile === 'function') setRuleProfile(activeProfile());
     }

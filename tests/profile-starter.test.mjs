@@ -4,16 +4,15 @@ import { STARTER_PROFILE_NAME, installCurrentEagle, makeDefaultProfile, makeStar
 import { compileRuleProfile } from '../src/rules/profile-compiler.js'
 import { loadApp } from './support/harness.mjs'
 
-const EAGLE_NAME = 'Eagle - SSM Builder Legacy'
 
 /* ---------------------------------------------------------------------------
  * Eagle is a reference, not a starting point
  * ------------------------------------------------------------------------- */
 
-test('a first run lands on an editable profile, with Eagle beside it', async () => {
-  // The complaint this fixes: a first-run user inherited all five of Eagle's
-  // legacy compatibility policies, including downstreamGapPolicy 'truncate',
-  // which silently drops equipment after a blank downstream column.
+test('a first run lands on an editable profile, with the built-in reference beside it', async () => {
+  // The complaint this fixes: a first-run user inherited legacy compatibility
+  // policies, including downstreamGapPolicy 'truncate', which silently drops
+  // equipment after a blank downstream column.
   const app = await loadApp()
   app.eval('initProfiles()')
 
@@ -25,8 +24,8 @@ test('a first run lands on an editable profile, with Eagle beside it', async () 
   assert.equal(active.hierarchy.caseVariantPolicy, 'merge')
 
   const names = JSON.parse(app.eval('JSON.stringify(PROFILE_STORE.profiles.map(p => p.name))'))
-  assert.ok(names.includes(EAGLE_NAME), 'Eagle stays available as a worked example')
-  assert.equal(app.eval(`PROFILE_STORE.profiles.find(p => p.name === ${JSON.stringify(EAGLE_NAME)}).locked`), true)
+  assert.ok(names.includes('SSM Compiler Default'), 'the built-in reference stays available')
+  assert.equal(app.eval(`PROFILE_STORE.profiles.find(p => p.name === 'SSM Compiler Default').locked`), true)
 })
 
 test('the starter is a complete, valid, executable profile', () => {
@@ -38,8 +37,11 @@ test('the starter is a complete, valid, executable profile', () => {
   assert.ok(starter.rules.classify.length > 0, 'a profile with no rules does not validate')
 })
 
-test('the starter differs from Eagle by policy, not by being crippled', () => {
-  const eagle = makeDefaultProfile()
+test('the built-in and the starter share the universal compiler policies', () => {
+  // The shipped default must build an SSM no matter which site's documents come
+  // in. The built-in differs from the starter only by being locked; the frozen
+  // legacy policy set lives solely behind makeLegacyEagleProfile().
+  const builtIn = makeDefaultProfile()
   const starter = makeStarterProfile()
   const policy = profile => ({
     resolutionStrategy: profile.hierarchy.resolutionStrategy,
@@ -49,18 +51,18 @@ test('the starter differs from Eagle by policy, not by being crippled', () => {
     cableConflictPolicy: profile.hierarchy.cableConflictPolicy,
     duplicateParentReviewPolicy: profile.hierarchy.duplicateParentReviewPolicy,
     melSystemParentClaims: profile.hierarchy.workflow.melSystemParentClaims,
+    melSeed: profile.hierarchy.melSeed.enabled,
   })
-  assert.deepEqual(policy(eagle), {
-    resolutionStrategy: 'legacy-register', downstreamGapPolicy: 'truncate', caseVariantPolicy: 'preserve',
-    duplicateRegisterPolicy: 'first', cableConflictPolicy: 'legacy-chain-review',
-    duplicateParentReviewPolicy: 'first-silent', melSystemParentClaims: false,
-  })
-  assert.deepEqual(policy(starter), {
+  const universal = {
     resolutionStrategy: 'source-priority', downstreamGapPolicy: 'bridge-review', caseVariantPolicy: 'merge',
     duplicateRegisterPolicy: 'prefer-parent', cableConflictPolicy: 'first-review',
-    duplicateParentReviewPolicy: 'first-review', melSystemParentClaims: true,
-  })
-  assert.equal(starter.rules.classify.length, eagle.rules.classify.length,
+    duplicateParentReviewPolicy: 'first-review', melSystemParentClaims: true, melSeed: true,
+  }
+  assert.deepEqual(policy(builtIn), universal)
+  assert.deepEqual(policy(starter), universal)
+  assert.equal(builtIn.locked, true)
+  assert.equal(starter.locked, false)
+  assert.equal(starter.rules.classify.length, builtIn.rules.classify.length,
     'the starter inherits the rule set as a template to edit')
 })
 
