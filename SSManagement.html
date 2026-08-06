@@ -1296,6 +1296,12 @@ const LEGEND_PDFJS_WORKER="/**\n * @licstart The following is the entire license
 "use strict";
 const CHANGELOG = [
   {
+    "version": "4.0.0",
+    "date": "2026-08-06T00:00:00Z",
+    "type": "major",
+    "notes": "- SSManagement 4.0: the compiler generation formally continues the SSManagement line. The original app (which ended at 3.5.0) is retired as SSManagement-Legacy; this app now owns the SSManagement name and release channel end to end\n- The GitHub repositories are renamed to match: source noahfgarrett/SSManagement, releases noahfgarrett/SSManagement-Releases. Copies installed before this release keep updating \u2014 the old channel address redirects, and both channel names remain trusted\n- Everything from the compiler generation is carried forward unchanged: MEL-first compilation, the partition fold, description-driven nesting with drag-to-teach, milestone ladders, EXTO exports, and the Legend Trainer"
+  },
+  {
     "version": "1.4.0",
     "date": "2026-08-06T00:00:00Z",
     "type": "feature",
@@ -4933,8 +4939,8 @@ function createDurableProfileStorage(options = {}) {
 
 
 
-const APP_VERSION = '1.4.0';
-const UPDATE_REPOSITORY = 'noahfgarrett/SSMCompiler-Releases';
+const APP_VERSION = '4.0.0';
+const UPDATE_REPOSITORY = 'noahfgarrett/SSManagement-Releases';
 const UPDATE_RELEASE_API = 'https://api.github.com/repos/'+UPDATE_REPOSITORY+'/releases/latest';
 const UPDATE_API_VERSION = '2026-03-10';
 const UPDATE_TIMEOUT_MS = 5000;
@@ -5022,7 +5028,10 @@ async function decompressGzipHtml(blob){
 }
 function trustedUpdateAssetApiUrl(value){
   const url=String(value||'').trim();
-  return /^https:\/\/api\.github\.com\/repos\/noahfgarrett\/SSMCompiler-Releases\/releases\/assets\/\d+$/i.test(url)?url:'';
+  /* Both channel names are trusted: the repo was renamed from
+     SSMCompiler-Releases to SSManagement-Releases, and GitHub keeps serving
+     the old path by redirect, so asset URLs may momentarily carry either. */
+  return /^https:\/\/api\.github\.com\/repos\/noahfgarrett\/(SSManagement|SSMCompiler)-Releases\/releases\/assets\/\d+$/i.test(url)?url:'';
 }
 async function fetchGitHubAssetBlob(assetApiUrl){
   const trustedUrl=trustedUpdateAssetApiUrl(assetApiUrl);

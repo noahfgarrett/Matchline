@@ -2,8 +2,8 @@ import { $, $$, esc } from '../core/text.js'
 import { saveUpdateHtml } from '../core/download.js'
 import { portableProfileTransferBase64 } from '../profile/schema.js'
 
-export const APP_VERSION = '1.4.0';
-export const UPDATE_REPOSITORY = 'noahfgarrett/SSMCompiler-Releases';
+export const APP_VERSION = '4.0.0';
+export const UPDATE_REPOSITORY = 'noahfgarrett/SSManagement-Releases';
 export const UPDATE_RELEASE_API = 'https://api.github.com/repos/'+UPDATE_REPOSITORY+'/releases/latest';
 export const UPDATE_API_VERSION = '2026-03-10';
 export const UPDATE_TIMEOUT_MS = 5000;
@@ -91,7 +91,10 @@ export async function decompressGzipHtml(blob){
 }
 export function trustedUpdateAssetApiUrl(value){
   const url=String(value||'').trim();
-  return /^https:\/\/api\.github\.com\/repos\/noahfgarrett\/SSMCompiler-Releases\/releases\/assets\/\d+$/i.test(url)?url:'';
+  /* Both channel names are trusted: the repo was renamed from
+     SSMCompiler-Releases to SSManagement-Releases, and GitHub keeps serving
+     the old path by redirect, so asset URLs may momentarily carry either. */
+  return /^https:\/\/api\.github\.com\/repos\/noahfgarrett\/(SSManagement|SSMCompiler)-Releases\/releases\/assets\/\d+$/i.test(url)?url:'';
 }
 export async function fetchGitHubAssetBlob(assetApiUrl){
   const trustedUrl=trustedUpdateAssetApiUrl(assetApiUrl);

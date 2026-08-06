@@ -70,8 +70,12 @@ test('isNewerVersion orders semantic versions correctly', () => {
 })
 
 test('trustedUpdateAssetApiUrl accepts only the public SSManagement release channel', () => {
-  const trusted = 'https://api.github.com/repos/noahfgarrett/SSMCompiler-Releases/releases/assets/12345'
+  const trusted = 'https://api.github.com/repos/noahfgarrett/SSManagement-Releases/releases/assets/12345'
   assert.equal(trustedUpdateAssetApiUrl(trusted), trusted)
+  // The pre-rename channel name stays trusted: the repo was renamed and
+  // GitHub's redirect may still surface the old path during the transition.
+  const legacy = 'https://api.github.com/repos/noahfgarrett/SSMCompiler-Releases/releases/assets/12345'
+  assert.equal(trustedUpdateAssetApiUrl(legacy), legacy)
   assert.equal(trustedUpdateAssetApiUrl('https://api.github.com/repos/attacker/evil/releases/assets/1'), '')
   assert.equal(
     trustedUpdateAssetApiUrl('https://api.github.com.evil.com/repos/noahfgarrett/SSMCompiler-Releases/releases/assets/1'),
@@ -154,7 +158,7 @@ test('fetchLatestUpdateRelease anonymously checks only the public release channe
   const fetchSpy = makeFetchSpy(async () => ({ ok: true, json: async () => release }))
   globalThis.fetch = fetchSpy
   try {
-    assert.equal(UPDATE_REPOSITORY, 'noahfgarrett/SSMCompiler-Releases')
+    assert.equal(UPDATE_REPOSITORY, 'noahfgarrett/SSManagement-Releases')
     assert.deepEqual(await fetchLatestUpdateRelease(), release)
     assert.equal(fetchSpy.calls.length, 1)
     assert.equal(fetchSpy.calls[0][0], UPDATE_RELEASE_API)
