@@ -24,8 +24,8 @@ test('a first run lands on an editable profile, with the built-in reference besi
   assert.equal(active.hierarchy.caseVariantPolicy, 'merge')
 
   const names = JSON.parse(app.eval('JSON.stringify(PROFILE_STORE.profiles.map(p => p.name))'))
-  assert.ok(names.includes('SSM Compiler Default'), 'the built-in reference stays available')
-  assert.equal(app.eval(`PROFILE_STORE.profiles.find(p => p.name === 'SSM Compiler Default').locked`), true)
+  assert.ok(names.includes('SSManagement Default'), 'the built-in reference stays available')
+  assert.equal(app.eval(`PROFILE_STORE.profiles.find(p => p.name === 'SSManagement Default').locked`), true)
 })
 
 test('the starter is a complete, valid, executable profile', () => {

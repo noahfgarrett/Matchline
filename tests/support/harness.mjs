@@ -72,7 +72,7 @@ function makeSandbox() {
 }
 
 /**
- * Load a built SSMCompiler.html into an isolated VM.
+ * Load a built SSManagement.html into an isolated VM.
  * The boot block is stripped so nothing auto-runs on load.
  */
 /**
@@ -124,7 +124,7 @@ function compiledApp(htmlPath) {
   return compiled
 }
 
-export async function loadApp(htmlPath = resolve(rootDir, 'SSMCompiler.html')) {
+export async function loadApp(htmlPath = resolve(rootDir, 'SSManagement.html')) {
   const { preludes, app } = compiledApp(htmlPath)
   const sandbox = makeSandbox()
   const ctx = createContext(sandbox)

@@ -107,7 +107,7 @@ export function profileExecutionSignature(profile){
   return JSON.stringify({mappings:value.mappings||{},anatomies:value.anatomies||[],rules:value.rules||{},tagRules:value.tagRules||[],
     hierarchy:value.hierarchy||{},modes:value.modes||[],overrides:value.overrides||{}});
 }
-export const COMPILER_PROFILE_NAME='SSM Compiler Default';
+export const COMPILER_PROFILE_NAME='SSManagement Default';
 export function makeDefaultProfile(name){
   const now=new Date().toISOString();
   const eagle=makeEagleRuleProfile(),isBuiltIn=!clean(name);

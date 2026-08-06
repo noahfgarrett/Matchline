@@ -11,7 +11,7 @@ import { loadApp } from './support/harness.mjs'
 
 async function loadSourceApp() {
   const directory = mkdtempSync(join(tmpdir(), 'ssmanagement-unified-'))
-  const htmlPath = join(directory, 'SSMCompiler.html')
+  const htmlPath = join(directory, 'SSManagement.html')
   writeFileSync(htmlPath, buildHtml())
   try {
     return await loadApp(htmlPath)
@@ -355,7 +355,7 @@ test('an embedded update profile handoff is committed to durable storage on firs
     activeRevision: 7,
     durableOk: true,
     durableActiveId: 'transferred-site',
-    durableProfileNames: ['SSM Compiler Default', 'Transferred Site'],
+    durableProfileNames: ['SSManagement Default', 'Transferred Site'],
   })
 })
 
