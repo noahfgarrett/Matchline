@@ -1141,7 +1141,7 @@ export function wireLegendAnatomyBinder(profile) {
   if (add) add.onclick = () => { if (legendCommitBinding(profile)) { toast('Segment added'); renderProfile() } }
   const launch = $('#legendLassoLaunch')
   if (launch) launch.onclick = () => legendLassoOpen(launch.dataset.legendLassoSource, 1)
-  $('[data-legend-unbind]').forEach(button => button.onclick = () => {
+  $$('[data-legend-unbind]').forEach(button => button.onclick = () => {
     legendRemoveBinding(button.dataset.legendUnbind, profile); renderProfile()
   })
 }
@@ -1168,8 +1168,12 @@ export async function legendLassoOpen(sourceId, pageNumber) {
   lasso.error = ''
   lasso.busy = true
   lasso.from = null; lasso.to = null; lasso.preview = null
-  renderProfile()
   try {
+    /* Inside the try, deliberately: this render paints the busy frame, and a
+       crash in rendering or wiring must fall through to the finally that
+       clears `busy` — outside the try it left the modal frozen on
+       "Rendering page…" with no error and no way out. */
+    renderProfile()
     if (!source || !source.file) throw new Error('That document is no longer loaded. Re-add it to select a region.')
     if (source.kind !== 'pdf') throw new Error('Only PDF pages can be shown. Use the lists above for a spreadsheet or pasted text.')
     const buffer = await source.file.arrayBuffer()
