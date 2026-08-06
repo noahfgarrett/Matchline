@@ -1296,6 +1296,12 @@ const LEGEND_PDFJS_WORKER="/**\n * @licstart The following is the entire license
 "use strict";
 const CHANGELOG = [
   {
+    "version": "1.4.0",
+    "date": "2026-08-06T00:00:00Z",
+    "type": "feature",
+    "notes": "- The app is SSManagement again: title, header, guide, and download filenames all carry the name (documents in \u2192 ssm out stays). The update channel, saved profiles, and site rules are untouched \u2014 existing installs update normally and keep everything\n- Hierarchy search no longer stalls while typing: broad queries that matched tens of thousands of rows went from about a second per keystroke to under 50ms, showing the first 400 match branches with a running total and a prompt to narrow\n- The Site Profile Studio opens its tabs much faster: the Visual Trainer's full-model evaluation is paid once right after a build finishes (in the background) and reused across studio visits, and the Test & Publish impact summary is cached instead of re-evaluating the whole model on every repaint\n- The built-in profile is renamed \"SSManagement Default\""
+  },
+  {
     "version": "1.3.2",
     "date": "2026-08-06T00:00:00Z",
     "type": "fix",
@@ -4927,7 +4933,7 @@ function createDurableProfileStorage(options = {}) {
 
 
 
-const APP_VERSION = '1.3.2';
+const APP_VERSION = '1.4.0';
 const UPDATE_REPOSITORY = 'noahfgarrett/SSMCompiler-Releases';
 const UPDATE_RELEASE_API = 'https://api.github.com/repos/'+UPDATE_REPOSITORY+'/releases/latest';
 const UPDATE_API_VERSION = '2026-03-10';
@@ -12970,7 +12976,35 @@ function visualTrainerData(profile, sourceRecords) {
   return { records, byKey, contexts, lookup: createMemoryLookup(rows) }
 }
 
+/* Evaluating parents walks every canonical record through the profile's
+   engine — seconds at real scale — and three separate consumers need it (the
+   Visual Trainer canvas, the Test & Publish impact diff, the post-build
+   prewarm). Memoized on execution content + build identity, but only for the
+   live canonical model; explicit record sets (tests, tools) always compute. */
+const EVALUATE_MEMO = new Map()
+const EVALUATE_MEMO_CAP = 4
+/* Everything the evaluation actually reads — profileExecutionSignature minus
+   `mappings`, deliberately: opening the studio auto-maps detected columns into
+   the draft, which must not invalidate an evaluation that never reads them. */
+function visualEvaluationSignature(profile) {
+  const value = profile || {}
+  return JSON.stringify({ anatomies: value.anatomies || [], rules: value.rules || {}, tagRules: value.tagRules || [],
+    hierarchy: value.hierarchy || {}, overrides: value.overrides || {} })
+}
 function visualTrainerEvaluateParents(profile, sourceRecords) {
+  const live = !sourceRecords || sourceRecords === S.canonicalModel
+  const memoKey = live
+    ? visualEvaluationSignature(profile) + '|' + S.profileBuildRevision + '|' + S.canonicalModel.size
+    : null
+  if (memoKey !== null && EVALUATE_MEMO.has(memoKey)) return EVALUATE_MEMO.get(memoKey)
+  const result = evaluateParentsUncached(profile, sourceRecords)
+  if (memoKey !== null) {
+    if (EVALUATE_MEMO.size >= EVALUATE_MEMO_CAP) EVALUATE_MEMO.delete(EVALUATE_MEMO.keys().next().value)
+    EVALUATE_MEMO.set(memoKey, result)
+  }
+  return result
+}
+function evaluateParentsUncached(profile, sourceRecords) {
   const data = visualTrainerData(profile, sourceRecords)
   const engine = createEngine(profile)
   const sources = { ...melSources(), [VISUAL_TRAINER_SOURCE]: data.lookup }
@@ -15939,7 +15973,7 @@ function openProfileStudio(section){
   if(S.screen!=='profile')S.profileUi.returnScreen=S.screen;
   S.profileUi.section=section||'overview';S.profileDraft=profileClone(activeProfile());S.profileDirty=false;
   S.profileUi.visualSourceKey='';S.profileUi.visualProposal=null;S.profileUi.visualHistory=[];S.profileUi.visualFuture=[];
-  S.profileUi.visualBase=null;S.profileUi.visualTreeCache=null;
+  S.profileUi.visualBase=null;
   ensureProfilePreview();go('profile');
 }
 function closeProfileStudio(){
@@ -15953,7 +15987,7 @@ function markProfileDirty(){
     S.profileDraft=profileClone(activeProfile());S.profileDirty=false;toast('Clone Eagle before changing its rules');renderProfile();return;
   }
   invalidateProfileEvaluation(S.profileDraft);
-  S.profileUi.visualTreeCache=null;
+  invalidateVisualTreeCache();
   if(S.profileUi.section!=='visual'){S.profileUi.visualHistory=[];S.profileUi.visualFuture=[];}
   S.profileDirty=true;
   const state=$('#profileDraftState');if(state)state.textContent='Draft changes';
@@ -16614,13 +16648,33 @@ function renderRelationshipsProfile(draft){
 }
 
 /* ---- visual hierarchy trainer ---- */
+/* Module-level, deliberately OUTSIDE profileUi: the evaluation walks every
+   canonical record through the draft's engine, which costs seconds at scale,
+   and profileUi is rebuilt on every studio open — so the old cache made every
+   studio visit pay that cost again. The signature covers everything the
+   evaluation reads (draft execution content, build revision, model size), so
+   a stale entry can never be served. */
+let VISUAL_TREE_CACHE=null;
+function invalidateVisualTreeCache(){VISUAL_TREE_CACHE=null;}
+let STUDIO_PREWARM_REVISION=-1;
+/* Called after a build settles: pays the visual evaluation while the user is
+   still reading the result tree, so the first Visual Trainer click is warm. */
+function prewarmStudioCaches(){
+  if(!S.canonicalModel.size||S.profileBuildRevision===STUDIO_PREWARM_REVISION)return;
+  STUDIO_PREWARM_REVISION=S.profileBuildRevision;
+  try{
+    const profile=S.profileDraft||activeProfile();
+    profileVisualCache(profile);
+    profileVisualBuildTree(profile,'ssm');
+    profileVisualBuildTree(profile,'flow');
+  }catch(_){/* prewarm is best-effort */}
+}
 function profileVisualCache(draft){
-  const signature=profileExecutionSignature(draft)+'|'+S.profileBuildRevision+'|'+S.canonicalModel.size;
-  const cached=S.profileUi.visualTreeCache;
-  if(cached&&cached.signature===signature)return cached;
+  const signature=visualEvaluationSignature(draft)+'|'+S.profileBuildRevision+'|'+S.canonicalModel.size;
+  if(VISUAL_TREE_CACHE&&VISUAL_TREE_CACHE.signature===signature)return VISUAL_TREE_CACHE;
   const evaluation=visualTrainerEvaluateParents(draft,S.canonicalModel);
-  const next={signature,evaluation,trees:{}};
-  S.profileUi.visualTreeCache=next;return next;
+  VISUAL_TREE_CACHE={signature,evaluation,trees:{}};
+  return VISUAL_TREE_CACHE;
 }
 function profileVisualGroupingLevels(draft){
   const mode=(draft.modes||[]).find(item=>item.executor==='projected'&&(item.levels||[]).some(level=>level.kind==='grouping'));
@@ -16949,7 +17003,7 @@ function profileVisualUndoRedo(direction){
   const entry=from.pop();if(!entry)return;
   to.push({slice:visualTrainerDraftSlice(S.profileDraft),dirty:S.profileDirty});
   S.profileDraft=visualTrainerRestoreDraftSlice(S.profileDraft,entry.slice);
-  invalidateProfileEvaluation(S.profileDraft);S.profileDirty=!!entry.dirty;S.profileUi.visualTreeCache=null;S.profileUi.visualProposal=null;S.profileUi.visualSourceKey='';
+  invalidateProfileEvaluation(S.profileDraft);S.profileDirty=!!entry.dirty;invalidateVisualTreeCache();S.profileUi.visualProposal=null;S.profileUi.visualSourceKey='';
   renderProfile();
 }
 function wireVisualTrainer(){
@@ -17329,7 +17383,10 @@ function renderDetailsBuilder(draft){
     </div>
   </section>`;
 }
+let PROFILE_IMPACT_CACHE=null;
 function profileImpact(draft){
+  const signature=visualEvaluationSignature(draft)+'||'+visualEvaluationSignature(activeProfile())+'|'+S.profileBuildRevision+'|'+S.canonicalModel.size;
+  if(PROFILE_IMPACT_CACHE&&PROFILE_IMPACT_CACHE.signature===signature)return PROFILE_IMPACT_CACHE.impact;
   const impact={building:0,discipline:0,system:0,equipmentType:0,parents:0,ambiguities:0,total:S.canonicalModel.size};
   for(const record of S.canonicalModel.values()){
     const before=resolveRecordContext(record,activeProfile()),after=resolveRecordContext(record,draft);
@@ -17343,6 +17400,7 @@ function profileImpact(draft){
       if(after.decisions.get(key)&&after.decisions.get(key).status==='ambiguous')impact.ambiguities++;
     }
   }
+  PROFILE_IMPACT_CACHE={signature,impact};
   return impact;
 }
 function profileValidation(draft,previous){
@@ -17932,6 +17990,10 @@ function hierarchyCrosslinkHtml(){
   return `<button class="btn view-crosslink" id="switchDetailView">${ic(next.icon||'folder-tree')}Show in ${esc(hierarchyModeLabel(next))}</button>`;
 }
 function renderResult(){
+  /* Pay the Visual Trainer's per-build evaluation now, off the paint path,
+     while the user is reading the tree — the first studio visit opens warm.
+     No-ops instantly on every later call for the same build. */
+  setTimeout(()=>{try{prewarmStudioCaches();}catch(_){/* best-effort */}},400);
   /* MEL-only compiles have no electrical spine: the raw flow view is empty, so
      default to the projected SSM view where the full register lives. */
   if(!S.roots.length){
@@ -18466,39 +18528,74 @@ function collapseAll(){
 }
 
 /* ---- search (filtered render) ---- */
+/* Broad queries are the search killer at scale: the first typed letter can
+   match tens of thousands of nodes, and rendering every branch froze the page
+   long enough to swallow the next keystrokes. Matching marks at most
+   SEARCH_MATCH_CAP branches for display (the true total is still counted and
+   reported), and the per-node lowercase is cached so repeat searches never
+   re-lowercase a quarter-million names. */
+const SEARCH_MATCH_CAP=400;
 function computeFilter(q,idOnly){
   const ql=q.toLowerCase();
+  let total=0,marked=0;
   const walk=n=>{let any=false;n.children.forEach(c=>{if(walk(c))any=true;});
-    n._self=!nodeHidden(n)&&n.name.toLowerCase().includes(ql)&&(!idOnly||n.isId);
+    const matches=!nodeHidden(n)&&(n._lname??=n.name.toLowerCase()).includes(ql)&&(!idOnly||n.isId);
+    if(matches)total++;
+    n._self=matches&&marked<SEARCH_MATCH_CAP&&++marked>0;
     n._show=n._self||any;return n._show;};
   activeHierarchyRoots().forEach(walk);
+  return {total,shown:marked};
 }
 function countSelf(){let c=0;const w=n=>{if(n._self)c++;n.children.forEach(w);};activeHierarchyRoots().forEach(w);return c;}
 function runSearch(){
   cancelExpand();
   const q=S.search.trim();
   if(!q){renderTreeCollapsed();setQInfo('');return;}
-  computeFilter(q,S.idOnly);
-  const m=countSelf();
+  const {total,shown}=computeFilter(q,S.idOnly);
   renderFiltered(q);
-  setQInfo(m?`<b>${m}</b> match${m!==1?'es':''}${S.idOnly?' in ID Names':''} for “${esc(q)}”`:`No matches for “${esc(q)}”${S.idOnly?' in ID Names':''}`);
+  const capNote=total>shown?` · showing the first <b>${shown}</b> — keep typing to narrow`:'';
+  setQInfo(total?`<b>${total}</b> match${total!==1?'es':''}${S.idOnly?' in ID Names':''} for “${esc(q)}”${capNote}`:`No matches for “${esc(q)}”${S.idOnly?' in ID Names':''}`);
 }
+/* A matched folder shows its children as context. Uncapped, one matched
+   system with thousands of rows rebuilt them all on every keystroke — and a
+   broad query matching hundreds of folders multiplied that into a page
+   freeze, so the whole render also works against one global row budget. */
+const SEARCH_CONTEXT_CAP=100;
+const SEARCH_ROW_BUDGET=2000;
 function renderFiltered(hl){
   const tree=$('#tree');tree.innerHTML='';
+  let budget=SEARCH_ROW_BUDGET;
+  const moreStub=count=>{
+    const more=document.createElement('div');more.className='node search-extra';
+    more.innerHTML=`<div class="row"><span class="lbl" style="opacity:.6">… ${count} more not shown — keep typing to narrow</span></div>`;
+    return more;
+  };
   const build=(node,prefixArr,isLast,isRoot)=>{
     const fullKids=kidsOf(node),shown=fullKids.filter(c=>c._show&&!nodeHidden(c));
     const showContext=node._self||shown.some(c=>c._self);
-    const visible=showContext?fullKids:shown;
+    let visible=showContext?fullKids:shown;
+    let trimmed=0;
+    if(showContext&&visible.length>SEARCH_CONTEXT_CAP){
+      /* Keep every matching child; fill the remainder of the cap with context. */
+      const matching=visible.filter(c=>c._show);
+      const context=visible.filter(c=>!c._show).slice(0,Math.max(0,SEARCH_CONTEXT_CAP-matching.length));
+      trimmed=visible.length-matching.length-context.length;
+      const keep=new Set([...matching,...context]);
+      visible=visible.filter(c=>keep.has(c));
+    }
     node._prefix=prefixArr;node._isLast=isLast;node._isRoot=isRoot;node._built=true;
     const wrap=document.createElement('div');wrap.className='node';
     wrap.innerHTML=rowInner(node,prefixArr,isLast,isRoot,node._self?hl:'')+'<div class="kids"></div>';
+    budget--;
     const kids=wrap.querySelector('.kids');
     const cp=isRoot?[]:prefixArr.concat(!isLast);
-    visible.forEach((c,i)=>{
-      const childLast=i===visible.length-1;
+    for(let i=0;i<visible.length;i++){
+      if(budget<=0){trimmed+=visible.length-i;break;}
+      const c=visible[i],childLast=i===visible.length-1&&!trimmed;
       if(c._show)kids.appendChild(build(c,cp,childLast,false));
-      else{const extra=makeNode(c,cp,childLast,false);extra.classList.add('search-extra');kids.appendChild(extra);}
-    });
+      else{const extra=makeNode(c,cp,childLast,false);extra.classList.add('search-extra');kids.appendChild(extra);budget--;}
+    }
+    if(trimmed)kids.appendChild(moreStub(trimmed));
     if(visible.length){const r=wrap.querySelector('.row');r.classList.add('open');r.setAttribute('aria-expanded','true');}
     return wrap;
   };

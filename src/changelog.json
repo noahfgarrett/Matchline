@@ -1,5 +1,11 @@
 [
   {
+    "version": "1.4.0",
+    "date": "2026-08-06T00:00:00Z",
+    "type": "feature",
+    "notes": "- The app is SSManagement again: title, header, guide, and download filenames all carry the name (documents in \u2192 ssm out stays). The update channel, saved profiles, and site rules are untouched \u2014 existing installs update normally and keep everything\n- Hierarchy search no longer stalls while typing: broad queries that matched tens of thousands of rows went from about a second per keystroke to under 50ms, showing the first 400 match branches with a running total and a prompt to narrow\n- The Site Profile Studio opens its tabs much faster: the Visual Trainer's full-model evaluation is paid once right after a build finishes (in the background) and reused across studio visits, and the Test & Publish impact summary is cached instead of re-evaluating the whole model on every repaint\n- The built-in profile is renamed \"SSManagement Default\""
+  },
+  {
     "version": "1.3.2",
     "date": "2026-08-06T00:00:00Z",
     "type": "fix",
