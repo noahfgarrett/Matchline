@@ -1575,5 +1575,10 @@ export async function buildComparison(report){
     S.compare.push({...rec,searchKey:compareSearchKey(rec)});
   }
   S.compare.sort((x,y)=>({off:0,nohit:1,match:2}[x.status]-{off:0,nohit:1,match:2}[y.status])||natCmp(x.equip,y.equip));
-  S.compareBuckets={all:S.compare,off:S.compare.filter(r=>r.status==='off'),nohit:S.compare.filter(r=>r.status==='nohit'),match:S.compare.filter(r=>r.status==='match')};
+  S.compareBuckets={all:S.compare,off:S.compare.filter(r=>r.status==='off'),nohit:S.compare.filter(r=>r.status==='nohit'),match:S.compare.filter(r=>r.status==='match'),
+    /* The two directions of 'nohit' mean opposite things once the MEL seeds the
+       register: a working-copy row this build failed to produce is a finding; a
+       register row the working copy never had is expected by construction. */
+    gap:S.compare.filter(r=>r.status==='nohit'&&r.inWc),
+    extra:S.compare.filter(r=>r.status==='nohit'&&!r.inWc)};
 }

@@ -1,5 +1,11 @@
 [
   {
+    "version": "4.0.1",
+    "date": "2026-08-06T00:00:00Z",
+    "type": "fix",
+    "notes": "- The Comparison tab no longer buries Easy Power results when a MEL is loaded. \"No Comparison\" now splits into two filters that mean opposite things: \"Missing from Extracted\" (working-copy rows this build did not produce \u2014 real findings) and \"Not in Working Copy\" (register rows the MEL seeds by construction \u2014 expected). The combined view orders discrepancies and gaps first, matches next, and the MEL-seeded extras last"
+  },
+  {
     "version": "4.0.0",
     "date": "2026-08-06T00:00:00Z",
     "type": "major",

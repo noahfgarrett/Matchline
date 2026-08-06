@@ -166,10 +166,10 @@ export function renderReviewPanel(){
 }
 
 /* ---- Comparison panel (vs Current Working Copy) ---- */
-export const CMP_FILTERS=['all','off','nohit','match'];
-export const CMP_LABEL={match:'Matching',off:'Non-Matching',nohit:'No Comparison'};
+export const CMP_FILTERS=['all','off','gap','match','extra'];
+export const CMP_LABEL={match:'Matching',off:'Non-Matching',nohit:'No Comparison',gap:'Missing from Extracted',extra:'Not in Working Copy'};
 export const CMP_ICON={match:'check-check',off:'triangle-alert',nohit:'minus'};
-export function cmpCounts(){const b=S.compareBuckets||{};return {off:(b.off||[]).length,nohit:(b.nohit||[]).length,match:(b.match||[]).length};}
+export function cmpCounts(){const b=S.compareBuckets||{};return {off:(b.off||[]).length,nohit:(b.nohit||[]).length,match:(b.match||[]).length,gap:(b.gap||[]).length,extra:(b.extra||[]).length};}
 export function compareSearchKey(r){return [r.equip,r.curParent,r.wcParent,r.curDep,r.wcDep].map(registerDisplayValue).join(' ').toLowerCase();}
 export function compareSortKey(sort){return sort?sort.col+':'+sort.dir:'';}
 export function comparePanelCacheKeyFor(filter,search,diff,sort){return ['compare',S.compare.length,filter,search,diff,compareSortKey(sort)].join(KEYSEP);}
@@ -191,12 +191,19 @@ export function sortCompareList(rows,sort){
     return n*dir||natCmp(a.equip,b.equip);
   });
 }
+/* Default ordering for the combined view: discrepancies, then working-copy
+   rows this build failed to produce, then confirmations — and only then the
+   register rows the working copy never had, which flood the list by
+   construction once the MEL seeds the register. */
+export const CMP_BUCKET_ORDER={off:0,gap:1,match:2,extra:3};
+export function compareBucketOf(r){return r.status==='nohit'?(r.inWc?'gap':'extra'):r.status;}
 export function compareRowsFor(filter,search,diff,sort){
   const q=clean(search).toLowerCase();
   const base=(S.compareBuckets&&S.compareBuckets[filter])||S.compare;
   let rows=base;
   if(q)rows=rows.filter(r=>r.searchKey.includes(q));
   if(diff!=='all')rows=rows.filter(r=>compareDiffMatch(r,diff));
+  if(!sort)return [...rows].sort((a,b)=>CMP_BUCKET_ORDER[compareBucketOf(a)]-CMP_BUCKET_ORDER[compareBucketOf(b)]||natCmp(a.equip,b.equip));
   return sortCompareList(rows,sort);
 }
 export function compareRows(){return compareRowsFor(S.cmpFilter,S.cmpSearch,S.cmpDiff,S.cmpSort);}
@@ -284,9 +291,9 @@ export function renderComparePanel(){
     <div class="note info cmp-legend" style="margin-bottom:12px">${ic('git-branch')}<div>Comparing the <b>extracted</b> register against <b>${esc(S.workCopy?S.workCopy.name:'working copy')}</b>.
       <span class="lg"><span class="cbadge match">${ic('check-check')}Matching</span> parent &amp; dependency agree</span>
       <span class="lg"><span class="cbadge off">${ic('triangle-alert')}Non-Matching</span> a value differs (highlighted)</span>
-      <span class="lg"><span class="cbadge nohit">${ic('minus')}No Comparison</span> present on only one side</span></div></div>
+      <span class="lg"><span class="cbadge nohit">${ic('minus')}No Comparison</span> present on only one side — <b>Missing from Extracted</b> is a working-copy row this build did not produce; <b>Not in Working Copy</b> is expected once the MEL seeds the full register</span></div></div>
     <div class="toolbar">
-      ${fchip('all','All',S.compare.length)}${fchip('off','Non-Matching',c.off)}${fchip('nohit','No Comparison',c.nohit)}${fchip('match','Matching',c.match)}
+      ${fchip('all','All',S.compare.length)}${fchip('off','Non-Matching',c.off)}${fchip('gap','Missing from Extracted',c.gap)}${fchip('match','Matching',c.match)}${fchip('extra','Not in Working Copy',c.extra)}
       <label class="selectctl" title="Filter by changed field">${ic('filter')}<select id="cmpDiff" aria-label="Filter comparison differences">${dopt('all','All fields')}${dopt('parent','Parent differs')}${dopt('dep','Dependency differs')}${dopt('both','Both differ')}</select></label>
       <span class="stream-ind" id="cmpInd"></span>
       <span class="hint" id="cmpCnt"></span>
