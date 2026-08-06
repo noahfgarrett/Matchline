@@ -6,7 +6,7 @@ project documents. The work that used to take a team of engineers months —
 building the equipment hierarchy by hand — this app does in one build, with
 humans reviewing and massaging the result. The owner is Noah Garrett
 (commissioning engineer, LotusWorks). Everything below is current truth as of
-v4.2.1, 655 tests green.
+v4.2.2, 656 tests green.
 
 ## What the app does
 
