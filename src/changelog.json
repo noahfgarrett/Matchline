@@ -1,5 +1,11 @@
 [
   {
+    "version": "4.2.0",
+    "date": "2026-08-06T00:00:00Z",
+    "type": "feature",
+    "notes": "- Electrical feed chains now persist as the hierarchy: within one building and one top-down discipline (Electrical, LSS, Security), the Easy Power / Cable Schedule chain nests intact across UPN boundaries \u2014 GIS at the top under 602 Medium Voltage, everything it feeds beneath it. Each equipment's register row keeps its own MEL building and UPN\n- For that gear the feed sources outrank the MEL's System Parent column, so an administrative MEL entry cannot sever the chain (it stays recorded as a runner-up)\n- Chains still break where they should: a feed crossing buildings or disciplines demotes to a dependency, exactly as before \u2014 the RIO rule is unchanged\n- MEL panel-side spellings (-A/-B/-C) tie to the Easy Power spelling: one piece of equipment, MEL attributes attached"
+  },
+  {
     "version": "4.1.0",
     "date": "2026-08-06T00:00:00Z",
     "type": "feature",

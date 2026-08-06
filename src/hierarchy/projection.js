@@ -9,6 +9,7 @@ import { ruleEngine } from '../rules/provider.js'
 import { createMemoryLookup } from '../rules/lookup.js'
 import { resolveHierarchyClaims, HIERARCHY_CLAIM_KIND } from './claims.js'
 import { foldClaimsByPartition, recordPartitionKey } from '../compiler/fold.js'
+import { disciplinePolarity } from '../compiler/sequence.js'
 import { recordCompilerCableEdges, recordCompilerMelClaims } from '../compiler/edges.js'
 import { assignMilestones } from '../compiler/ladders.js'
 import { synthesizeLineRollups, finalizeLineRollups } from '../compiler/rollups.js'
@@ -302,7 +303,44 @@ export function buildCanonicalModel(){
      the fold on purpose: a human placement wins, and contradictions surface in
      review rather than being silently reclassified. */
   const partitionOf=id=>{const partitionRecord=records.get(id);return partitionRecord?recordPartitionKey(partitionRecord):null;};
-  const foldedCandidates=foldClaimsByPartition(candidates,partitionOf);
+  /* Feed-chain exception: within a top-down discipline (Electrical, LSS,
+     Security), the Easy Power / Cable Schedule chain IS the hierarchy — GIS on
+     top under its system, everything nested beneath by feed, even when the fed
+     equipment's own MEL UPN names a different system. Only same-discipline
+     feed claims qualify, and only within one building: a feed that crosses
+     buildings or disciplines still demotes to a dependency. */
+  const CHAIN_FEED_SOURCES=new Set(['cable','easyPower']);
+  /* Explicit disciplines only, like every partition decision: a record whose
+     "Electrical" came from the profile's discipline FALLBACK has not proven
+     it belongs to the chain. */
+  const chainDiscipline=record=>{
+    if(!record||!record.context||!record.context.explicit||!record.context.explicit.discipline)return '';
+    const discipline=clean(record.discipline);
+    return discipline&&disciplinePolarity(discipline,profile)==='top-down'?discipline:'';
+  };
+  const chainKeep=claim=>{
+    if(!melFirst)return false;
+    if(!CHAIN_FEED_SOURCES.has(claim.provenance&&claim.provenance.source))return false;
+    const subject=records.get(claim.subjectId),target=records.get(claim.targetId);
+    if(!subject||!target)return false;
+    if(clean(subject.building)!==clean(target.building))return false;
+    const discipline=chainDiscipline(subject);
+    return !!discipline&&discipline===chainDiscipline(target);
+  };
+  /* For chain gear, the feed sources outrank the MEL's System Parent column
+     in the parent slot, so a filled-in administrative parent cannot sever the
+     electrical chain. Implemented as a SWAP of the profile's own configured
+     values — a profile that already ranks Easy Power above the MEL is left
+     exactly as configured. The losing claim stays recorded as a runner-up. */
+  const melBasePriority=profileSourcePriority(profile,'mel'),epBasePriority=profileSourcePriority(profile,'easyPower');
+  if(melFirst&&melBasePriority>epBasePriority)for(const claim of candidates){
+    if(claim.kind!==HIERARCHY_CLAIM_KIND.STRUCTURAL_PARENT)continue;
+    const claimSource=claim.provenance&&claim.provenance.source;
+    if(claimSource!=='easyPower'&&claimSource!=='mel')continue;
+    if(!chainDiscipline(records.get(claim.subjectId)))continue;
+    claim.priority=claimSource==='easyPower'?melBasePriority:epBasePriority;
+  }
+  const foldedCandidates=foldClaimsByPartition(candidates,partitionOf,{keepCrossing:chainKeep});
   const snapshot=resolveHierarchyClaims({observations,candidates:foldedCandidates,manualOverrides});S.resolvedSnapshot=snapshot;
   S.resolutionIssues=[...S.resolutionIssues,...snapshot.issues];
   for(const entity of snapshot.entities){
@@ -384,6 +422,24 @@ export function buildModeProjection(mode){
      which is exactly what sameRecordContext hardcoded for building/discipline/
      system. A mode with no grouping levels never separates anything. */
   const sameGroup=(a,b)=>!!a&&!!b&&levels.every(level=>recordAttribute(a,level.attribute)===recordAttribute(b,level.attribute));
+  /* Feed-chain nesting: within one top-down discipline the chain crosses
+     SYSTEM folders by design (a 604 transformer nests under the 602 GIS), so
+     the system level alone may disagree. Buildings and disciplines must still
+     agree, mirroring the fold's chain exception. MEL-first profiles only —
+     the frozen legacy projection keeps its strict grouping. */
+  const chainProfile=activeProfile();
+  const chainSeed=chainProfile.hierarchy&&chainProfile.hierarchy.melSeed;
+  const chainEnabled=!!(chainSeed&&chainSeed.enabled!==false);
+  const chainGroup=(a,b)=>{
+    if(!chainEnabled||!a||!b)return false;
+    /* Explicit disciplines only — fallback-derived "Electrical" is not proof. */
+    if(!a.context||!a.context.explicit||!a.context.explicit.discipline)return false;
+    if(!b.context||!b.context.explicit||!b.context.explicit.discipline)return false;
+    const discipline=clean(recordAttribute(a,'discipline'));
+    if(!discipline||discipline!==clean(recordAttribute(b,'discipline')))return false;
+    if(disciplinePolarity(discipline,chainProfile)!=='top-down')return false;
+    return levels.every(level=>level.attribute==='system'||recordAttribute(a,level.attribute)===recordAttribute(b,level.attribute));
+  };
   const groupFor=record=>{
     let parent=null,key='';
     for(const level of levels){
@@ -421,7 +477,7 @@ export function buildModeProjection(mode){
     const nextTrail=new Set(trail||[]);if(nextTrail.has(record.key)){place(node,record);attached.add(record.key);return node;}
     nextTrail.add(record.key);
     const parentRecord=records.get(tagKey(record.ssmParentTag)),parentNode=parentRecord&&equipmentNodes.get(parentRecord.key);
-    if(parentRecord&&parentNode&&sameGroup(record,parentRecord)&&!nextTrail.has(parentRecord.key)){
+    if(parentRecord&&parentNode&&(sameGroup(record,parentRecord)||chainGroup(record,parentRecord))&&!nextTrail.has(parentRecord.key)){
       attach(parentRecord,nextTrail);node.parent=parentNode;parentNode.children.push(node);
     }else place(node,record);
     attached.add(record.key);return node;
