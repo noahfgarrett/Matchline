@@ -1,5 +1,11 @@
 [
   {
+    "version": "4.1.0",
+    "date": "2026-08-06T00:00:00Z",
+    "type": "feature",
+    "notes": "- Teach a tag ending by highlighting it: click any tag in the results drawer, select the ending (like \"-C\"), and one button removes it from every tag. Behind the click it becomes an ordinary normalize rule, saved to your site profile and editable in the Studio like any other rule\n- A trailing -C now counts as a panel side out of the box, alongside -A, -B, -P, -S, and -OUTPUT\n- Every shipped rule's name and description is rewritten in plain language \u2014 what it does, with an example, and when to change it \u2014 instead of implementation notes"
+  },
+  {
     "version": "4.0.1",
     "date": "2026-08-06T00:00:00Z",
     "type": "fix",

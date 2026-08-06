@@ -3,12 +3,12 @@ import { normSep } from '../core/tags.js'
 import { S, _virtualTok, clearResultCache, isPanelCacheLive, panelScroll, rememberPanelCache, rememberTreePanel, restoreTreePanel, tagKey } from '../state.js'
 import { ic } from './icons.js'
 import { copyTagListHtml, copyText, copyableTag, wireCopyTags } from './progress.js'
-import { DEFAULT_DETAIL_LAYOUT, PROFILE_DETAIL_FIELDS, activeProfile } from '../profile/schema.js'
+import { DEFAULT_DETAIL_LAYOUT, PROFILE_DETAIL_FIELDS, activeProfile, addTaughtSuffixRule } from '../profile/schema.js'
 import { kidsOf, nodeDep, nodeHidden } from '../profile/classify.js'
 import { activeModes, modeById } from '../hierarchy/modes.js'
 import { activeHierarchyNodeMap, activeHierarchyRoots, activeHierarchyStats } from '../hierarchy/tree.js'
 import { canonicalRecord } from '../hierarchy/projection.js'
-import { acceptPlacement, activePlacements, applyManualReparent, applyManualReparentBatch, nestingMatchFor, equipmentRole, firstSystemParentTag, manualOverrideKeySet, melResolvedRecord, movePlacementBranch, nodePath, placementCandidates, placementExpectedParentRole, rawSubtreeCount, redoManualReparent, resetSourceParentClaims, similarNestingMoves, undoManualReparent, undoPlacement } from '../hierarchy/build.js'
+import { acceptPlacement, activePlacements, applyManualReparent, applyManualReparentBatch, nestingMatchFor, equipmentRole, firstSystemParentTag, manualOverrideKeySet, melResolvedRecord, movePlacementBranch, nodePath, placementCandidates, placementExpectedParentRole, rawSubtreeCount, redoManualReparent, resetSourceParentClaims, similarNestingMoves, undoManualReparent, undoPlacement, buildHierarchy } from '../hierarchy/build.js'
 import { comparePanelCacheKey, placementState, refreshCompare, refreshReview, renderComparePanel, renderReviewPanel, reviewPanelCacheKey } from '../review/panels.js'
 import { exportExtoSSMXlsx, exportHierarchyXlsx, exportOutlineTxt, exportSSMXlsx } from '../export/xlsx.js'
 import { go, render } from './screens.js'
@@ -665,6 +665,52 @@ export function renderFiltered(hl){
 const ACKNOWLEDGEABLE=new Set(['missing-data','duplicate-parent','bridged-gap','cable-conflict']);
 export function isAcknowledgeableIssue(issue){return !!issue&&(issue.status==='suggested'||ACKNOWLEDGEABLE.has(issue.status));}
 
+/* ---- teach-a-suffix from a highlighted tag ending ----
+   The whole feature the user sees: select the end of the tag in the drawer,
+   one button appears, one click strips that ending from every tag via an
+   ordinary profile normalize rule (visible and editable in the Studio). */
+export function taughtEndingFromSelection(tag,selected){
+  const text=String(selected||'').trim();
+  const whole=String(tag||'');
+  if(!text||text.length>=whole.length)return '';
+  if(!whole.toUpperCase().endsWith(text.toUpperCase()))return '';
+  /* The selection must start at a separator: stripping a bare letter would
+     merge unrelated tags (removing "C" also hits every tag ending in C). */
+  if(!/^[\s\-_./]/.test(text))return '';
+  return text;
+}
+export function updateTeachStrip(){
+  const button=$('#teachStrip'),tagEl=$('#drawerTag');
+  if(!button||!tagEl)return;
+  let ending='';
+  const sel=typeof window.getSelection==='function'?window.getSelection():null;
+  if(sel&&!sel.isCollapsed&&sel.rangeCount){
+    const range=sel.getRangeAt(0);
+    if(tagEl.contains(range.commonAncestorContainer))ending=taughtEndingFromSelection(tagEl.textContent,sel.toString());
+  }
+  if(ending){button.hidden=false;button.dataset.ending=ending;button.innerHTML=`${ic('minus')}Remove "${esc(ending)}" from every tag`;}
+  else{button.hidden=true;button.dataset.ending='';}
+}
+export async function applyTeachStrip(){
+  const button=$('#teachStrip'),ending=button&&button.dataset.ending;
+  if(!ending)return;
+  const result=addTaughtSuffixRule(ending);
+  if(!result.ok){
+    toast(result.reason==='locked'?'This profile is locked — switch to an editable site profile to teach rules':'That ending could not be saved');
+    return;
+  }
+  const upper=ending.toUpperCase();
+  let affected=0;for(const record of S.canonicalModel.values())if(String(record.tag).toUpperCase().endsWith(upper))affected++;
+  if(typeof window.getSelection==='function'){const sel=window.getSelection();if(sel&&sel.removeAllRanges)sel.removeAllRanges();}
+  button.hidden=true;
+  if(result.already){toast(`"${ending}" was already being removed`);return;}
+  await buildHierarchy();
+  toast(`Removed "${ending}" from ${affected} tag${affected!==1?'s':''} — saved to ${activeProfile().name}`);
+}
+if(typeof document!=='undefined'&&typeof document.addEventListener==='function'){
+  document.addEventListener('selectionchange',()=>{try{updateTeachStrip();}catch(_){/* drawer not mounted */}});
+}
+
 /* ---- detail drawer ---- */
 export function openPlacementDrawer(issueId){
   const issue=S.placements.find(item=>item.id===issueId&&!item.resolved);if(!issue)return;
@@ -723,7 +769,8 @@ export function openDetail(nodeId){
   const placement=node.placementId?S.placements.find(item=>item.id===node.placementId&&!item.resolved):null;
   const record=node.canonicalKey?S.canonicalModel.get(node.canonicalKey):canonicalRecord(node.name);
   if(record)S.selectedEquipmentKey=record.key;
-  $('#drawerTitle').innerHTML=`${ic(node.isInstrument?'database':node.isLoad?'corner-down-right':'spline')}<span>${esc(node.name)}</span>`;
+  $('#drawerTitle').innerHTML=`${ic(node.isInstrument?'database':node.isLoad?'corner-down-right':'spline')}<span id="drawerTag" title="Highlight an ending (like -C) to remove it from every tag">${esc(node.name)}</span><button class="btn sm" id="teachStrip" hidden></button>`;
+  const teach=$('#teachStrip');if(teach)teach.onclick=()=>{applyTeachStrip();};
   const melResult=melCheck?(melCheck.status==='corrected'?`Corrected · Equipment UPN ${melCheck.equipmentUpn} / previous parent UPN ${melCheck.parentUpn}`
       :melCheck.status==='matched'?`No change · matching UPN ${melCheck.equipmentUpn}`
       :melCheck.status==='warning'?`Skipped · ${melCheck.reason}`:`Not evaluated · ${melCheck.reason}`)

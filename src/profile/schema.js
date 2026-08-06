@@ -119,7 +119,15 @@ export function makeDefaultProfile(name){
     basePreset:{id:EAGLE_PRESET_ID,version:String(EAGLE_PRESET_VERSION),fingerprint:null},attributes:[],
     revision:1,publishedAt:now,updatedAt:now,mappings:{},tagRules:[],
     overrides:{relationships:[],attributes:[]},
-    anatomies:profileClone(eagle.anatomies),rules:profileClone(eagle.rules),modes:profileClone(eagle.modes),
+    anatomies:profileClone(eagle.anatomies),rules:(()=>{
+      const rules=profileClone(eagle.rules);
+      /* The shipped profiles also treat a trailing -C as a panel side. The
+         frozen legacy baseline (makeLegacyEagleProfile) restores the pristine
+         rule set, so the golden compatibility suite is untouched. */
+      const sides=rules.normalize.find(rule=>rule.id==='norm-panel-sides');
+      if(sides&&!sides.suffixes.includes('C'))sides.suffixes=[...sides.suffixes,'C'];
+      return rules;
+    })(),modes:profileClone(eagle.modes),
     /* The built-in and every named profile share the SAME universal compiler
        behavior — the shipped default must build an SSM no matter which site's
        documents come in (the built-in differs only in being locked). The frozen
@@ -192,6 +200,7 @@ export function makeLegacyEagleProfile(){
     duplicateParentReviewPolicy:'first-silent'
   });
   profile.hierarchy.workflow={...profile.hierarchy.workflow,melSystemParentClaims:false};
+  profile.rules=profileClone(makeEagleRuleProfile().rules); // pristine frozen rule set — no modern additions
   return profile;
 }
 export function normalizeProfile(raw){
@@ -297,6 +306,33 @@ export function mergeProfileStores(current,incoming){
   }
   const activeId=merged.has(current.activeId)?current.activeId:(merged.has(incoming.activeId)?incoming.activeId:current.activeId);
   return {...current,activeId,profiles:[...merged.values()]};
+}
+export const TAUGHT_STRIP_RULE_ID='taught-strip-endings';
+/**
+ * Add one taught ending to the active profile's normalize rules.
+ *
+ * The rule stores the highlighted text verbatim (separator included) with an
+ * empty separator list, so exactly what the user selected is what gets
+ * stripped. The normalize array is REPLACED, not mutated: the rule compiler
+ * caches per rules-array identity, and an in-place push would keep serving
+ * the stale ending list.
+ */
+export function addTaughtSuffixRule(ending){
+  const profile=activeProfile(),value=clean(ending);
+  if(!value)return {ok:false,reason:'empty'};
+  if(profile.locked)return {ok:false,reason:'locked'};
+  const normalize=profile.rules&&Array.isArray(profile.rules.normalize)?profile.rules.normalize:null;
+  if(!normalize)return {ok:false,reason:'no-rules'};
+  const existing=normalize.find(rule=>rule.id===TAUGHT_STRIP_RULE_ID);
+  if(existing&&(existing.suffixes||[]).some(suffix=>String(suffix).toUpperCase()===value.toUpperCase()))return {ok:true,already:true};
+  const taught=existing
+    ?{...existing,suffixes:[...(existing.suffixes||[]),value]}
+    :{id:TAUGHT_STRIP_RULE_ID,name:'Removed endings (taught from tags)',kind:'stripSuffix',separators:[''],suffixes:[value],repeat:false,enabled:true,stage:'identity',
+      note:'Endings removed by highlighting them on a tag in the results view. Each entry is trimmed off any tag that ends with it, so both spellings count as the same equipment.'};
+  profile.rules={...profile.rules,normalize:existing?normalize.map(rule=>rule.id===TAUGHT_STRIP_RULE_ID?taught:rule):[...normalize,taught]};
+  profile.revision=Math.max(1,Number(profile.revision)||1)+1;profile.updatedAt=new Date().toISOString();
+  persistProfiles();setRuleProfile(profile);
+  return {ok:true};
 }
 export const STARTER_PROFILE_NAME='New Site Profile';
 /**

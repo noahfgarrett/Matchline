@@ -243,11 +243,13 @@ const SHEETS = {
   'duplicate-parents.xlsx': {
     EasyPower: [
       ['Starting Source', 'Downstream1', 'Downstream2', 'Final Source', 'ID Name', 'Load Description', 'Circuit #'],
-      ['GIS-01', 'B14-XFM-1111', 'PNL-9', 'PNL-9', '', 'MTR-A', '10'],
-      ['GIS-01', 'B14-XFM-2222', 'PNL-9', 'PNL-9', '', 'MTR-B', '11'],
+      // load names use digit endings: letter endings like -A/-B/-C are panel
+      // sides the shipped normalize rules merge, which is not this test's topic
+      ['GIS-01', 'B14-XFM-1111', 'PNL-9', 'PNL-9', '', 'MTR-1', '10'],
+      ['GIS-01', 'B14-XFM-2222', 'PNL-9', 'PNL-9', '', 'MTR-2', '11'],
       // a tag that is a Starting Source in one row and downstream in another is
       // NOT a conflict -- the empty parent is the top of its own path
-      ['B14-XFM-1111', 'PNL-8', '', 'PNL-8', '', 'MTR-C', '12'],
+      ['B14-XFM-1111', 'PNL-8', '', 'PNL-8', '', 'MTR-3', '12'],
     ],
   },
   /* A blank downstream column with a populated one AFTER it. Not a golden
