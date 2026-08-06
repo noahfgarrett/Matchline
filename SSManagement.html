@@ -1296,6 +1296,12 @@ const LEGEND_PDFJS_WORKER="/**\n * @licstart The following is the entire license
 "use strict";
 const CHANGELOG = [
   {
+    "version": "4.2.0",
+    "date": "2026-08-06T00:00:00Z",
+    "type": "feature",
+    "notes": "- Electrical feed chains now persist as the hierarchy: within one building and one top-down discipline (Electrical, LSS, Security), the Easy Power / Cable Schedule chain nests intact across UPN boundaries \u2014 GIS at the top under 602 Medium Voltage, everything it feeds beneath it. Each equipment's register row keeps its own MEL building and UPN\n- For that gear the feed sources outrank the MEL's System Parent column, so an administrative MEL entry cannot sever the chain (it stays recorded as a runner-up)\n- Chains still break where they should: a feed crossing buildings or disciplines demotes to a dependency, exactly as before \u2014 the RIO rule is unchanged\n- MEL panel-side spellings (-A/-B/-C) tie to the Easy Power spelling: one piece of equipment, MEL attributes attached"
+  },
+  {
     "version": "4.1.0",
     "date": "2026-08-06T00:00:00Z",
     "type": "feature",
@@ -4928,7 +4934,7 @@ function createDurableProfileStorage(options = {}) {
 
 
 
-const APP_VERSION = '4.1.0';
+const APP_VERSION = '4.2.0';
 const UPDATE_REPOSITORY = 'noahfgarrett/SSManagement-Releases';
 const UPDATE_RELEASE_API = 'https://api.github.com/repos/'+UPDATE_REPOSITORY+'/releases/latest';
 const UPDATE_API_VERSION = '2026-03-10';
@@ -10312,12 +10318,19 @@ function resolveHierarchyClaims({
 /* The partition fold (spec §5): a structural-parent claim whose subject and
    target live in different partition buckets is demoted to a dependency claim
    with the crossing recorded in provenance. Unknown buckets never demote — a
-   boundary crossing must be proven, not assumed. Pure: claims in, claims out. */
-function foldClaimsByPartition(claims, partitionOf) {
+   boundary crossing must be proven, not assumed. Pure: claims in, claims out.
+
+   options.keepCrossing(claim): a caller-supplied exception for claims that may
+   nest ACROSS partitions — the electrical feed chain, where the Easy Power /
+   Cable Schedule hierarchy is the structure and only the building boundary
+   still demotes. The predicate decides; the fold stays pure. */
+function foldClaimsByPartition(claims, partitionOf, options) {
+  const keepCrossing = options && options.keepCrossing
   return claims.map(claim => {
     if (claim.kind !== HIERARCHY_CLAIM_KIND.STRUCTURAL_PARENT) return claim
     const subject = partitionOf(claim.subjectId), target = partitionOf(claim.targetId)
     if (!subject || !target || subject === target) return claim
+    if (keepCrossing && keepCrossing(claim)) return claim
     return {
       ...claim,
       id: 'fold:' + claim.id,
@@ -10962,6 +10975,7 @@ function attachControlsRefs() {
 
 
 
+
 /* ---- canonical equipment model and projections ---- */
 const PROFILE_SOURCE_ORDER=['cable','mel','easyPower','pmd'];
 function canonicalRecord(value){return S.canonicalModel.get(tagKey(profileTrimmedTag(value)))||null;}
@@ -11248,7 +11262,44 @@ function buildCanonicalModel(){
      the fold on purpose: a human placement wins, and contradictions surface in
      review rather than being silently reclassified. */
   const partitionOf=id=>{const partitionRecord=records.get(id);return partitionRecord?recordPartitionKey(partitionRecord):null;};
-  const foldedCandidates=foldClaimsByPartition(candidates,partitionOf);
+  /* Feed-chain exception: within a top-down discipline (Electrical, LSS,
+     Security), the Easy Power / Cable Schedule chain IS the hierarchy — GIS on
+     top under its system, everything nested beneath by feed, even when the fed
+     equipment's own MEL UPN names a different system. Only same-discipline
+     feed claims qualify, and only within one building: a feed that crosses
+     buildings or disciplines still demotes to a dependency. */
+  const CHAIN_FEED_SOURCES=new Set(['cable','easyPower']);
+  /* Explicit disciplines only, like every partition decision: a record whose
+     "Electrical" came from the profile's discipline FALLBACK has not proven
+     it belongs to the chain. */
+  const chainDiscipline=record=>{
+    if(!record||!record.context||!record.context.explicit||!record.context.explicit.discipline)return '';
+    const discipline=clean(record.discipline);
+    return discipline&&disciplinePolarity(discipline,profile)==='top-down'?discipline:'';
+  };
+  const chainKeep=claim=>{
+    if(!melFirst)return false;
+    if(!CHAIN_FEED_SOURCES.has(claim.provenance&&claim.provenance.source))return false;
+    const subject=records.get(claim.subjectId),target=records.get(claim.targetId);
+    if(!subject||!target)return false;
+    if(clean(subject.building)!==clean(target.building))return false;
+    const discipline=chainDiscipline(subject);
+    return !!discipline&&discipline===chainDiscipline(target);
+  };
+  /* For chain gear, the feed sources outrank the MEL's System Parent column
+     in the parent slot, so a filled-in administrative parent cannot sever the
+     electrical chain. Implemented as a SWAP of the profile's own configured
+     values — a profile that already ranks Easy Power above the MEL is left
+     exactly as configured. The losing claim stays recorded as a runner-up. */
+  const melBasePriority=profileSourcePriority(profile,'mel'),epBasePriority=profileSourcePriority(profile,'easyPower');
+  if(melFirst&&melBasePriority>epBasePriority)for(const claim of candidates){
+    if(claim.kind!==HIERARCHY_CLAIM_KIND.STRUCTURAL_PARENT)continue;
+    const claimSource=claim.provenance&&claim.provenance.source;
+    if(claimSource!=='easyPower'&&claimSource!=='mel')continue;
+    if(!chainDiscipline(records.get(claim.subjectId)))continue;
+    claim.priority=claimSource==='easyPower'?melBasePriority:epBasePriority;
+  }
+  const foldedCandidates=foldClaimsByPartition(candidates,partitionOf,{keepCrossing:chainKeep});
   const snapshot=resolveHierarchyClaims({observations,candidates:foldedCandidates,manualOverrides});S.resolvedSnapshot=snapshot;
   S.resolutionIssues=[...S.resolutionIssues,...snapshot.issues];
   for(const entity of snapshot.entities){
@@ -11330,6 +11381,24 @@ function buildModeProjection(mode){
      which is exactly what sameRecordContext hardcoded for building/discipline/
      system. A mode with no grouping levels never separates anything. */
   const sameGroup=(a,b)=>!!a&&!!b&&levels.every(level=>recordAttribute(a,level.attribute)===recordAttribute(b,level.attribute));
+  /* Feed-chain nesting: within one top-down discipline the chain crosses
+     SYSTEM folders by design (a 604 transformer nests under the 602 GIS), so
+     the system level alone may disagree. Buildings and disciplines must still
+     agree, mirroring the fold's chain exception. MEL-first profiles only —
+     the frozen legacy projection keeps its strict grouping. */
+  const chainProfile=activeProfile();
+  const chainSeed=chainProfile.hierarchy&&chainProfile.hierarchy.melSeed;
+  const chainEnabled=!!(chainSeed&&chainSeed.enabled!==false);
+  const chainGroup=(a,b)=>{
+    if(!chainEnabled||!a||!b)return false;
+    /* Explicit disciplines only — fallback-derived "Electrical" is not proof. */
+    if(!a.context||!a.context.explicit||!a.context.explicit.discipline)return false;
+    if(!b.context||!b.context.explicit||!b.context.explicit.discipline)return false;
+    const discipline=clean(recordAttribute(a,'discipline'));
+    if(!discipline||discipline!==clean(recordAttribute(b,'discipline')))return false;
+    if(disciplinePolarity(discipline,chainProfile)!=='top-down')return false;
+    return levels.every(level=>level.attribute==='system'||recordAttribute(a,level.attribute)===recordAttribute(b,level.attribute));
+  };
   const groupFor=record=>{
     let parent=null,key='';
     for(const level of levels){
@@ -11367,7 +11436,7 @@ function buildModeProjection(mode){
     const nextTrail=new Set(trail||[]);if(nextTrail.has(record.key)){place(node,record);attached.add(record.key);return node;}
     nextTrail.add(record.key);
     const parentRecord=records.get(tagKey(record.ssmParentTag)),parentNode=parentRecord&&equipmentNodes.get(parentRecord.key);
-    if(parentRecord&&parentNode&&sameGroup(record,parentRecord)&&!nextTrail.has(parentRecord.key)){
+    if(parentRecord&&parentNode&&(sameGroup(record,parentRecord)||chainGroup(record,parentRecord))&&!nextTrail.has(parentRecord.key)){
       attach(parentRecord,nextTrail);node.parent=parentNode;parentNode.children.push(node);
     }else place(node,record);
     attached.add(record.key);return node;

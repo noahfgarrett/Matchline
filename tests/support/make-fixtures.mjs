@@ -121,6 +121,36 @@ const SHEETS = {
       ['B31-PMP-101-01', 'A2', 'CHW primary pump'],
     ],
   },
+  /* Electrical feed-chain fixtures (the 602 Medium Voltage examples): the
+     Easy Power chain must persist as the hierarchy for electrical equipment,
+     with the MEL supplying building/UPN attributes. GIS-01 appears in the MEL
+     as -A/-B panel sides; the LVS carries a WRONG MEL System Parent that the
+     feed must outrank; one fed transformer sits in another building and one
+     fed RIO sits in another discipline — both must demote to dependencies. */
+  'compiler-chain-mel.xlsx': {
+    'Master Equipment List': [
+      ['Equipment Tag', 'Equipment Description', 'Bldg', 'Discipline', 'UPN', 'System Description', 'System Parent Equipment Tag(s)', 'Project Phase'],
+      ['GIS-01-A', 'Gas insulated switchgear side A', 'B14', 'Electrical', '602', 'Medium Voltage', '', 'New'],
+      ['GIS-01-B', 'Gas insulated switchgear side B', 'B14', 'Electrical', '602', 'Medium Voltage', '', 'New'],
+      ['B14-XFM-6041', 'Distribution transformer', 'B14', 'Electrical', '604', 'Normal Power', '', 'New'],
+      ['B14-LVS-6041', 'LV switchboard', 'B14', 'Electrical', '604', 'Normal Power', 'B14-PP-9999', 'New'],
+      ['B31-XFM-7777', 'Remote building transformer', 'B31', 'Electrical', '604', 'Normal Power', '', 'New'],
+      ['B14-RIO-6500', 'Remote IO panel', 'B14', 'I&C', '650', 'FMS Network', '', 'New'],
+    ],
+  },
+  'compiler-chain-ep.xlsx': {
+    EasyPower: [
+      ['Starting Source', 'Downstream1', 'Downstream2', 'Final Source', 'ID Name', 'Load Description', 'Circuit #'],
+      ['GIS-01', 'B14-XFM-6041', 'B14-LVS-6041', 'B14-LVS-6041', '', '', '30'],
+      ['GIS-01', 'B14-XFM-6041', 'B14-LVS-6041', 'B14-LVS-6041', '', 'B31-XFM-7777', '31'],
+    ],
+  },
+  'compiler-chain-cable.xlsx': {
+    'Cable Schedule': [
+      ['Load Name (To)', 'Panel (From)'],
+      ['B14-RIO-6500', 'B14-LVS-6041'],
+    ],
+  },
   'compiler-wc.xlsx': {
     SSM: [
       ['Equipment ID', 'Closest Parent', 'Dependencies'],

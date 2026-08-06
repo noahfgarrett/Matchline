@@ -81,6 +81,11 @@ Priority order for the parent slot (highest wins; `projection.js`):
 | 450 | Previously-resolved flow placements |
 | 150 | Inferred nesting (see §7) — **any real evidence beats an inference** |
 
+For **top-down disciplines** (Electrical, LSS, Security — the ones that
+commission source-to-load), the Easy Power and MEL priorities swap for that
+gear: the feed sources decide nesting, and a filled-in MEL System Parent
+cannot sever the chain (it stays recorded as a runner-up claim).
+
 **Manual overrides sit above the whole table.** A drag-and-drop reparent (or
 explicit "make root") is stored in the profile and outranks every claim from
 every document, permanently, until undone.
@@ -99,6 +104,18 @@ This is the core rule of the whole compiler:
 - A **partition** is the tuple **(Building, Discipline, System)** — all three explicit, from the MEL or a rule or an override. A record with an unknown partition is never demoted (no guessing in either direction).
 - Same partition → the feeder is the **parent** (nesting).
 - Different partition → the feeder becomes a **dependency**, and the fed equipment stands as a root (or nests under something in its *own* system).
+
+**The feed-chain exception.** Within one top-down discipline (Electrical,
+LSS, Security) and one building, a feed claim from Easy Power or the Cable
+Schedule survives a *system* crossing: the chain IS the hierarchy. GIS sits at
+the top under its own system (602 Medium Voltage) and everything it feeds
+nests beneath it — even a transformer whose own MEL UPN names another system.
+That transformer's register row still carries its own MEL building and UPN;
+only the tree nesting follows the feed. The exception requires explicit
+(MEL-derived) disciplines on both ends — a fallback-derived "Electrical" is
+not proof — and it never crosses a building or a discipline: a B14 feeder
+serving B31 gear, or an electrical panel serving an I&C device, demotes to a
+dependency exactly as before.
 
 The canonical example: an I&C RIO panel in UPN 650 powered from an electrical
 panel in UPN 603. The power feed is real — so it's recorded — but the RIO does
