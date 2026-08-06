@@ -240,6 +240,31 @@ export function buildCanonicalModel(){
     S.imAudit=[];
   }
   const profile=activeProfile(),observations=[],candidates=[],manualOverrides=[];let order=0;
+  const candidateById=new Map();
+  /* Several source spellings can resolve to the same MEL-authoritative record.
+     PMD commonly demonstrates this when one panel matches both _NPS and _CPS
+     electrical occurrences. Those are two observations supporting one canonical
+     relationship, not two independently addressable candidates. Keep the strict
+     duplicate-ID guard in the resolver and coalesce the evidence here, where the
+     source and canonical target are both still known. */
+  const mergeCandidateProvenance=(current,incoming)=>{
+    if(!current)return incoming||null;if(!incoming)return current;
+    const merged={...current};
+    const count=(Number.isFinite(current.count)?current.count:0)+(Number.isFinite(incoming.count)?incoming.count:0);
+    if(count)merged.count=count;
+    const observations=[...(current.observations||[]),...(incoming.observations||[])];
+    if(observations.length)merged.observations=observations.slice(0,24);
+    const claimedParents=[...(current.claimedParents||[]),...(incoming.claimedParents||[])];
+    if(claimedParents.length){
+      const seen=new Set();merged.claimedParents=claimedParents.filter(value=>{const key=tagKey(value);if(!key||seen.has(key))return false;seen.add(key);return true;}).slice(0,24);
+    }
+    return merged;
+  };
+  const addCandidate=candidate=>{
+    const existing=candidateById.get(candidate.id);
+    if(existing){existing.provenance=mergeCandidateProvenance(existing.provenance,candidate.provenance);return existing;}
+    candidateById.set(candidate.id,candidate);candidates.push(candidate);return candidate;
+  };
   const canonicalLookup=createMemoryLookup([...records.values()].map(record=>({
     tag:record.tag,columns:{},attributes:{...record.attributes}
   })));
@@ -247,19 +272,19 @@ export function buildCanonicalModel(){
   const addParent=(record,parent,source,priority,provenance)=>{
     const target=cleanRegisterTag(parent);if(!target||tagKey(target)===record.key)return;
     const targetRecord=ensure(target);targetRecord.isSyntheticParent=true;
-    candidates.push({id:`parent:${source}:${record.key}:${targetRecord.key}`,kind:HIERARCHY_CLAIM_KIND.STRUCTURAL_PARENT,
+    addCandidate({id:`parent:${source}:${record.key}:${targetRecord.key}`,kind:HIERARCHY_CLAIM_KIND.STRUCTURAL_PARENT,
       subjectId:record.key,targetId:targetRecord.key,priority,order:order++,provenance});
   };
   const addDependency=(record,dependency,source,priority)=>{
     const target=cleanRegisterTag(dependency);if(!target||tagKey(target)===record.key)return;
     const targetRecord=ensure(target);
-    candidates.push({id:`dependency:${source}:${record.key}:${targetRecord.key}`,kind:HIERARCHY_CLAIM_KIND.DEPENDENCY,
+    addCandidate({id:`dependency:${source}:${record.key}:${targetRecord.key}`,kind:HIERARCHY_CLAIM_KIND.DEPENDENCY,
       subjectId:record.key,targetId:targetRecord.key,priority,order:order++,provenance:{source}});
   };
   for(const record of records.values()){
     observations.push({id:'asset:'+record.key,entityId:record.key,provenance:{sourceTags:[...record.sourceTags]}});
     for(const source of PROFILE_SOURCE_ORDER)for(const claim of sourceClaims(record,source)){
-      addParent(record,claim.parent,source,profileSourcePriority(profile,source),{source,count:claim.count,observations:claim.provenance});
+      addParent(record,claim.parent,source,profileSourcePriority(profile,source),{source,count:claim.count,observations:claim.provenance,claimedParents:[claim.parent]});
     }
     const registerPriority=profile.hierarchy&&profile.hierarchy.resolutionStrategy==='legacy-register'?1500:500;
     for(const parent of record.registerParents)addParent(record,parent,'resolved-register',registerPriority,{source:'Resolved legacy register'});
