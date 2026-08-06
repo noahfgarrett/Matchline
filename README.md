@@ -1,4 +1,4 @@
-# SSM Compiler
+# SSManagement
 
 > **Downloading the app? Go to [SSMCompiler-Releases](https://github.com/noahfgarrett/SSMCompiler-Releases/releases/latest).**
 > This is the private source repo — the `SSMCompiler.html` in the file list is the committed build artifact,

@@ -61,7 +61,7 @@ export function importRequirementsMarkup(){
   </section>`;
 }
 export function guideSectionMarkup(section){
-  if(section==='files')return `<div class="guide-copy"><span class="guide-kicker">Files and inputs</span><h2>Bring the project sources together</h2><p>Upload one or many Excel or CSV files. SSM Compiler identifies source types from sheet names and headers, then lets you confirm every choice before building.</p>
+  if(section==='files')return `<div class="guide-copy"><span class="guide-kicker">Files and inputs</span><h2>Bring the project sources together</h2><p>Upload one or many Excel or CSV files. SSManagement identifies source types from sheet names and headers, then lets you confirm every choice before building.</p>
     ${importRequirementsMarkup()}
     <h3>Working copy</h3><p>Add an existing SSM register separately when you need a side-by-side comparison. It does not change the hierarchy being built.</p></div>`;
   if(section==='sheets')return `<div class="guide-copy"><span class="guide-kicker">Sheet selection</span><h2>Choose exactly what participates</h2><p>The Sheets screen groups detected tabs by purpose. Select hierarchy tabs for the electrical tree, then confirm Cable Schedule, MEL, and PMD tabs independently.</p>
@@ -74,9 +74,9 @@ export function guideSectionMarkup(section){
     <div class="guide-note">${ic('triangle-alert')}A review flag is a request for a decision, not a failed hierarchy build.</div></div>`;
   if(section==='exports')return `<div class="guide-copy"><span class="guide-kicker">SSM exports</span><h2>Download the resolved register</h2><p>Export the combined SSM, separate source registers, or Exto format after reviewing the hierarchy. The active profile controls parent resolution, dependencies, hierarchy modes, and detail fields.</p>
     <ol><li>Confirm the desired hierarchy/export mode.</li><li>Resolve material placement flags.</li><li>Review comparison mismatches when a working copy is present.</li><li>Download the required workbook format.</li></ol></div>`;
-  if(section==='studio')return `<div class="guide-copy"><span class="guide-kicker">Site Profile Studio</span><h2>Teach SSM Compiler how this project works</h2><p>Site profiles replace project-specific hard coding with local, reusable rules. Use the plus button to create one; the protected Eagle profile is a useful reference to start from.</p>
+  if(section==='studio')return `<div class="guide-copy"><span class="guide-kicker">Site Profile Studio</span><h2>Teach SSManagement how this project works</h2><p>Site profiles replace project-specific hard coding with local, reusable rules. Use the plus button to create one; the protected Eagle profile is a useful reference to start from.</p>
     <div class="guide-workflow">
-      <div><b>1</b><span><strong>Legend Trainer</strong>Add the design legend, abbreviations page, or tag-identification sheet. SSM Compiler reads it, shows every extracted entry for review, and proposes ordinary editable rules. Nothing is published automatically.</span></div>
+      <div><b>1</b><span><strong>Legend Trainer</strong>Add the design legend, abbreviations page, or tag-identification sheet. SSManagement reads it, shows every extracted entry for review, and proposes ordinary editable rules. Nothing is published automatically.</span></div>
       <div><b>2</b><span><strong>Data Mapping</strong>Connect uploaded columns to their meaning. Detected mappings can be changed immediately.</span></div>
       <div><b>3</b><span><strong>Tag Trainer</strong>Select a spreadsheet cell, then select the characters that identify a building, discipline, system, or equipment type.</span></div>
       <div><b>4</b><span><strong>Relationships</strong>Define how closest parents are found, constructed, or looked up across sources.</span></div>
@@ -88,9 +88,9 @@ export function guideSectionMarkup(section){
     <p>Rules proposed from a legend are ordinary rules. They can be edited, reordered, disabled, or deleted like any other, and a rule you change by hand is never overwritten when the same document is analysed again. Proposals are only selected for you when the project's real tags confirm them; with no spreadsheets loaded they are marked <strong>Unverified</strong> and left unselected.</p>
     <div class="guide-note">${ic('file-json')}Export profile JSON as the portable project rules backup. Spreadsheet rows are never included.</div></div>`;
   if(section==='profiles')return `<div class="guide-copy"><span class="guide-kicker">Profiles and updates</span><h2>Keep project logic durable</h2><p>Profiles are stored locally with recovery copies and can be exported as JSON. The built-in Eagle profile stays locked; clone it before tailoring rules to a project.</p>
-    <h3>App updates</h3><p>SSM Compiler makes one anonymous version check when opened or refreshed. The app remains offline during normal use. Downloaded replacement HTML carries the local profile handoff so project rules survive version changes.</p>
+    <h3>App updates</h3><p>SSManagement makes one anonymous version check when opened or refreshed. The app remains offline during normal use. Downloaded replacement HTML carries the local profile handoff so project rules survive version changes.</p>
     <div class="guide-note">${ic('rotate-ccw')}The version number in the lower-left corner opens the changelog at any time.</div></div>`;
-  return `<div class="guide-copy"><span class="guide-kicker">Getting started</span><h2>From source sheets to a reviewed SSM</h2><p>SSM Compiler combines electrical, cable, equipment, and instrument sources into one traceable hierarchy while keeping project-specific logic in a reusable Site Profile.</p>
+  return `<div class="guide-copy"><span class="guide-kicker">Getting started</span><h2>From source sheets to a reviewed SSM</h2><p>SSManagement combines electrical, cable, equipment, and instrument sources into one traceable hierarchy while keeping project-specific logic in a reusable Site Profile.</p>
     <div class="guide-journey">
       <div><span>1</span><b>Upload</b><p>Add the project spreadsheets and an optional working copy.</p></div>
       <div><span>2</span><b>Select</b><p>Confirm the tabs and detected source types that belong in the build.</p></div>
@@ -103,7 +103,7 @@ export function guideSectionMarkup(section){
 export function guideModalMarkup(){
   return `<div id="guideModal" class="modal-back guide-back" role="dialog" aria-modal="true" aria-labelledby="guideTitle" aria-hidden="true" hidden>
     <div class="guide-shell">
-      <aside class="guide-nav"><div class="guide-brand">${ic('book-open')}<div><b id="guideTitle">SSM Compiler Guide</b><span>Offline reference</span></div></div>
+      <aside class="guide-nav"><div class="guide-brand">${ic('book-open')}<div><b id="guideTitle">SSManagement Guide</b><span>Offline reference</span></div></div>
         <nav aria-label="Guide sections">${GUIDE_SECTIONS.map(([id,label,icon])=>`<button type="button" data-guide-section="${id}">${ic(icon)}<span>${label}</span></button>`).join('')}</nav>
       </aside>
       <section class="guide-main"><header class="guide-main-head"><span id="guideCurrent"></span><button class="xbtn icon-btn" id="closeGuide" type="button" aria-label="Close guide">${ic('x')}</button></header><div class="guide-panel" id="guidePanel"></div></section>

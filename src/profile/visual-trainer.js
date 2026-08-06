@@ -1,6 +1,6 @@
 import { clean } from '../core/text.js'
 import { S, tagKey } from '../state.js'
-import { profileClone } from './schema.js'
+import { profileClone, profileExecutionSignature } from './schema.js'
 import { createEngine } from '../rules/engine.js'
 import { createMemoryLookup } from '../rules/lookup.js'
 import { resolveRecordContext } from '../hierarchy/projection.js'
@@ -26,7 +26,35 @@ export function visualTrainerData(profile, sourceRecords) {
   return { records, byKey, contexts, lookup: createMemoryLookup(rows) }
 }
 
+/* Evaluating parents walks every canonical record through the profile's
+   engine — seconds at real scale — and three separate consumers need it (the
+   Visual Trainer canvas, the Test & Publish impact diff, the post-build
+   prewarm). Memoized on execution content + build identity, but only for the
+   live canonical model; explicit record sets (tests, tools) always compute. */
+const EVALUATE_MEMO = new Map()
+const EVALUATE_MEMO_CAP = 4
+/* Everything the evaluation actually reads — profileExecutionSignature minus
+   `mappings`, deliberately: opening the studio auto-maps detected columns into
+   the draft, which must not invalidate an evaluation that never reads them. */
+export function visualEvaluationSignature(profile) {
+  const value = profile || {}
+  return JSON.stringify({ anatomies: value.anatomies || [], rules: value.rules || {}, tagRules: value.tagRules || [],
+    hierarchy: value.hierarchy || {}, overrides: value.overrides || {} })
+}
 export function visualTrainerEvaluateParents(profile, sourceRecords) {
+  const live = !sourceRecords || sourceRecords === S.canonicalModel
+  const memoKey = live
+    ? visualEvaluationSignature(profile) + '|' + S.profileBuildRevision + '|' + S.canonicalModel.size
+    : null
+  if (memoKey !== null && EVALUATE_MEMO.has(memoKey)) return EVALUATE_MEMO.get(memoKey)
+  const result = evaluateParentsUncached(profile, sourceRecords)
+  if (memoKey !== null) {
+    if (EVALUATE_MEMO.size >= EVALUATE_MEMO_CAP) EVALUATE_MEMO.delete(EVALUATE_MEMO.keys().next().value)
+    EVALUATE_MEMO.set(memoKey, result)
+  }
+  return result
+}
+function evaluateParentsUncached(profile, sourceRecords) {
   const data = visualTrainerData(profile, sourceRecords)
   const engine = createEngine(profile)
   const sources = { ...melSources(), [VISUAL_TRAINER_SOURCE]: data.lookup }

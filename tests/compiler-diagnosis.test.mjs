@@ -26,7 +26,7 @@ test('the shipped built-in profile compiles a MEL alone — no site profile need
   const built = JSON.parse(app.eval(`
     JSON.stringify({ profile: activeProfile().name, locked: activeProfile().locked, rows: S.ssmCombined.length })
   `))
-  assert.equal(built.profile, 'SSM Compiler Default')
+  assert.equal(built.profile, 'SSManagement Default')
   assert.equal(built.locked, true)
   assert.ok(built.rows >= 10, `the built-in must seed the register from the MEL alone, got ${built.rows}`)
 })

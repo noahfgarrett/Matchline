@@ -12,7 +12,7 @@ import { ensureProfileAutoMapping } from '../io/detect.js'
 import { getAoa } from '../io/workbook.js'
 import { buildHierarchy } from '../hierarchy/build.js'
 import { rebuildProfileProjections, resolveRecordContext } from '../hierarchy/projection.js'
-import { visualTrainerData, visualTrainerEvaluateParents, visualTrainerIsDescendant, visualTrainerRelationshipRule, visualTrainerRelationshipImpact, visualTrainerGroupingRules, visualTrainerGroupingImpact, visualTrainerDraftSlice, visualTrainerRestoreDraftSlice, visualTrainerEnableResolvedFlow, VISUAL_TRAINER_GROUP_ATTRIBUTES } from '../profile/visual-trainer.js'
+import { visualEvaluationSignature, visualTrainerData, visualTrainerEvaluateParents, visualTrainerIsDescendant, visualTrainerRelationshipRule, visualTrainerRelationshipImpact, visualTrainerGroupingRules, visualTrainerGroupingImpact, visualTrainerDraftSlice, visualTrainerRestoreDraftSlice, visualTrainerEnableResolvedFlow, VISUAL_TRAINER_GROUP_ATTRIBUTES } from '../profile/visual-trainer.js'
 import { legendSessionRelease, openCreateProfileWizard, renderLegendTrainerTab, wireLegendTrainerTab } from './legend-trainer.js'
 import { allKeys, go } from './screens.js'
 
@@ -68,7 +68,7 @@ export function openProfileStudio(section){
   if(S.screen!=='profile')S.profileUi.returnScreen=S.screen;
   S.profileUi.section=section||'overview';S.profileDraft=profileClone(activeProfile());S.profileDirty=false;
   S.profileUi.visualSourceKey='';S.profileUi.visualProposal=null;S.profileUi.visualHistory=[];S.profileUi.visualFuture=[];
-  S.profileUi.visualBase=null;S.profileUi.visualTreeCache=null;
+  S.profileUi.visualBase=null;
   ensureProfilePreview();go('profile');
 }
 export function closeProfileStudio(){
@@ -82,7 +82,7 @@ export function markProfileDirty(){
     S.profileDraft=profileClone(activeProfile());S.profileDirty=false;toast('Clone Eagle before changing its rules');renderProfile();return;
   }
   invalidateProfileEvaluation(S.profileDraft);
-  S.profileUi.visualTreeCache=null;
+  invalidateVisualTreeCache();
   if(S.profileUi.section!=='visual'){S.profileUi.visualHistory=[];S.profileUi.visualFuture=[];}
   S.profileDirty=true;
   const state=$('#profileDraftState');if(state)state.textContent='Draft changes';
@@ -743,13 +743,33 @@ export function renderRelationshipsProfile(draft){
 }
 
 /* ---- visual hierarchy trainer ---- */
+/* Module-level, deliberately OUTSIDE profileUi: the evaluation walks every
+   canonical record through the draft's engine, which costs seconds at scale,
+   and profileUi is rebuilt on every studio open — so the old cache made every
+   studio visit pay that cost again. The signature covers everything the
+   evaluation reads (draft execution content, build revision, model size), so
+   a stale entry can never be served. */
+let VISUAL_TREE_CACHE=null;
+export function invalidateVisualTreeCache(){VISUAL_TREE_CACHE=null;}
+let STUDIO_PREWARM_REVISION=-1;
+/* Called after a build settles: pays the visual evaluation while the user is
+   still reading the result tree, so the first Visual Trainer click is warm. */
+export function prewarmStudioCaches(){
+  if(!S.canonicalModel.size||S.profileBuildRevision===STUDIO_PREWARM_REVISION)return;
+  STUDIO_PREWARM_REVISION=S.profileBuildRevision;
+  try{
+    const profile=S.profileDraft||activeProfile();
+    profileVisualCache(profile);
+    profileVisualBuildTree(profile,'ssm');
+    profileVisualBuildTree(profile,'flow');
+  }catch(_){/* prewarm is best-effort */}
+}
 export function profileVisualCache(draft){
-  const signature=profileExecutionSignature(draft)+'|'+S.profileBuildRevision+'|'+S.canonicalModel.size;
-  const cached=S.profileUi.visualTreeCache;
-  if(cached&&cached.signature===signature)return cached;
+  const signature=visualEvaluationSignature(draft)+'|'+S.profileBuildRevision+'|'+S.canonicalModel.size;
+  if(VISUAL_TREE_CACHE&&VISUAL_TREE_CACHE.signature===signature)return VISUAL_TREE_CACHE;
   const evaluation=visualTrainerEvaluateParents(draft,S.canonicalModel);
-  const next={signature,evaluation,trees:{}};
-  S.profileUi.visualTreeCache=next;return next;
+  VISUAL_TREE_CACHE={signature,evaluation,trees:{}};
+  return VISUAL_TREE_CACHE;
 }
 export function profileVisualGroupingLevels(draft){
   const mode=(draft.modes||[]).find(item=>item.executor==='projected'&&(item.levels||[]).some(level=>level.kind==='grouping'));
@@ -1078,7 +1098,7 @@ export function profileVisualUndoRedo(direction){
   const entry=from.pop();if(!entry)return;
   to.push({slice:visualTrainerDraftSlice(S.profileDraft),dirty:S.profileDirty});
   S.profileDraft=visualTrainerRestoreDraftSlice(S.profileDraft,entry.slice);
-  invalidateProfileEvaluation(S.profileDraft);S.profileDirty=!!entry.dirty;S.profileUi.visualTreeCache=null;S.profileUi.visualProposal=null;S.profileUi.visualSourceKey='';
+  invalidateProfileEvaluation(S.profileDraft);S.profileDirty=!!entry.dirty;invalidateVisualTreeCache();S.profileUi.visualProposal=null;S.profileUi.visualSourceKey='';
   renderProfile();
 }
 export function wireVisualTrainer(){
@@ -1458,7 +1478,10 @@ export function renderDetailsBuilder(draft){
     </div>
   </section>`;
 }
+let PROFILE_IMPACT_CACHE=null;
 export function profileImpact(draft){
+  const signature=visualEvaluationSignature(draft)+'||'+visualEvaluationSignature(activeProfile())+'|'+S.profileBuildRevision+'|'+S.canonicalModel.size;
+  if(PROFILE_IMPACT_CACHE&&PROFILE_IMPACT_CACHE.signature===signature)return PROFILE_IMPACT_CACHE.impact;
   const impact={building:0,discipline:0,system:0,equipmentType:0,parents:0,ambiguities:0,total:S.canonicalModel.size};
   for(const record of S.canonicalModel.values()){
     const before=resolveRecordContext(record,activeProfile()),after=resolveRecordContext(record,draft);
@@ -1472,6 +1495,7 @@ export function profileImpact(draft){
       if(after.decisions.get(key)&&after.decisions.get(key).status==='ambiguous')impact.ambiguities++;
     }
   }
+  PROFILE_IMPACT_CACHE={signature,impact};
   return impact;
 }
 export function profileValidation(draft,previous){

@@ -38,7 +38,7 @@ const EAGLE_RULE_IDS = {
 
 async function withSourceHtml(run) {
   const directory = mkdtempSync(join(tmpdir(), 'ssmanagement-eagle-'))
-  const htmlPath = join(directory, 'SSMCompiler.html')
+  const htmlPath = join(directory, 'SSManagement.html')
   writeFileSync(htmlPath, buildHtml())
   try {
     return await run(htmlPath)
@@ -74,7 +74,7 @@ test('a first-run profile store ships a universal, compiler-first built-in', asy
   const builtIn = profiles.find(profile => profile.builtIn)
 
   assert.ok(builtIn, 'a fresh install must offer the locked built-in reference')
-  assert.equal(builtIn.name, 'SSM Compiler Default')
+  assert.equal(builtIn.name, 'SSManagement Default')
   assert.equal(builtIn.locked, true)
   assert.ok(Object.hasOwn(builtIn, 'anatomies'), 'the built-in must own its anatomy definitions')
   assert.ok(Object.hasOwn(builtIn, 'modes'), 'the built-in must own its hierarchy modes')

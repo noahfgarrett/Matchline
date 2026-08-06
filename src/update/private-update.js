@@ -2,7 +2,7 @@ import { $, $$, esc } from '../core/text.js'
 import { saveUpdateHtml } from '../core/download.js'
 import { portableProfileTransferBase64 } from '../profile/schema.js'
 
-export const APP_VERSION = '1.3.2';
+export const APP_VERSION = '1.4.0';
 export const UPDATE_REPOSITORY = 'noahfgarrett/SSMCompiler-Releases';
 export const UPDATE_RELEASE_API = 'https://api.github.com/repos/'+UPDATE_REPOSITORY+'/releases/latest';
 export const UPDATE_API_VERSION = '2026-03-10';
@@ -74,7 +74,7 @@ export function isPwaHostedApp(){
 }
 export function versionedUpdateFilename(version){
   const cleanVersion=String(version||APP_VERSION).replace(/^v/i,'').replace(/[^0-9A-Za-z._-]/g,'').trim()||APP_VERSION;
-  return 'SSMCompiler-v'+cleanVersion+'.html';
+  return 'SSManagement-v'+cleanVersion+'.html';
 }
 export function getDecompressionStream(){
   return typeof DecompressionStream==='function'?DecompressionStream:null;
@@ -121,7 +121,7 @@ export async function savePreparedUpdateHtml(blob,filename){
 export function saveUpdateFromUrl(url,filename){
   if(!url)throw new Error('No direct update URL is available.');
   const a=document.createElement('a');
-  a.href=url;a.download=filename||'SSMCompiler.html';a.rel='noopener';
+  a.href=url;a.download=filename||'SSManagement.html';a.rel='noopener';
   document.body.appendChild(a);a.click();a.remove();
 }
 export async function downloadUpdateFile(info){
@@ -196,7 +196,7 @@ export function renderChangelog(info){
       <div class="change-body">${notesHtml(entry.notes)}</div>
     </div>`;
   }).join('');
-  return `<p class="changelog-intro">Recent SSM Compiler changes, newest first.</p><div class="changelog-list">${body}</div>`;
+  return `<p class="changelog-intro">Recent SSManagement changes, newest first.</p><div class="changelog-list">${body}</div>`;
 }
 export function setUpdateTab(tab){
   activeUpdateTab=tab;

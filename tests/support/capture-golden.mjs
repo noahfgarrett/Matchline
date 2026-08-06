@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { SCENARIOS, captureScenario } from './snapshot.mjs'
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const htmlPath = process.argv[2] || resolve(rootDir, 'SSMCompiler.html')
+const htmlPath = process.argv[2] || resolve(rootDir, 'SSManagement.html')
 mkdirSync(resolve(rootDir, 'tests/golden'), { recursive: true })
 
 for (const scenario of SCENARIOS) {

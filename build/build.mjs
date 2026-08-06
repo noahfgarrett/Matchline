@@ -199,6 +199,6 @@ export function buildHtml() {
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 if (isMain) {
-  writeFileSync(resolve(rootDir, 'SSMCompiler.html'), buildHtml())
-  console.log('built SSMCompiler.html')
+  writeFileSync(resolve(rootDir, 'SSManagement.html'), buildHtml())
+  console.log('built SSManagement.html')
 }

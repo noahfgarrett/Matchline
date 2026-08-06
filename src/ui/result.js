@@ -12,7 +12,7 @@ import { acceptPlacement, activePlacements, applyManualReparent, applyManualRepa
 import { comparePanelCacheKey, placementState, refreshCompare, refreshReview, renderComparePanel, renderReviewPanel, reviewPanelCacheKey } from '../review/panels.js'
 import { exportExtoSSMXlsx, exportHierarchyXlsx, exportOutlineTxt, exportSSMXlsx } from '../export/xlsx.js'
 import { go, render } from './screens.js'
-import { injectProfileContext, openProfileStudio } from './studio.js'
+import { injectProfileContext, openProfileStudio, prewarmStudioCaches } from './studio.js'
 
 /* ---- result screen ---- */
 export function statCard(icon,label,val,muted){return `<div class="stat ${muted?'muted':''}"><div class="sl">${ic(icon)}${label}</div><div class="sv">${val}</div></div>`;}
@@ -39,6 +39,10 @@ export function hierarchyCrosslinkHtml(){
   return `<button class="btn view-crosslink" id="switchDetailView">${ic(next.icon||'folder-tree')}Show in ${esc(hierarchyModeLabel(next))}</button>`;
 }
 export function renderResult(){
+  /* Pay the Visual Trainer's per-build evaluation now, off the paint path,
+     while the user is reading the tree — the first studio visit opens warm.
+     No-ops instantly on every later call for the same build. */
+  setTimeout(()=>{try{prewarmStudioCaches();}catch(_){/* best-effort */}},400);
   /* MEL-only compiles have no electrical spine: the raw flow view is empty, so
      default to the projected SSM view where the full register lives. */
   if(!S.roots.length){
@@ -573,39 +577,74 @@ export function collapseAll(){
 }
 
 /* ---- search (filtered render) ---- */
+/* Broad queries are the search killer at scale: the first typed letter can
+   match tens of thousands of nodes, and rendering every branch froze the page
+   long enough to swallow the next keystrokes. Matching marks at most
+   SEARCH_MATCH_CAP branches for display (the true total is still counted and
+   reported), and the per-node lowercase is cached so repeat searches never
+   re-lowercase a quarter-million names. */
+export const SEARCH_MATCH_CAP=400;
 export function computeFilter(q,idOnly){
   const ql=q.toLowerCase();
+  let total=0,marked=0;
   const walk=n=>{let any=false;n.children.forEach(c=>{if(walk(c))any=true;});
-    n._self=!nodeHidden(n)&&n.name.toLowerCase().includes(ql)&&(!idOnly||n.isId);
+    const matches=!nodeHidden(n)&&(n._lname??=n.name.toLowerCase()).includes(ql)&&(!idOnly||n.isId);
+    if(matches)total++;
+    n._self=matches&&marked<SEARCH_MATCH_CAP&&++marked>0;
     n._show=n._self||any;return n._show;};
   activeHierarchyRoots().forEach(walk);
+  return {total,shown:marked};
 }
 export function countSelf(){let c=0;const w=n=>{if(n._self)c++;n.children.forEach(w);};activeHierarchyRoots().forEach(w);return c;}
 export function runSearch(){
   cancelExpand();
   const q=S.search.trim();
   if(!q){renderTreeCollapsed();setQInfo('');return;}
-  computeFilter(q,S.idOnly);
-  const m=countSelf();
+  const {total,shown}=computeFilter(q,S.idOnly);
   renderFiltered(q);
-  setQInfo(m?`<b>${m}</b> match${m!==1?'es':''}${S.idOnly?' in ID Names':''} for “${esc(q)}”`:`No matches for “${esc(q)}”${S.idOnly?' in ID Names':''}`);
+  const capNote=total>shown?` · showing the first <b>${shown}</b> — keep typing to narrow`:'';
+  setQInfo(total?`<b>${total}</b> match${total!==1?'es':''}${S.idOnly?' in ID Names':''} for “${esc(q)}”${capNote}`:`No matches for “${esc(q)}”${S.idOnly?' in ID Names':''}`);
 }
+/* A matched folder shows its children as context. Uncapped, one matched
+   system with thousands of rows rebuilt them all on every keystroke — and a
+   broad query matching hundreds of folders multiplied that into a page
+   freeze, so the whole render also works against one global row budget. */
+export const SEARCH_CONTEXT_CAP=100;
+export const SEARCH_ROW_BUDGET=2000;
 export function renderFiltered(hl){
   const tree=$('#tree');tree.innerHTML='';
+  let budget=SEARCH_ROW_BUDGET;
+  const moreStub=count=>{
+    const more=document.createElement('div');more.className='node search-extra';
+    more.innerHTML=`<div class="row"><span class="lbl" style="opacity:.6">… ${count} more not shown — keep typing to narrow</span></div>`;
+    return more;
+  };
   const build=(node,prefixArr,isLast,isRoot)=>{
     const fullKids=kidsOf(node),shown=fullKids.filter(c=>c._show&&!nodeHidden(c));
     const showContext=node._self||shown.some(c=>c._self);
-    const visible=showContext?fullKids:shown;
+    let visible=showContext?fullKids:shown;
+    let trimmed=0;
+    if(showContext&&visible.length>SEARCH_CONTEXT_CAP){
+      /* Keep every matching child; fill the remainder of the cap with context. */
+      const matching=visible.filter(c=>c._show);
+      const context=visible.filter(c=>!c._show).slice(0,Math.max(0,SEARCH_CONTEXT_CAP-matching.length));
+      trimmed=visible.length-matching.length-context.length;
+      const keep=new Set([...matching,...context]);
+      visible=visible.filter(c=>keep.has(c));
+    }
     node._prefix=prefixArr;node._isLast=isLast;node._isRoot=isRoot;node._built=true;
     const wrap=document.createElement('div');wrap.className='node';
     wrap.innerHTML=rowInner(node,prefixArr,isLast,isRoot,node._self?hl:'')+'<div class="kids"></div>';
+    budget--;
     const kids=wrap.querySelector('.kids');
     const cp=isRoot?[]:prefixArr.concat(!isLast);
-    visible.forEach((c,i)=>{
-      const childLast=i===visible.length-1;
+    for(let i=0;i<visible.length;i++){
+      if(budget<=0){trimmed+=visible.length-i;break;}
+      const c=visible[i],childLast=i===visible.length-1&&!trimmed;
       if(c._show)kids.appendChild(build(c,cp,childLast,false));
-      else{const extra=makeNode(c,cp,childLast,false);extra.classList.add('search-extra');kids.appendChild(extra);}
-    });
+      else{const extra=makeNode(c,cp,childLast,false);extra.classList.add('search-extra');kids.appendChild(extra);budget--;}
+    }
+    if(trimmed)kids.appendChild(moreStub(trimmed));
     if(visible.length){const r=wrap.querySelector('.row');r.classList.add('open');r.setAttribute('aria-expanded','true');}
     return wrap;
   };

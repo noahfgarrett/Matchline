@@ -4,23 +4,23 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 
-/* Artifact-level properties of the self-contained SSMCompiler.html build that
+/* Artifact-level properties of the self-contained SSManagement.html build that
    no unit test against a module can express — Task 9 (see also tests/update.test.mjs,
    tests/build.test.mjs, and tests/source-style.test.mjs for the direct-import and
    build-process coverage this complements). */
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const html = readFileSync(resolve(rootDir, 'SSMCompiler.html'), 'utf8')
+const html = readFileSync(resolve(rootDir, 'SSManagement.html'), 'utf8')
 const pkg = JSON.parse(readFileSync(resolve(rootDir, 'package.json'), 'utf8'))
 const changelog = JSON.parse(readFileSync(resolve(rootDir, 'src/changelog.json'), 'utf8'))
 
 test('the built artifact is a self-contained, offline single file with a public release channel', () => {
-  assert.match(html, /<title>SSM Compiler<\/title>/)
+  assert.match(html, /<title>SSManagement<\/title>/)
   /* Regression guard for the v0.1.0 rebrand corruption: an unescaped `&` in a
      sed replacement re-injected the old SSManagement header four times inside
      the tagline span. The brand block must be exactly one h1 + one tag span. */
-  assert.match(html, /<div><h1>SSM Compiler<\/h1><span class="tag">documents&nbsp;in&nbsp;&rarr;&nbsp;ssm&nbsp;out<\/span><\/div>/)
-  assert.doesNotMatch(html, /<h1>SSManagement<\/h1>/)
+  assert.match(html, /<div><h1>SSManagement<\/h1><span class="tag">documents&nbsp;in&nbsp;&rarr;&nbsp;ssm&nbsp;out<\/span><\/div>/)
+  assert.equal([...html.matchAll(/<h1>/g)].length, 1, 'the brand block must be exactly one h1 — a rebrand sed once re-injected the header four times inside the tagline')
   assert.doesNotMatch(html, /<span class="tag">[^<]*<h1>/, 'no h1 may nest inside the tagline span')
   assert.match(html, /const UPDATE_REPOSITORY = 'noahfgarrett\/SSMCompiler-Releases';/)
   assert.match(html, new RegExp(`const APP_VERSION = '${pkg.version.replaceAll('.', '\\.')}'`))
@@ -68,7 +68,7 @@ test('the changelog data preserves its release history, its release-type taxonom
 /* UNRESOLVED CLASSIFICATION — reported rather than deleted (Task 9 instructions).
    pwa/manifest.webmanifest and pwa/sw.js are a dormant, not-yet-wired PWA deployment
    path (see README.md: "retained for a future access-controlled deployment"). They are
-   not part of SSMCompiler.html (the single-file artifact the rest of this file
+   not part of SSManagement.html (the single-file artifact the rest of this file
    describes), so they do not fit "Artifact" as defined for that file; they also are not
    business logic reachable by importing a module (sw.js runs only under a ServiceWorker
    global), so "Convertible" does not fit either; and nothing else in the suite covers
