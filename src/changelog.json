@@ -1,5 +1,11 @@
 [
   {
+    "version": "4.2.1",
+    "date": "2026-08-06T00:00:00Z",
+    "type": "fix",
+    "notes": "- Fixed tag normalization so equipment ending in -A, -B, or -C remains a separate asset by default\n- Existing site profiles using the previous untouched default are updated automatically, while custom and taught endings remain under site control\n- Improved startup update checks so a cached response or slower connection does not hide a newly published version"
+  },
+  {
     "version": "4.2.0",
     "date": "2026-08-06T00:00:00Z",
     "type": "feature",

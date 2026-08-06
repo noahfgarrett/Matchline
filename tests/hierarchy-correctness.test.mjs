@@ -194,33 +194,18 @@ test('a bridged gap is flagged, and an ordinary trailing blank is not', async ()
 })
 
 /* ----------------------------------------------------------------------
- * A load fed from more than one panel.
- *
- * cleanTag strips panel sides, so 'PNL-1-A' fed from SWBD-2 and 'PNL-1-B'
- * fed from SWBD-3 collapse onto one dependency key and the second feed was
- * dropped with nothing recorded. The kept feed is unchanged -- S.deps is
- * still a single value because the cable parent-chain repair walks it
- * upward as a tag name -- but the loss is now reported.
+ * Letter-suffixed loads are separate assets, each with its own feed.
  * ---------------------------------------------------------------------- */
 
-test('a load fed from two panels reports the feed that was not used', async () => {
+test('letter-suffixed loads preserve both feeds without a false conflict', async () => {
   const app = await build(['easy-power.xlsx', 'cable-schedule.xlsx'])
   const flags = JSON.parse(app.eval(`
     JSON.stringify(S.placements.filter(p => p.status === 'cable-conflict')
       .map(p => ({ branchName: p.branchName, currentParent: p.currentParent, reason: p.reason })))
   `))
-  assert.equal(flags.length, 1, `expected one feed conflict, got ${JSON.stringify(flags)}`)
-  assert.equal(flags[0].branchName, 'PNL-1', 'PNL-1-A and PNL-1-B collapse onto PNL-1')
-  assert.equal(flags[0].currentParent, 'SWBD-2', 'the first Panel (From) is the one kept')
-  assert.match(flags[0].reason, /SWBD-3/, 'the unused feed must be named')
-
-  // Behaviour preserved: the dependency stays a single tag, because the cable
-  // parent-chain repair walks it (`cursor = depOf(cursor)`) as a tag name.
-  assert.equal(app.eval(`depOf('PNL-1')`), 'SWBD-2',
-    'the dependency must stay single-valued until parent and dependency-set are separated')
-
-  const label = app.eval(`placementState(S.placements.find(p => p.status === 'cable-conflict'), true)`)
-  assert.match(label, /more than one panel/, `unhandled status rendered as "${label}"`)
+  assert.deepEqual(flags, [])
+  assert.equal(app.eval(`depOf('PNL-1-A')`), 'SWBD-2')
+  assert.equal(app.eval(`depOf('PNL-1-B')`), 'SWBD-3')
 })
 
 /* ----------------------------------------------------------------------
@@ -255,7 +240,7 @@ test('a bridged-gap flag is bound to its node, so the branch can be re-parented'
 })
 
 test('every informational flag can be acknowledged, and acknowledging clears it', async () => {
-  const app = await build(['easy-power.xlsx', 'cable-schedule.xlsx'])
+  const app = await build(['downstream-gap.xlsx'])
   const statuses = JSON.parse(app.eval(`
     JSON.stringify(S.placements.map(p => [p.status, isAcknowledgeableIssue(p)]))
   `))

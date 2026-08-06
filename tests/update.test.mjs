@@ -8,6 +8,7 @@ import {
   LEGACY_UPDATE_CREDENTIAL_KEY,
   UPDATE_REPOSITORY,
   UPDATE_RELEASE_API,
+  UPDATE_TIMEOUT_MS,
   isNewerVersion,
   trustedUpdateAssetApiUrl,
   notesHtml,
@@ -163,6 +164,8 @@ test('fetchLatestUpdateRelease anonymously checks only the public release channe
     assert.equal(fetchSpy.calls.length, 1)
     assert.equal(fetchSpy.calls[0][0], UPDATE_RELEASE_API)
     assert.equal(fetchSpy.calls[0][1].headers.Authorization, undefined)
+    assert.equal(fetchSpy.calls[0][1].cache, 'no-store', 'a cached latest-release response can hide a new update')
+    assert.ok(UPDATE_TIMEOUT_MS >= 10000, 'the one startup ping should tolerate a slower fresh connection')
   } finally {
     globalThis.fetch = originalFetch
   }

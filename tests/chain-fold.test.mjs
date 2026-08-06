@@ -9,7 +9,7 @@ import { buildProjectApp, canonicalRecordOf } from './support/compiler-harness.m
      a different system. The register keeps each row's OWN MEL attributes.
    - Feed sources outrank the MEL's System Parent column for that gear.
    - A feed crossing buildings or disciplines still demotes to a dependency.
-   - MEL panel-side spellings (-A/-B/-C) tie to the Easy Power spelling. */
+   - Letter-suffixed MEL tags remain distinct equipment identities. */
 
 const FILES = ['compiler-chain-ep.xlsx', 'compiler-chain-cable.xlsx', 'compiler-chain-mel.xlsx']
 
@@ -53,16 +53,16 @@ test('a feed crossing disciplines still demotes: the RIO keeps its own block', a
   assert.equal(rio.system, '650 FMS Network')
 })
 
-test('MEL panel-side spellings (-A/-B) merge into the Easy Power spelling with MEL attributes', async () => {
+test('MEL letter-suffixed spellings remain distinct from the Easy Power spelling', async () => {
   const app = await buildProjectApp(FILES)
   const gis = canonicalRecordOf(app, 'GIS-01')
-  assert.ok(gis, 'one canonical GIS record')
-  assert.equal(gis.building, 'B14', 'attributes come from the MEL rows')
+  assert.ok(gis, 'the Easy Power spelling resolves to its exact MEL record')
+  assert.equal(gis.building, 'B14', 'attributes come from the matching MEL row')
   assert.equal(gis.system, '602 Medium Voltage')
   const spellings = JSON.parse(app.eval(`
     JSON.stringify(S.ssmCombined.filter(row => /GIS-01/i.test(String(row[0]))).map(row => String(row[0])))
   `))
-  assert.deepEqual(spellings, ['GIS-01'], 'the register carries one spelling, sides merged')
+  assert.deepEqual([...spellings].sort(), ['GIS-01', 'GIS-01-A', 'GIS-01-B'], 'all three MEL assets remain visible')
 })
 
 test('the SSM tree shows the chain under 602 Medium Voltage with GIS at the top', async () => {

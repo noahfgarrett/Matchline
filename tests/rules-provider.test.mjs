@@ -61,7 +61,7 @@ test('a default profile still gets the example rules after being saved and reloa
     invalidateRuleEngine()
     setRuleProfile(profile)
     const resolved = ruleEngine().resolve('B14-LVS-1234-A')
-    assert.equal(resolved.canonical, 'B14-LVS-1234', `${label}: panel side must still be stripped`)
+    assert.equal(resolved.canonical, 'B14-LVS-1234-A', `${label}: letter endings remain part of equipment identity`)
     assert.equal(resolved.attributes.equipmentType, 'LVS', `${label}: equipment type must still resolve`)
   }
 })
@@ -131,7 +131,7 @@ test('a stored v1 profile migrates through initProfiles and the engine keeps res
   assert.deepEqual(active.tagRules, v1Profile.tagRules, 'tagRules must survive the round trip')
 
   const lvs = JSON.parse(app.eval(`JSON.stringify(ruleEngine().resolve(cleanTag('B14-LVS-1234-A')))`))
-  assert.equal(lvs.canonical, 'B14-LVS-1234')
+  assert.equal(lvs.canonical, 'B14-LVS-1234-A')
   assert.equal(lvs.attributes.equipmentType, 'LVS')
 
   const spare = JSON.parse(app.eval(`JSON.stringify(ruleEngine().resolve(cleanTag('SP-1')))`))
