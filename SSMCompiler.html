@@ -1296,6 +1296,12 @@ const LEGEND_PDFJS_WORKER="/**\n * @licstart The following is the entire license
 "use strict";
 const CHANGELOG = [
   {
+    "version": "1.3.2",
+    "date": "2026-08-06T00:00:00Z",
+    "type": "fix",
+    "notes": "- Fixed the Legend Trainer's region-selection preview freezing at \"Rendering page\u2026\": a wiring error in the anatomy binder crashed the interface refresh the moment the preview opened, before the page ever started drawing, and the busy state could never clear\n- The preview now also survives any future rendering error by showing the failure instead of freezing on the loading frame"
+  },
+  {
     "version": "1.3.1",
     "date": "2026-08-05T00:00:00Z",
     "type": "fix",
@@ -4921,7 +4927,7 @@ function createDurableProfileStorage(options = {}) {
 
 
 
-const APP_VERSION = '1.3.1';
+const APP_VERSION = '1.3.2';
 const UPDATE_REPOSITORY = 'noahfgarrett/SSMCompiler-Releases';
 const UPDATE_RELEASE_API = 'https://api.github.com/repos/'+UPDATE_REPOSITORY+'/releases/latest';
 const UPDATE_API_VERSION = '2026-03-10';
@@ -15585,7 +15591,7 @@ function wireLegendAnatomyBinder(profile) {
   if (add) add.onclick = () => { if (legendCommitBinding(profile)) { toast('Segment added'); renderProfile() } }
   const launch = $('#legendLassoLaunch')
   if (launch) launch.onclick = () => legendLassoOpen(launch.dataset.legendLassoSource, 1)
-  $('[data-legend-unbind]').forEach(button => button.onclick = () => {
+  $$('[data-legend-unbind]').forEach(button => button.onclick = () => {
     legendRemoveBinding(button.dataset.legendUnbind, profile); renderProfile()
   })
 }
@@ -15612,8 +15618,12 @@ async function legendLassoOpen(sourceId, pageNumber) {
   lasso.error = ''
   lasso.busy = true
   lasso.from = null; lasso.to = null; lasso.preview = null
-  renderProfile()
   try {
+    /* Inside the try, deliberately: this render paints the busy frame, and a
+       crash in rendering or wiring must fall through to the finally that
+       clears `busy` — outside the try it left the modal frozen on
+       "Rendering page…" with no error and no way out. */
+    renderProfile()
     if (!source || !source.file) throw new Error('That document is no longer loaded. Re-add it to select a region.')
     if (source.kind !== 'pdf') throw new Error('Only PDF pages can be shown. Use the lists above for a spreadsheet or pasted text.')
     const buffer = await source.file.arrayBuffer()
