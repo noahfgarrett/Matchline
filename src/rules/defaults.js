@@ -48,56 +48,50 @@ export function makeEagleRuleProfile() {
   // a tag like 'PNL-1_CPS-A' at 'PNL-1_CPS' instead of 'PNL-1', because
   // the trailing '-A' hides the '_CPS' ending until the side is gone.
   rules.normalize.push(
-    { id: 'norm-panel-sides', name: 'Panel side (-A / -B / -P / -S / -OUTPUT)', kind: 'stripSuffix',
+    { id: 'norm-panel-sides', name: 'Panel side endings are one asset', kind: 'stripSuffix',
       separators: ['-'], suffixes: ['P', 'S', 'A', 'B', 'OUTPUT'], repeat: true, enabled: true,
       stage: 'identity',
-      note: 'Two sides of one panel, commissioned whole. Turn this off if your site uses these to mean separate assets. ' +
-        'stage "identity" is what cleanTag applies — the panel-side strip is treated as part of a tag\'s identity ' +
-        'everywhere, including in display names and register rows.' },
-    { id: 'norm-power-variant', name: 'Power variant (_CPS / _NPS)', kind: 'stripSuffix',
+      note: 'Tags ending in -A, -B, -P, -S, or -OUTPUT are two halves of the same panel, so the ending is removed and both spellings count as one piece of equipment everywhere. Turn this off if your site uses these endings for genuinely separate assets.' },
+    { id: 'norm-power-variant', name: 'Dual power feeds are one asset', kind: 'stripSuffix',
       separators: ['_', '-'], suffixes: ['NPS', 'CPS'], repeat: false, enabled: true,
       stage: 'matching',
-      note: 'Two supplies of the same equipment. Not part of its identity. stage "matching" is what ' +
-        'stripPowerVariant adds on top of cleanTag — used only where two supplies of one asset need to be ' +
-        'paired up (MEL lookups, transformer matching), not in the identity a user sees.' },
+      note: 'Tags ending in _CPS or _NPS are the two power supplies of one piece of equipment. The ending is ignored when matching records between documents, but stays visible in the tag itself.' },
   )
 
   // Classify — first match wins per target. GIS/XFM/LVS order is load-bearing.
   rules.classify.push(
-    { id: 'role-gis', name: 'GIS', kind: 'pattern', target: 'equipmentType',
+    { id: 'role-gis', name: 'Gas-insulated switchgear (GIS)', kind: 'pattern', target: 'equipmentType',
       pattern: '(?:^|[-_])GIS', value: 'GIS', enabled: true },
-    { id: 'role-xfm', name: 'Transformer', kind: 'pattern', target: 'equipmentType',
+    { id: 'role-xfm', name: 'Transformer (XFM)', kind: 'pattern', target: 'equipmentType',
       pattern: '(?:^|[-_])XFM', value: 'XFM', enabled: true },
-    { id: 'role-lvs', name: 'LV switchgear', kind: 'pattern', target: 'equipmentType',
+    { id: 'role-lvs', name: 'Low-voltage switchgear (LVS)', kind: 'pattern', target: 'equipmentType',
       pattern: '(?:^|[-_])LV[A-Z0-9]*', value: 'LVS', enabled: true },
     { id: 'topology-gis-token', name: 'GIS topology marker', kind: 'pattern', target: 'gisMarker',
       pattern: '(?:^|[^A-Z])GIS(?:[^A-Z]|$)', value: 'yes', source: 'raw', enabled: true,
-      note: 'Identifies GIS hops for the legacy GIS / BUS / GIS re-rooting rule. Keeping this separate ' +
-        'from Equipment Type lets a project teach a different GIS marker without hidden text checks.' },
+      note: 'Marks a tag as part of the GIS ring so the electrical flow view can re-root GIS-to-GIS runs correctly. Edit the pattern if your site writes GIS differently.' },
     { id: 'topology-bus-token', name: 'BUS topology marker', kind: 'pattern', target: 'busMarker',
       pattern: '(?:^|[^A-Z])BUS(?:[^A-Z]|$)', value: 'yes', source: 'raw', enabled: true,
-      note: 'Identifies BUS hops for the legacy GIS / BUS / GIS re-rooting rule. Clone Eagle and edit ' +
-        'this pattern when a site uses a different bus nomenclature.' },
+      note: 'Marks a tag as a bus section between GIS gear so the electrical flow view can re-root those runs correctly. Edit the pattern if your site names bus sections differently.' },
     // Placeholder rules read the RAW tag (source: 'raw'), not the
     // canonical one. isSpareName/isSpaceName/isNote in
     // src/profile/classify.js run on clean(value) with no normalisation
     // applied first — e.g. isNote('NOTE-A') is false, because the '-A'
     // suffix is still there. Classifying the canonical tag instead would
     // strip '-A' before the pattern runs and wrongly call it a note.
-    { id: 'ph-spare-sp', name: 'Spare (SP- prefix)', kind: 'pattern', target: 'placeholder',
+    { id: 'ph-spare-sp', name: 'Spare breaker (SP- prefix)', kind: 'pattern', target: 'placeholder',
       pattern: '^sp-', value: 'spare', source: 'raw', enabled: true },
-    { id: 'ph-spare-word', name: 'Spare (word)', kind: 'pattern', target: 'placeholder',
+    { id: 'ph-spare-word', name: 'Spare breaker (the word Spare)', kind: 'pattern', target: 'placeholder',
       pattern: '^spare(?:[\\s\\-_\\d]|$)', value: 'spare', source: 'raw', enabled: true },
-    { id: 'ph-space', name: 'Space', kind: 'pattern', target: 'placeholder',
+    { id: 'ph-space', name: 'Empty panel space', kind: 'pattern', target: 'placeholder',
       pattern: '^space(?:[\\s\\-_\\d]|$)', value: 'space', source: 'raw', enabled: true },
-    { id: 'ph-note', name: 'Note', kind: 'pattern', target: 'placeholder',
+    { id: 'ph-note', name: 'Drawing note, not equipment', kind: 'pattern', target: 'placeholder',
       pattern: '^note\\s*\\d*$', value: 'note', source: 'raw', enabled: true },
     // minLength mirrors equipmentSuffix's guard (tag.length>=4); lowercase
     // mirrors its .toLowerCase() so the engine's output is directly usable
     // without callers remembering to normalise case themselves.
-    { id: 'match-last4', name: 'Match key (last four characters)', kind: 'slice', target: 'matchKey',
+    { id: 'match-last4', name: 'Pairing key (last four characters)', kind: 'slice', target: 'matchKey',
       start: -4, minLength: 4, lowercase: true, enabled: true,
-      note: 'Used to pair LV switchgear with its transformer.' },
+      note: 'The last four characters of a tag, used to pair equipment that shares numbering — for example a switchgear with the transformer that feeds it.' },
   )
 
   // Relate — first RESOLVED or AMBIGUOUS rule wins. Order mirrors
@@ -105,33 +99,24 @@ export function makeEagleRuleProfile() {
   // the GIS root is last because it only fires when nothing else placed
   // the tag (requiresNoParent).
   rules.relate.push(
-    { id: 'scr-scc-parent', name: 'SCR/SCC parent from the MEL', kind: 'fragmentLookup',
+    { id: 'scr-scc-parent', name: 'SCR / SCC gear reports to its unit', kind: 'fragmentLookup',
       markers: ['SCR-', 'SCC-'], source: 'mel', mode: 'containing',
       onMultiple: 'first',
       buildingFrom: 'tagBeforeFirst', buildingDelimiter: '-',
       unitFrom: 'fragmentBeforeFirst', unitDelimiter: '_',
       parent: [{ kind: 'part', name: 'building' }, { kind: 'literal', text: '-' }, { kind: 'part', name: 'unit' }],
       enabled: true,
-      note: 'Site convention: SCR/SCC gear reports to "<Building>-<unit>", read off the MEL record ' +
-        'the SCR-/SCC- fragment is contained in. SCR is tried first; a tag with both markers that fails ' +
-        'to match on SCR never tries SCC (reproduces melScrSccParent\'s early return).' },
-    { id: 'cim-parent', name: 'CIM parent from the MEL', kind: 'fragmentLookup',
+      note: 'A tag containing SCR- or SCC- is placed under its unit, named "<Building>-<unit>", found by looking the fragment up in the MEL. SCR is checked before SCC.' },
+    { id: 'cim-parent', name: 'CIM gear reports to the building CIM rack', kind: 'fragmentLookup',
       markers: ['-CIM'], fragmentFrom: 'wholeTag', source: 'mel', mode: 'containing',
       onMultiple: 'first',
       parent: [{ kind: 'column', name: 'Building' }, { kind: 'literal', text: ' - CIM' }],
       enabled: true,
-      note: 'Site convention: CIM gear reports to "<Building> - CIM", where Building comes from the ' +
-        'matched MEL record\'s Building column. Change the literal if your site names CIM racks differently.' },
-    { id: 'mah-parent', name: 'MAH parent from the tag itself', kind: 'prefixSplit',
+      note: 'A tag containing -CIM is placed under "<Building> - CIM", using the Building column of the MEL record it matches. Change the text if your site names CIM racks differently.' },
+    { id: 'mah-parent', name: 'MAH equipment carries its parent in the tag', kind: 'prefixSplit',
       delimiter: '_', pattern: '-MAH', tagSource: 'raw', alsoCurrentParent: true, cleanPrefix: true, enabled: true,
-      note: 'Site convention: everything before the first "_" is the parent when that prefix contains ' +
-        '"-MAH". No MEL lookup needed — the tag carries its own parent. tagSource is "raw" (cleanTag, ' +
-        'power variant NOT stripped) because mahClosestParent splits on the tag\'s own "_" before any ' +
-        'power-variant handling runs; the canonical tag would already have consumed a trailing "_CPS"/' +
-        '"_NPS" as the power variant, erasing the very underscore this rule looks for. cleanPrefix then ' +
-        're-strips the panel side from the extracted prefix: without it "B14-MAH-01-A_CPS" would report ' +
-        'its parent as "B14-MAH-01-A", a tag no canonical node carries.' },
-    { id: 'transformer-match', name: 'LV switchgear to its MEL transformer', kind: 'attributeMatch',
+      note: 'When a tag contains -MAH, everything before its first underscore names the parent — the tag carries its own placement, no lookup needed. Example: B14-MAH-01_FAN-2 is placed under B14-MAH-01.' },
+    { id: 'transformer-match', name: 'Switchgear pairs with its transformer by numbering', kind: 'attributeMatch',
       source: 'mel', when: { equipmentType: 'LVS' }, whenParent: { equipmentType: 'XFM' },
       whenDiffers: 'matchKey',
       match: { equipmentType: 'XFM', matchKey: '@matchKey' },
@@ -139,18 +124,10 @@ export function makeEagleRuleProfile() {
       ambiguousReason: 'Multiple MEL transformers share the matching final four characters',
       emptyReason: 'No MEL transformer has matching final four characters',
       enabled: true,
-      note: 'Site convention: LV switchgear is fed by the MEL transformer sharing its last four ' +
-        'characters. whenDiffers reproduces melTransformerDecision\'s "matched" early-out: if the switchgear ' +
-        'and its current parent already share their last four characters, this rule does not fire at all — a ' +
-        '`none` decision, which means "keep the current parent" — rather than resolving to the same parent ' +
-        'through a lookup. preferExactTag applies an exact-tag heuristic: before ' +
-        'reporting several candidates as ambiguous, it tries "<current parent, minus its own last four ' +
-        'characters><this equipment\'s last four characters>" as a literal MEL tag; if that composed tag ' +
-        'exists and is itself a transformer, it wins even though other transformers share the same suffix.' },
-    { id: 'gis-system-root', name: 'GIS system root', kind: 'constant',
+      note: 'Low-voltage switchgear is fed by the transformer that shares the last four characters of its tag, found in the MEL. If the switchgear\'s current parent already shares those characters, nothing changes. When several transformers share the same four characters, the closest exact tag match wins; otherwise the tie is flagged for review.' },
+    { id: 'gis-system-root', name: 'Unparented GIS roots under Medium Voltage', kind: 'constant',
       pattern: 'GIS', requiresNoParent: true, parent: '602 Medium Voltage', enabled: true,
-      note: 'Site convention: an otherwise-unparented GIS tag roots under "602 Medium Voltage". ' +
-        'Rename the parent to match your site\'s medium-voltage system name.' },
+      note: 'A GIS tag that nothing else placed sits at the top of "602 Medium Voltage". Rename the parent to match your site\'s medium-voltage system name.' },
   )
 
   return {
