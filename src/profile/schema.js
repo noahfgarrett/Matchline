@@ -108,6 +108,21 @@ export function profileExecutionSignature(profile){
     hierarchy:value.hierarchy||{},modes:value.modes||[],overrides:value.overrides||{}});
 }
 export const COMPILER_PROFILE_NAME='SSManagement Default';
+const MODERN_IDENTITY_SUFFIXES=['P','S','OUTPUT'];
+const PREVIOUS_MODERN_IDENTITY_SUFFIXES=[
+  ['P','S','A','B','OUTPUT'],
+  ['P','S','A','B','OUTPUT','C']
+];
+function modernizeDefaultIdentityEndings(profile){
+  if(!profile||profile.id==='legacy-eagle')return profile;
+  const normalize=profile.rules&&Array.isArray(profile.rules.normalize)?profile.rules.normalize:null;
+  const sides=normalize&&normalize.find(rule=>rule.id==='norm-panel-sides');
+  if(!sides||!PREVIOUS_MODERN_IDENTITY_SUFFIXES.some(previous=>JSON.stringify(sides.suffixes||[])===JSON.stringify(previous)))return profile;
+  const replacement={...sides,name:'Non-identifying equipment endings',suffixes:[...MODERN_IDENTITY_SUFFIXES],
+    note:'Tags ending in -P, -S, or -OUTPUT refer to the same equipment without that ending, so both spellings count as one asset. Add or teach another ending only when your site uses it the same way.'};
+  profile.rules={...profile.rules,normalize:normalize.map(rule=>rule===sides?replacement:rule)};
+  return profile;
+}
 export function makeDefaultProfile(name){
   const now=new Date().toISOString();
   const eagle=makeEagleRuleProfile(),isBuiltIn=!clean(name);
@@ -121,11 +136,12 @@ export function makeDefaultProfile(name){
     overrides:{relationships:[],attributes:[]},
     anatomies:profileClone(eagle.anatomies),rules:(()=>{
       const rules=profileClone(eagle.rules);
-      /* The shipped profiles also treat a trailing -C as a panel side. The
-         frozen legacy baseline (makeLegacyEagleProfile) restores the pristine
-         rule set, so the golden compatibility suite is untouched. */
       const sides=rules.normalize.find(rule=>rule.id==='norm-panel-sides');
-      if(sides&&!sides.suffixes.includes('C'))sides.suffixes=[...sides.suffixes,'C'];
+      if(sides){
+        sides.name='Non-identifying equipment endings';
+        sides.suffixes=[...MODERN_IDENTITY_SUFFIXES];
+        sides.note='Tags ending in -P, -S, or -OUTPUT refer to the same equipment without that ending, so both spellings count as one asset. Add or teach another ending only when your site uses it the same way.';
+      }
       return rules;
     })(),modes:profileClone(eagle.modes),
     /* The built-in and every named profile share the SAME universal compiler
@@ -212,6 +228,7 @@ export function normalizeProfile(raw){
   profile.basePreset=profile.basePreset&&typeof profile.basePreset==='object'?profile.basePreset:{id:profile.presetId,version:String(profile.presetVersion),fingerprint:null};
   profile.attributes=Array.isArray(profile.attributes)?profile.attributes:[];
   profile.builtIn=profile.builtIn===true;profile.locked=profile.builtIn||profile.locked===true;
+  modernizeDefaultIdentityEndings(profile);
   profile.revision=Math.max(1,Number(profile.revision)||1);
   profile.mappings=profile.mappings&&typeof profile.mappings==='object'?profile.mappings:{};
   profile.tagRules=Array.isArray(profile.tagRules)?profile.tagRules.filter(rule=>rule&&typeof rule==='object').map(rule=>({

@@ -2,14 +2,12 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { loadApp } from './support/harness.mjs'
 
-test('Site Profile Studio exposes every Eagle rule and hierarchy mode as reference material', async () => {
+test('Site Profile Studio exposes every built-in rule and hierarchy mode as reference material', async () => {
   const app = await loadApp()
   const result = JSON.parse(app.eval(`
     JSON.stringify((function () {
       initProfiles();
-      /* Eagle explicitly. A first run now lands on an editable starter, and this
-         test is about Eagle being visible as reference material -- selecting it
-         by name states that instead of inheriting it from whatever is default. */
+      /* Select the locked SSManagement Default reference explicitly. */
       PROFILE_STORE.activeId = 'builtin-eagle';
       setRuleProfile(activeProfile());
       const eagle = activeProfile();
@@ -41,7 +39,7 @@ test('Site Profile Studio exposes every Eagle rule and hierarchy mode as referen
             level.kind === 'flow' ? hierarchy.includes('Electrical relationship flow') : hierarchy.includes(level.attribute)
           )
         })),
-        hasSuffixValues: trainer.includes('P, S, A, B, OUTPUT'),
+        hasSuffixValues: trainer.includes('P, S, OUTPUT'),
         hasPatternEditor: trainer.includes('enginePattern'),
         hasRoot: hierarchy.includes('602 Medium Voltage'),
         hasExecutionPolicies:['resolutionStrategy','downstreamGapPolicy','caseVariantPolicy','duplicateRegisterPolicy',

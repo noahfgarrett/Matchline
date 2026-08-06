@@ -2,11 +2,11 @@ import { $, $$, esc } from '../core/text.js'
 import { saveUpdateHtml } from '../core/download.js'
 import { portableProfileTransferBase64 } from '../profile/schema.js'
 
-export const APP_VERSION = '4.2.0';
+export const APP_VERSION = '4.2.1';
 export const UPDATE_REPOSITORY = 'noahfgarrett/SSManagement-Releases';
 export const UPDATE_RELEASE_API = 'https://api.github.com/repos/'+UPDATE_REPOSITORY+'/releases/latest';
 export const UPDATE_API_VERSION = '2026-03-10';
-export const UPDATE_TIMEOUT_MS = 5000;
+export const UPDATE_TIMEOUT_MS = 12000;
 export const LEGACY_UPDATE_CREDENTIAL_KEY = 'ssmanagement.private-update-token.v1';
 export let pendingUpdateInfo=null;
 export let activeUpdateTab='update';
@@ -53,7 +53,7 @@ export async function fetchLatestUpdateRelease(){
   try{
     const controller=new AbortController();
     timer=setTimeout(()=>controller.abort(),UPDATE_TIMEOUT_MS);
-    const res=await fetch(UPDATE_RELEASE_API,{signal:controller.signal,headers:githubUpdateHeaders('application/vnd.github+json')});
+    const res=await fetch(UPDATE_RELEASE_API,{signal:controller.signal,cache:'no-store',headers:githubUpdateHeaders('application/vnd.github+json')});
     if(!res.ok)throw updateRequestError(res.status);
     return res.json();
   }finally{if(timer)clearTimeout(timer);}

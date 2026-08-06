@@ -123,13 +123,14 @@ const SHEETS = {
   },
   /* Electrical feed-chain fixtures (the 602 Medium Voltage examples): the
      Easy Power chain must persist as the hierarchy for electrical equipment,
-     with the MEL supplying building/UPN attributes. GIS-01 appears in the MEL
-     as -A/-B panel sides; the LVS carries a WRONG MEL System Parent that the
+     with the MEL supplying building/UPN attributes. The suffixed GIS records
+     remain distinct assets; the LVS carries a WRONG MEL System Parent that the
      feed must outrank; one fed transformer sits in another building and one
      fed RIO sits in another discipline — both must demote to dependencies. */
   'compiler-chain-mel.xlsx': {
     'Master Equipment List': [
       ['Equipment Tag', 'Equipment Description', 'Bldg', 'Discipline', 'UPN', 'System Description', 'System Parent Equipment Tag(s)', 'Project Phase'],
+      ['GIS-01', 'Gas insulated switchgear', 'B14', 'Electrical', '602', 'Medium Voltage', '', 'New'],
       ['GIS-01-A', 'Gas insulated switchgear side A', 'B14', 'Electrical', '602', 'Medium Voltage', '', 'New'],
       ['GIS-01-B', 'Gas insulated switchgear side B', 'B14', 'Electrical', '602', 'Medium Voltage', '', 'New'],
       ['B14-XFM-6041', 'Distribution transformer', 'B14', 'Electrical', '604', 'Normal Power', '', 'New'],

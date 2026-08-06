@@ -67,9 +67,13 @@ test('Eagle visible Electrical Flow repeats PMD instruments under every matching
 test('Eagle tag and row helpers match frozen SSM Builder across a generated edge corpus', async () => {
   const legacy = await loadApp(FROZEN_SSM_BUILDER)
   const eagle = await loadApp()
-  // Eagle explicitly: this compares helper output against the frozen builder,
-  // so it must be the compatibility profile and not whatever a first run picks.
-  eagle.eval(`initProfiles(); PROFILE_STORE.activeId = 'builtin-eagle'; setRuleProfile(activeProfile());`)
+  // The compatibility factory is the only frozen Eagle path in the compiler.
+  eagle.eval(`
+    initProfiles();
+    const LEGACY = normalizeProfile(makeLegacyEagleProfile());
+    PROFILE_STORE.profiles = [LEGACY]; PROFILE_STORE.activeId = LEGACY.id;
+    setRuleProfile(activeProfile());
+  `)
   const bases = [
     'MCC-01', 'B14-LVS-1234', 'GIS-01', 'B14-XFM-9', 'PNL-1', 'SCR-02', 'SCC-03',
     'BUS-1', 'GIS-BUS-1', 'R22-MAH777-99-00_MED-B', 'PDU-SCR-239JEF_D-7_CPS',
