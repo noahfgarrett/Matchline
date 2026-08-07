@@ -1,0 +1,23 @@
+{
+  "name": "matchline",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean",
+    "test": "npm run test:workspaces && npm run test:legacy",
+    "test:workspaces": "npm test --workspace @matchline/domain",
+    "test:legacy": "npm test --prefix packages/legacy-parity"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}
