@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Navisworks 2025 version adapter: the AddInPlugin that walks the open
+    document and streams NDJSON. Everything Autodesk-independent lives in
+    Matchline.Extraction.Common.
+
+    Build against another install (or another year, once 2024/2026 adapters
+    exist) by overriding NavisworksInstallDir on the command line:
+
+      msbuild native\Matchline.Extraction.sln /p:Configuration=Release ^
+        /p:NavisworksInstallDir="C:\Program Files\Autodesk\Navisworks Simulate 2025"
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>Matchline.Extraction.Navisworks2025</AssemblyName>
+    <RootNamespace>Matchline.Extraction.Navisworks2025</RootNamespace>
+    <OutputType>Library</OutputType>
+    <!-- Navisworks is x64-only; an AnyCPU plugin would still load, but pinning
+         keeps the plugin and the launcher on the same bitness story. -->
+    <PlatformTarget>x64</PlatformTarget>
+    <!-- Flat bin\<Config>\ output: the deployment step in
+         docs/WINDOWS-RUNBOOK.md copies that folder wholesale. -->
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!--
+    VERIFY-ON-WINDOWS: Navisworks discovers plugins in a Plugins folder, one
+    subfolder per plugin, where the subfolder name must match the assembly name:
+      <Plugins>\Matchline.Extraction.Navisworks2025\Matchline.Extraction.Navisworks2025.dll
+    Matchline.Extraction.Common.dll must sit beside it. Which Plugins root is
+    honoured (install dir vs %APPDATA%) is one of the things the proof run
+    settles -- see docs/WINDOWS-RUNBOOK.md.
+  -->
+
+  <PropertyGroup>
+    <NavisworksInstallDir Condition=" '$(NavisworksInstallDir)' == '' ">C:\Program Files\Autodesk\Navisworks Manage 2025</NavisworksInstallDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Private=false: never copy Autodesk assemblies next to our plugin. The
+         host process already has them loaded and a stale local copy is a classic
+         source of "method not found" at runtime. -->
+    <Reference Include="Autodesk.Navisworks.Api">
+      <HintPath>$(NavisworksInstallDir)\Autodesk.Navisworks.Api.dll</HintPath>
+      <Private>false</Private>
+      <SpecificVersion>false</SpecificVersion>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\navisworks-common\Matchline.Extraction.Common.csproj" />
+  </ItemGroup>
+
+  <Target Name="MatchlineCheckNavisworksReference" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="!Exists('$(NavisworksInstallDir)\Autodesk.Navisworks.Api.dll')"
+           Text="Autodesk.Navisworks.Api.dll was not found under '$(NavisworksInstallDir)'. Install Navisworks Manage/Simulate 2025, or pass /p:NavisworksInstallDir=&quot;...&quot; pointing at the install folder." />
+  </Target>
+
+</Project>

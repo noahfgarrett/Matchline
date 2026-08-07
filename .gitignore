@@ -3,3 +3,10 @@ dist/
 .DS_Store
 mock-project/
 *.tsbuildinfo
+
+# C# / Visual Studio (native/)
+bin/
+obj/
+.vs/
+*.user
+

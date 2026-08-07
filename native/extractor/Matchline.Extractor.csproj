@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The launcher: hashes the input, checks the cache, drives Navisworks, and
+    converts the NDJSON hand-off stream into the SQLite cache.
+
+    This is the ONLY project that references SQLite. Native SQLite must never be
+    loaded inside the Navisworks process (EXTRACTION.md, design call 1), and the
+    surest way to guarantee that is for the plugin's dependency closure not to
+    contain it at all.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>Matchline.Extractor</AssemblyName>
+    <RootNamespace>Matchline.Extraction.Extractor</RootNamespace>
+    <!-- Navisworks is x64-only and SQLitePCLRaw ships per-architecture native
+         binaries; pinning avoids an AnyCPU build picking the wrong one. -->
+    <PlatformTarget>x64</PlatformTarget>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Exact-pinned per the repo dependency rules: the bracket form is NuGet's
+         "this version, nothing else". 8.0.10 is the last 8.0.x LTS patch that
+         still targets netstandard2.0, which is what .NET Framework 4.8 needs.
+         SQLitePCLRaw is named explicitly (rather than left transitive) so the
+         native provider version is visible and pinned too. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="[8.0.10]" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="[2.1.6]" />
+    <!-- VERIFY-ON-WINDOWS: on .NET Framework, SQLitePCLRaw relies on its own
+         MSBuild targets to copy the native e_sqlite3.dll into the output. After
+         the first build, confirm bin\Release\ contains e_sqlite3.dll (possibly
+         under x64\). A missing copy shows up at runtime as
+         "Unable to load DLL 'e_sqlite3'". -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\navisworks-common\Matchline.Extraction.Common.csproj" />
+  </ItemGroup>
+
+</Project>

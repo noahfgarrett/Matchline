@@ -1,0 +1,26 @@
+<Project>
+
+  <!--
+    Shared MSBuild settings for every project under native/.
+
+    C# 7.3 is deliberate: the plugin and the launcher both target .NET Framework
+    4.8 (Navisworks 2021-2026 all run on it), and 7.3 is the last language
+    version that is unambiguously safe there without extra polyfill assemblies.
+    That means: no records, no init-only setters, no file-scoped namespaces,
+    no nullable reference types, no switch expressions.
+  -->
+  <PropertyGroup>
+    <LangVersion>7.3</LangVersion>
+    <Deterministic>true</Deterministic>
+    <NeutralLanguage>en-US</NeutralLanguage>
+    <Company>Matchline</Company>
+    <Product>Matchline</Product>
+    <Version>0.1.0</Version>
+    <FileVersion>0.1.0.0</FileVersion>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <Copyright>Matchline</Copyright>
+    <!-- Keep build output free of satellite/culture noise. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+</Project>
