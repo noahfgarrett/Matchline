@@ -1,0 +1,25 @@
+{
+  "name": "@matchline/model-schema",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./fixtures/dragon": {
+      "types": "./dist/fixtures/dragon.d.ts",
+      "default": "./dist/fixtures/dragon.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "tsc -b && node --test test/*.test.mjs"
+  }
+}

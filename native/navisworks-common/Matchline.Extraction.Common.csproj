@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Autodesk-free half of the extraction stack: DTOs, the NDJSON hand-off
+    protocol (writer + reader), and the launcher stdout protocol types.
+
+    This project has NO package references and NO Autodesk references, on
+    purpose. It is loaded inside the Navisworks process by the version adapter,
+    where every extra assembly is a chance to collide with a copy Autodesk
+    already loaded. Nothing here may pull in SQLite: cache writing lives in the
+    launcher project (native/extractor), see native/README.md.
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <AssemblyName>Matchline.Extraction.Common</AssemblyName>
+    <RootNamespace>Matchline.Extraction</RootNamespace>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+</Project>
