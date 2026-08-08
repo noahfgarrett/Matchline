@@ -117,6 +117,33 @@ export const MESSY_MEL: ReadonlyArray<MelCatalogRow> = [
   { equipmentTag: 'MAH001-10-01', systemDescription: 'Orphan Description', sheet: 'MEL', row: 8 },
 ];
 
+/**
+ * A MEL that writes the system unpadded, the way a site's Excel export does
+ * when the column was ever a number.
+ */
+export const UNPADDED_MEL: ReadonlyArray<MelCatalogRow> = [
+  {
+    equipmentTag: 'VFD001-10-01',
+    systemKey: '1',
+    systemDescription: 'Utility Water',
+    sourceFile: 'Dragon-MEL.xlsx',
+    sheet: 'MEL',
+    row: 2,
+  },
+];
+
+/** The same MEL having ALSO grown a padded `001` -- two genuinely distinct systems. */
+export const COLLIDING_MEL: ReadonlyArray<MelCatalogRow> = [
+  ...UNPADDED_MEL,
+  {
+    systemKey: '001',
+    systemDescription: 'Mechanical Dry Air Handling',
+    sourceFile: 'Dragon-MEL.xlsx',
+    sheet: 'MEL',
+    row: 3,
+  },
+];
+
 /** §5.4: the tag names the system, the MEL supplies the description. */
 export const TAG_THEN_MEL: SystemResolverConfig = {
   keyChain: [{ kind: 'tag-segment', segment: 'system' }],
@@ -211,6 +238,25 @@ export const KEY_JOIN_AFTER_TAG: SystemResolverConfig = {
   ],
   descriptionChain: [],
   normalization: [],
+  conflictPolicy: 'review',
+};
+
+/** §5.5 + §5.3: the model says `1`, the profile pads, and the MEL must still be found. */
+export const PAD_THEN_MEL: SystemResolverConfig = {
+  keyChain: [{ kind: 'model-field', property: { category: 'Dragon', name: 'UPN' } }],
+  descriptionChain: [{ kind: 'mel-lookup', joinBy: 'systemKey', returnField: 'systemDescription' }],
+  normalization: [{ kind: 'padStart', length: 3, fill: '0' }],
+  conflictPolicy: 'review',
+};
+
+/** The same padding profile, with the MEL corroborating the key it joined on. */
+export const PAD_KEY_CORROBORATION: SystemResolverConfig = {
+  keyChain: [
+    { kind: 'model-field', property: { category: 'Dragon', name: 'UPN' } },
+    { kind: 'mel-lookup', joinBy: 'systemKey', returnField: 'systemKey' },
+  ],
+  descriptionChain: [],
+  normalization: [{ kind: 'padStart', length: 3, fill: '0' }],
   conflictPolicy: 'review',
 };
 

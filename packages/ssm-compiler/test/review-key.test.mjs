@@ -24,7 +24,10 @@ const EVERY_KIND = [
   {
     kind: 'system-conflict',
     assetId: 'tag:MAH001-10-01',
-    claims: [{ rule: 'tag-segment' }, { rule: 'mel-lookup' }],
+    claims: [
+      { rule: 'tag-segment', proposedValue: '001' },
+      { rule: 'mel-lookup', proposedValue: '002' },
+    ],
   },
   { kind: 'duplicate-model-tag', canonicalTag: 'MAH001-10-01', objectIds: [17, 42] },
   {
@@ -59,6 +62,20 @@ const EVERY_KIND = [
     proposedParentId: 'tag:VFD001-10-01',
     ruleDetail: 'VFD parents TIT (7/8)',
     confidence: 0.875,
+  },
+  {
+    kind: 'dead-claim-rule',
+    ladderSource: 'profile-lookup',
+    reason: 'unresolvable-parent-tag',
+    childRef: 'TIT603-10-01',
+    parentRef: 'MAH001-10-99',
+  },
+  { kind: 'unresolvable-alias', evidenceTag: 'MAH-1', aliasTarget: 'MAH001-10-99' },
+  {
+    kind: 'absorbed-tagged-component',
+    absorbedTag: 'VFD001-10-01',
+    absorbingAssetId: 'tag:MAH001-10-01',
+    objectId: 57,
   },
 ];
 
@@ -135,6 +152,76 @@ test('a key round-trips through a node:sqlite TEXT column unchanged', () => {
   } finally {
     db.close();
   }
+});
+
+test('two system conflicts over different values are two decisions, not one', () => {
+  // The desktop app records a decision against a review key. A key that encoded
+  // only the asset and how many claims there were made "MAH001 is 001 or 002?"
+  // and "MAH001 is 007 or 008?" the same key, so settling the first silently
+  // settled the second -- a materially different conflict inheriting a decision
+  // nobody made about it.
+  const asset = 'tag:MAH001-10-01';
+  const first = reviewKey({
+    kind: 'system-conflict',
+    assetId: asset,
+    claims: [{ proposedValue: '001' }, { proposedValue: '002' }],
+  });
+  const second = reviewKey({
+    kind: 'system-conflict',
+    assetId: asset,
+    claims: [{ proposedValue: '007' }, { proposedValue: '008' }],
+  });
+  assert.notEqual(first, second);
+});
+
+test('a system conflict key does not depend on the order the claims arrived in', () => {
+  const asset = 'tag:MAH001-10-01';
+  const forwards = reviewKey({
+    kind: 'system-conflict',
+    assetId: asset,
+    claims: [{ proposedValue: '001' }, { proposedValue: '002' }],
+  });
+  const backwards = reviewKey({
+    kind: 'system-conflict',
+    assetId: asset,
+    claims: [{ proposedValue: '002' }, { proposedValue: '001' }],
+  });
+  assert.equal(forwards, backwards);
+});
+
+test('a system conflict key keeps a repeated value rather than collapsing it', () => {
+  // Two rungs proposing '001' and one proposing '002' is a different conflict
+  // from one rung proposing each; a set would flatten them onto one key.
+  const asset = 'tag:MAH001-10-01';
+  const repeated = reviewKey({
+    kind: 'system-conflict',
+    assetId: asset,
+    claims: [{ proposedValue: '001' }, { proposedValue: '001' }, { proposedValue: '002' }],
+  });
+  const distinct = reviewKey({
+    kind: 'system-conflict',
+    assetId: asset,
+    claims: [{ proposedValue: '001' }, { proposedValue: '002' }, { proposedValue: '003' }],
+  });
+  assert.notEqual(repeated, distinct);
+});
+
+test('a dead claim rule key carries every field that made it dead', () => {
+  const base = {
+    kind: 'dead-claim-rule',
+    ladderSource: 'profile-lookup',
+    reason: 'unresolvable-parent-tag',
+    childRef: 'TIT603-10-01',
+    parentRef: 'MAH001-10-99',
+  };
+  const keys = new Set([
+    reviewKey(base),
+    reviewKey({ ...base, ladderSource: 'prior-ssm' }),
+    reviewKey({ ...base, reason: 'unknown-parent-asset' }),
+    reviewKey({ ...base, childRef: 'TIT603-10-02' }),
+    reviewKey({ ...base, parentRef: 'MAH001-10-98' }),
+  ]);
+  assert.equal(keys.size, 5, 'every field moves the key');
 });
 
 test('sorting by key is a total order that does not depend on arrival', () => {

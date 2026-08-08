@@ -73,7 +73,12 @@ test('a void-request channel invokes with undefined rather than omitting the arg
   assert.deepEqual(fake.calls, [{ channel: 'app:version', request: undefined }]);
 });
 
-test('the façade exposes nothing beyond the declared domains', () => {
+/**
+ * `files` is deliberately absent here: it needs `webUtils`, so the preload adds
+ * it (preload/index.ts) and this generator stays free of Electron. Everything
+ * this function produces is a channel.
+ */
+test('the channel façade exposes nothing beyond the declared domains', () => {
   const api = createMatchlineApi(createFakeIpcRenderer().invoke);
   const expectedDomains = new Set(IPC_CHANNEL_NAMES.map((channel) => channel.split(':')[0]));
 

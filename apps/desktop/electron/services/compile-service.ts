@@ -232,8 +232,17 @@ function assetIdsOf(item: ReviewItem): readonly string[] {
       return item.candidates.map((candidate) => candidate.assetId);
     case 'structural-cycle':
       return item.assetIds;
+    case 'absorbed-tagged-component':
+      // The absorbed object is no longer an asset, so the only row that can
+      // carry this flag is the one that swallowed it.
+      return [item.absorbingAssetId];
     case 'duplicate-model-tag':
     case 'system-catalog-conflict':
+    // These three name tags and rules rather than assets: a dead claim rule and
+    // an unresolvable alias are both about a spelling no asset answers to, so
+    // there is no tree row to hang a flag on.
+    case 'dead-claim-rule':
+    case 'unresolvable-alias':
       return [];
     default: {
       const exhaustive: never = item;

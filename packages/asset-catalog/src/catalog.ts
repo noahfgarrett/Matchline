@@ -66,6 +66,18 @@ function propertyKey(ref: PropertyRef): string {
 }
 
 /**
+ * Makes a tag safe to put in front of the `#<objectId>` a duplicate id ends
+ * with.
+ *
+ * `%` goes first so the escape is injective: without it `X#` and `X%23` would
+ * both become `X%23`, and a tag containing a literal `#` could spell another
+ * asset's id exactly.
+ */
+function escapeTagForId(tag: string): string {
+  return tag.replaceAll('%', '%25').replaceAll('#', '%23');
+}
+
+/**
  * A blank value is not a value: extractors write empty strings where a
  * property exists but says nothing, and a tag of spaces is not a tag.
  * Trimming is the only normalization this package performs.
@@ -328,11 +340,19 @@ function readField(
   return null;
 }
 
+/** One tag that collapse took out of circulation, and the object that carried it. */
+interface AbsorbedTag {
+  readonly objectId: number;
+  readonly tag: string;
+}
+
 /** One draft asset, before duplicate status and ids are decided. */
 interface AssetDraft {
   readonly object: ModelObject;
   readonly objectIds: readonly number[];
   readonly canonicalTag: string;
+  /** Absorbed components that carried a tag of their own, in `objectIds` order. */
+  readonly absorbedTagged: ReadonlyArray<AbsorbedTag>;
 }
 
 /**
@@ -502,16 +522,23 @@ export function buildAssetCatalog(
   }
 
   // --- assets -------------------------------------------------------------------
-  const drafts: readonly AssetDraft[] = representatives.map((object) => ({
-    object,
-    objectIds: [
-      object.id,
-      ...[...(absorbed.get(object.id) ?? [])].sort((left, right) => left - right),
-    ],
+  const drafts: readonly AssetDraft[] = representatives.map((object) => {
+    const absorbedIds = [...(absorbed.get(object.id) ?? [])].sort((left, right) => left - right);
     // The tag names the asset, and an absorbed component is a part of the
     // asset rather than the asset itself: its tag never renames the whole.
-    canonicalTag: tagOf(object.id) ?? '',
-  }));
+    const canonicalTag = tagOf(object.id) ?? '';
+    return {
+      object,
+      objectIds: [object.id, ...absorbedIds],
+      canonicalTag,
+      // Tags collapse took out of circulation: they named a component and now
+      // name nothing. A component repeating its owner's own tag is not one of
+      // them -- that spelling still reaches this asset, at the exact tier.
+      absorbedTagged: absorbedIds
+        .map((objectId) => ({ objectId, tag: tagOf(objectId) ?? '' }))
+        .filter((entry) => entry.tag.length > 0 && entry.tag !== canonicalTag),
+    };
+  });
 
   const tagCounts = new Map<string, number>();
   for (const draft of drafts) {
@@ -534,12 +561,13 @@ export function buildAssetCatalog(
 
     // Untagged is only reachable with `requireTagProperty: false`; the cache
     // ordinal is the only content-derived identity such an object has.
+    const escapedTag = escapeTagForId(canonicalTag);
     const assetId =
       canonicalTag.length === 0
         ? `object:${object.id}`
         : isDuplicate
-          ? `tag:${canonicalTag}#${object.id}`
-          : `tag:${canonicalTag}`;
+          ? `tag:${escapedTag}#${object.id}`
+          : `tag:${escapedTag}`;
 
     const fields: OptionalFieldValues = {};
     const provenance: MutableAssetProvenance = {};
@@ -572,6 +600,7 @@ export function buildAssetCatalog(
       ...fields,
       status,
       objectIds,
+      absorbedTags: draft.absorbedTagged.map((entry) => entry.tag),
       sourceModelId: object.sourceModelId,
       provenance,
     };
@@ -591,7 +620,7 @@ export function buildAssetCatalog(
   }
 
   // Sorted by tag so two runs list the same review items in the same order.
-  const reviewItems: readonly ReviewItem[] = [...duplicateObjectIds.entries()]
+  const duplicateItems: readonly DuplicateModelTagReviewItem[] = [...duplicateObjectIds.entries()]
     .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
     .map(
       ([canonicalTag, objectIds]): DuplicateModelTagReviewItem => ({
@@ -601,12 +630,37 @@ export function buildAssetCatalog(
       }),
     );
 
+  // Collapse removed these tags from circulation. Left unsaid, evidence
+  // spelled with one of them would quietly suffix-match the absorbing asset,
+  // which is a decision only the site can make (or unmake, by listing the
+  // class as separately commissionable).
+  //
+  // Also sorted by tag, then by object, so the order is a property of the
+  // model rather than of the walk.
+  const absorbedItems = drafts
+    .flatMap((draft, position) =>
+      draft.absorbedTagged.map((entry) => ({
+        kind: 'absorbed-tagged-component' as const,
+        absorbedTag: entry.tag,
+        absorbingAssetId: assets[position]?.assetId ?? '',
+        objectId: entry.objectId,
+      })),
+    )
+    .sort((left, right) => {
+      if (left.absorbedTag !== right.absorbedTag) {
+        return left.absorbedTag < right.absorbedTag ? -1 : 1;
+      }
+      return left.objectId - right.objectId;
+    });
+
+  const reviewItems: readonly ReviewItem[] = [...duplicateItems, ...absorbedItems];
+
   const impact: InclusionImpact = {
     totalObjects: cache.objectCount(),
     candidatesAfterEachFilter: stages,
     collapsedCount,
     finalAssetCount: assets.length,
-    duplicateTagCount: reviewItems.length,
+    duplicateTagCount: duplicateItems.length,
     untaggedDroppedCount,
   };
 

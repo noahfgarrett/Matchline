@@ -20,6 +20,7 @@ import {
   idOf,
   MEL_SOURCE_FILE,
   openDragonCache,
+  PROPERTY_MAPPINGS,
   UNKNOWN_FEED_TAG,
   UNKNOWN_PMD_TAG,
 } from './support.mjs';
@@ -66,7 +67,7 @@ test('stage 2: the property-bag seam hands the resolver every raw property, addr
   assert.equal(subject.sourceFile, 'Dragon-Mechanical.nwc');
 
   const asset = catalog.assets.find((candidate) => candidate.canonicalTag === 'MAH001-10-01');
-  const standalone = subjectPropertiesFor(handle.cache, asset);
+  const standalone = subjectPropertiesFor(handle.cache, asset, PROPERTY_MAPPINGS.equipmentTag);
   assert.equal(standalone.get('Dragon Data')?.get('UPN'), '001');
   assert.equal(standalone.get('Dragon Data')?.get('Building'), 'D1');
 });

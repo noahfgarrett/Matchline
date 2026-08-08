@@ -35,6 +35,17 @@ import type { CompileSubject } from './types.js';
 export const UNASSIGNED_GROUP = '(unassigned)';
 
 /**
+ * The display label the *tree* files a refused level value under.
+ *
+ * Not a level path value: `review` and `provisional-root` leave the path value
+ * empty, and that stays empty so nothing the fold compares changes meaning.
+ * This is the projection's own label for that emptiness, and it is deliberately
+ * not `(unassigned)` -- that bucket is a grouping the site asked for, this is a
+ * value the site refused to group on.
+ */
+export const NO_VALUE_GROUP = '(no value)';
+
+/**
  * What the fold concluded about one selected parent.
  *
  * - `keep` -- every enabled boundary is known on both sides and equal.

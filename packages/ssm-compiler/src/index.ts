@@ -21,7 +21,14 @@
  */
 export { BOUNDARY_DEMOTION_RULE, compileSnapshot, DEFAULT_LADDER, MODEL_TREE_SOURCE_FILE } from './compile.js';
 
-export { boundaryLevels, explicitValue, foldBoundaries, levelPathOf, UNASSIGNED_GROUP } from './fold.js';
+export {
+  boundaryLevels,
+  explicitValue,
+  foldBoundaries,
+  levelPathOf,
+  NO_VALUE_GROUP,
+  UNASSIGNED_GROUP,
+} from './fold.js';
 export type { FoldOutcome } from './fold.js';
 
 export { hierarchyTree } from './tree.js';

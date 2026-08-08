@@ -16,6 +16,7 @@
  * deep-equal `CompiledProject` and byte-identical MEL workbook bytes.
  */
 import type {
+  DeadClaimRuleReviewItem,
   ManualRelationshipOverride,
   Provenance,
   ResolvedAssetNode,
@@ -42,6 +43,7 @@ import type {
   FlowEdgeInput,
   LearnedClaimInput,
   ResolveTag,
+  SkippedClaimInput,
 } from '@matchline/relationship-claims';
 import { readMelTable } from '@matchline/spreadsheet-import';
 import { compileSnapshot, hierarchyTree } from '@matchline/ssm-compiler';
@@ -208,7 +210,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   const subjects: ResolverSubject[] = [];
   const claimSubjects: ClaimSubject[] = [];
   for (const asset of catalog.assets) {
-    const bag = readAssetProperties(cache, asset);
+    const bag = readAssetProperties(cache, asset, profile.propertyMappings.equipmentTag);
     const sourceFile = sourceFileOf(asset, fileNames, inputFileName);
     sourceFiles.set(asset.assetId, sourceFile);
     subjects.push(resolverSubjectOf(asset, bag, sourceFile));
@@ -398,6 +400,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     systems.reviewItems,
     flow.reviewItems,
     claims.proposals,
+    deadClaimRules(claims.skipped),
     snapshot.reviewItems,
   ]);
 
@@ -434,6 +437,32 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     reviewItems,
     stats,
   };
+}
+
+/**
+ * Every input claims assembly refused, as review items.
+ *
+ * `@matchline/relationship-claims` publishes its skipped list because skipping
+ * is loud by design (its `types.ts`: "a mistyped tag in a profile lookup would
+ * otherwise vanish silently"). Loud only counts if it reaches the one queue a
+ * person actually works, so the adapter lives here -- assembly does not know
+ * what a review item is, and the orchestrator is what already turns every other
+ * stage's refusals into one list.
+ *
+ * A make-root input names no parent by construction, so its `parentRef` is
+ * `null`; it flattens to the empty string rather than to an invented tag, and
+ * `reviewItemSummary` renders it as the "-> " with nothing after it that it is.
+ */
+function deadClaimRules(
+  skipped: ReadonlyArray<SkippedClaimInput>,
+): ReadonlyArray<DeadClaimRuleReviewItem> {
+  return skipped.map((skip) => ({
+    kind: 'dead-claim-rule',
+    ladderSource: skip.ladderSource,
+    reason: skip.reason,
+    childRef: skip.childRef,
+    parentRef: skip.parentRef ?? '',
+  }));
 }
 
 /**

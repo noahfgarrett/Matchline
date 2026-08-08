@@ -5,9 +5,11 @@ import { reviewItemSummary } from '@matchline/domain';
 
 import { buildIdentityIndex, resolveTag, resolveTags } from '../dist/index.js';
 import {
+  ALIAS_TO_MISSING_CONFIG,
   ANATOMY_COLLISION_ASSETS,
   ANATOMY_CONFIG,
   CASE_COLLISION_ASSETS,
+  DRAGON_ASSETS,
   DUPLICATE_TAG_ASSETS,
   NESTED_STEM_ASSETS,
   NORMALIZING_CONFIG,
@@ -98,4 +100,34 @@ test('a duplicated canonical tag resolves once, to the first assetId', () => {
   // The duplicate itself is the asset catalog's review item, raised upstream.
   // Repeating it here would double-count one decision.
   assert.deepEqual(reviewItems, []);
+});
+
+test('an alias whose target no asset carries is terminal, not a fall-through', () => {
+  const index = buildIdentityIndex(DRAGON_ASSETS, ALIAS_TO_MISSING_CONFIG);
+  // Without the alias this spelling suffix-matches asset-0001, which is
+  // precisely the asset the site said it is NOT.
+  const bare = resolveTag(buildIdentityIndex(DRAGON_ASSETS), 'MAH001-10-01-SPARE');
+  assert.equal(bare.assetId, 'asset-0001');
+
+  const outcome = resolveTag(index, 'MAH001-10-01-SPARE');
+  assert.equal(outcome.status, 'unmatched');
+  assert.deepEqual(outcome.candidates, []);
+});
+
+test('an unresolvable alias tells a person which target went missing', () => {
+  const index = buildIdentityIndex(DRAGON_ASSETS, ALIAS_TO_MISSING_CONFIG);
+  const { reviewItems } = resolveTags(index, ['MAH001-10-01-SPARE', 'MAH001-10-01-SPARE']);
+  assert.deepEqual(reviewItems, [
+    {
+      kind: 'unresolvable-alias',
+      evidenceTag: 'MAH001-10-01-SPARE',
+      aliasTarget: 'NOT-IN-THE-MODEL',
+    },
+  ]);
+});
+
+test('a fuzzy proposal is never offered for a spelling the site already aliased', () => {
+  const index = buildIdentityIndex(DRAGON_ASSETS, ALIAS_TO_MISSING_CONFIG);
+  const outcome = resolveTag(index, 'MAH001-10-01-SPARE');
+  assert.deepEqual(outcome.candidates, []);
 });

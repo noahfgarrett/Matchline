@@ -11,6 +11,7 @@ import type { SystemComponentConfig } from '@matchline/domain';
 import type { AnatomyResult } from '@matchline/tag-anatomy';
 
 import { expandComposite } from './composite.js';
+import type { SystemJoinIndex } from './join.js';
 import { COMPONENT_EVIDENCE_TIER } from './tiers.js';
 import type {
   ChainName,
@@ -51,6 +52,14 @@ export interface RungContext {
    * "MEL lookup by resolved System Key").
    */
   readonly joinKey: string | null;
+  /**
+   * The MEL's own keys, normalized the same way `joinKey` was.
+   *
+   * `joinKey` is post-normalization and the catalog is raw-keyed, so comparing
+   * them directly would make a padded `001` unable to find the MEL's `1` --
+   * or, worse, find a different system that happens to be spelled `001`.
+   */
+  readonly joinIndex: SystemJoinIndex;
 }
 
 /** Which source vocabulary a rung's claim belongs to. */
@@ -170,29 +179,51 @@ function evaluateMelLookup(
   if (joinKey === null || joinKey.length === 0) {
     return skip('no-join-key', 'no earlier rung resolved a system key to join on');
   }
+  if (context.catalog === undefined && context.melRows === undefined) {
+    return skip('not-configured', 'a key join needs a system catalog or MEL rows');
+  }
+
+  // Both sides of the join go through the profile's normalization, so a padded
+  // `001` reaches the MEL's `1` and only the profile's own steps decide it.
+  const spellings = context.joinIndex.get(joinKey) ?? [];
+  if (spellings.length > 1) {
+    // Two systems the MEL states separately, made indistinguishable by the
+    // profile's steps. Guessing between them would attach one system's
+    // description to the other's assets.
+    return skip(
+      'ambiguous-join',
+      `system ${joinKey} matches ${spellings.length} MEL keys after normalization (${spellings.join(', ')})`,
+    );
+  }
+  const melKey = spellings[0];
+  if (melKey === undefined) {
+    return skip('no-value', `the MEL states no ${label} for system ${joinKey}`);
+  }
 
   // The catalog is the authority on what the MEL says about a key; the rows are
   // consulted only to recover a row address for provenance. Both are first-seen
   // ordered, so they cannot disagree about the value.
+  //
+  // A systemKey lookup returns the MEL's own spelling, not the joined key: the
+  // claim then records what the MEL actually wrote and the transform trail
+  // shows how it became the resolved key (§5.5).
   let value = '';
   if (context.catalog !== undefined) {
-    const entry = context.catalog.get(joinKey);
+    const entry = context.catalog.get(melKey);
     if (entry !== undefined) {
-      value = field === 'systemKey' ? joinKey : (entry.description ?? '');
+      value = field === 'systemKey' ? melKey : (entry.description ?? '');
     }
   } else if (context.melRows !== undefined) {
     for (const row of context.melRows) {
-      if ((row.systemKey?.trim() ?? '') !== joinKey) {
+      if ((row.systemKey?.trim() ?? '') !== melKey) {
         continue;
       }
-      const candidate = (field === 'systemKey' ? row.systemKey : row.systemDescription)?.trim() ?? '';
+      const candidate = field === 'systemKey' ? melKey : (row.systemDescription?.trim() ?? '');
       if (candidate.length > 0) {
         value = candidate;
         break;
       }
     }
-  } else {
-    return skip('not-configured', 'a key join needs a system catalog or MEL rows');
   }
 
   if (value.length === 0) {
@@ -201,7 +232,7 @@ function evaluateMelLookup(
 
   const backingRow = context.melRows?.find(
     (row) =>
-      (row.systemKey?.trim() ?? '') === joinKey &&
+      (row.systemKey?.trim() ?? '') === melKey &&
       (field === 'systemKey' || (row.systemDescription?.trim() ?? '') === value),
   );
   return yieldFrom(value, backingRow);

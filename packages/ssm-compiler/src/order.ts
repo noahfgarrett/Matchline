@@ -9,6 +9,7 @@
  */
 import { assertNever } from '@matchline/domain';
 import type {
+  AttributeValue,
   LadderSourceKind,
   ParentLadderConfig,
   ResolvedDependency,
@@ -54,6 +55,20 @@ function field(value: string): string {
 /** A list-valued field: every member escaped, then joined. */
 function fieldList(values: readonly string[]): string {
   return values.map(field).join(LIST_SEPARATOR);
+}
+
+/**
+ * One proposed attribute value as a key field.
+ *
+ * Type-tagged before escaping, because a claim's value is not always a string:
+ * without the tag the number `1`, the string `'1'` and the boolean-shaped
+ * `'true'` would all flatten onto the same field, and two conflicts a person
+ * would settle differently would share a key. `null` is its own tag rather than
+ * `string:null`, so a site whose spreadsheet literally says "null" is still a
+ * different conflict from one that said nothing.
+ */
+function valueField(value: AttributeValue): string {
+  return value === null ? field('null') : field(`${typeof value}:${String(value)}`);
 }
 
 /** Numbers carry no structural character, so they join without escaping. */
@@ -218,7 +233,21 @@ export function compareDependencies(left: ResolvedDependency, right: ResolvedDep
 export function reviewKey(item: ReviewItem): string {
   switch (item.kind) {
     case 'system-conflict':
-      return composeKey(item.kind, field(item.assetId), String(item.claims.length));
+      // The values, not just how many of them there were. A key of
+      // (asset, count) makes "001 or 002?" and "007 or 008?" the same key, and
+      // the desktop app records decisions against that key -- so a re-compile
+      // with different evidence would inherit a decision nobody made about it.
+      // Sorted, so the key does not depend on which rung raised its claim
+      // first; duplicates kept, because two rungs agreeing on a value is a
+      // different conflict from two rungs each naming their own.
+      return composeKey(
+        item.kind,
+        field(item.assetId),
+        item.claims
+          .map((claim) => valueField(claim.proposedValue))
+          .sort(compareText)
+          .join(LIST_SEPARATOR),
+      );
     case 'duplicate-model-tag':
       return composeKey(item.kind, field(item.canonicalTag), numberList(item.objectIds));
     case 'system-catalog-conflict':
@@ -251,6 +280,26 @@ export function reviewKey(item: ReviewItem): string {
         field(item.proposedParentId),
         field(item.ruleDetail),
         String(item.confidence),
+      );
+    case 'dead-claim-rule':
+      // Content-complete: the rung, the reason and both spellings. A profile
+      // that names two dead parents for one child is two dead rules, and a rule
+      // dead for a different reason is a different thing to fix.
+      return composeKey(
+        item.kind,
+        field(item.ladderSource),
+        field(item.reason),
+        field(item.childRef),
+        field(item.parentRef),
+      );
+    case 'unresolvable-alias':
+      return composeKey(item.kind, field(item.evidenceTag), field(item.aliasTarget));
+    case 'absorbed-tagged-component':
+      return composeKey(
+        item.kind,
+        field(item.absorbedTag),
+        field(item.absorbingAssetId),
+        String(item.objectId),
       );
   }
   return assertNever(item, 'unhandled ReviewItem');

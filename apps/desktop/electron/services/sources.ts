@@ -295,6 +295,123 @@ export function identifySource(absolutePath: string): SourceIdentification {
   };
 }
 
+/* ------------------------------------------------------- dropped-path intake */
+
+/** Every extension `identifySource` knows how to do something with. */
+const ACCEPTED_EXTENSIONS: readonly string[] = [
+  ...MODEL_CACHE_EXTENSIONS,
+  ...NAVISWORKS_EXTENSIONS,
+  ...WORKBOOK_EXTENSIONS,
+  ...P6_EXTENSIONS,
+];
+
+/**
+ * The largest file a drop may name, in bytes.
+ *
+ * Not a product limit — a real extraction cache is tens of megabytes and the
+ * biggest `.nwd` anyone has dropped is under a gigabyte. It is here so that a
+ * path main did not choose cannot make it read something unbounded: workbooks
+ * go through `readFileSync`, and "read this 40 GB file into a Buffer" is a
+ * denial of service one `invoke` long.
+ */
+const MAX_DROPPED_BYTES = 2 * 1024 * 1024 * 1024;
+
+/** A dropped path main declined to hand to the project, and why. */
+export interface RejectedDroppedPath {
+  readonly fileName: string;
+  readonly reason: string;
+}
+
+export interface DroppedPathScreening {
+  /** Paths that survived every check, absolute and de-duplicated. */
+  readonly accepted: readonly string[];
+  readonly rejected: readonly RejectedDroppedPath[];
+}
+
+/**
+ * What main will accept from a drag, and why it is safe to accept it at all.
+ *
+ * A drop is a real user gesture, but the *path* does not come from one. The OS
+ * hands the renderer a `File`, the preload turns it into a string with
+ * `webUtils.getPathForFile`, and by the time it reaches main it is
+ * indistinguishable from a string the renderer made up — which is exactly the
+ * assumption `security/path-grants.ts` is built on.
+ *
+ * So this channel does not trust the string, and it does not mint a grant
+ * either. Two decisions, for two different reasons:
+ *
+ * 1. **No grant.** A grant is not only a read capability: `export:generated-mel`
+ *    and friends *write* to a granted path. Granting whatever the renderer calls
+ *    a drop would let a compromised renderer nominate any `.xlsx` on the disk
+ *    and then overwrite it, with no dialog anywhere in the story. Nothing in the
+ *    drop flow needs a lasting grant — the project stores the path itself and
+ *    main re-reads it from there — so the capability is never created.
+ * 2. **Screened here, in main.** Only regular files, only extensions
+ *    `identifySource` has a reader for, only under a size cap. What is left is
+ *    the worst case worth accepting: a renderer that lies gets a source file
+ *    registered in the open project, which is the one thing this channel is for,
+ *    and is recoverable with the Remove button.
+ *
+ * `~/.ssh/id_rsa` has no accepted extension and never reaches a reader. A
+ * directory dragged in is refused rather than walked.
+ */
+export function screenDroppedPaths(paths: readonly string[]): DroppedPathScreening {
+  const accepted: string[] = [];
+  const rejected: RejectedDroppedPath[] = [];
+  const seen = new Set<string>();
+
+  for (const candidate of paths) {
+    const absolutePath = path.resolve(candidate);
+    const fileName = path.basename(absolutePath);
+
+    if (seen.has(absolutePath)) {
+      continue;
+    }
+    seen.add(absolutePath);
+
+    if (!ACCEPTED_EXTENSIONS.includes(extensionOf(absolutePath))) {
+      rejected.push({
+        fileName,
+        reason:
+          `Matchline does not read ${fileName}. Drop extraction caches ` +
+          '(.matchline-cache), Navisworks files (.nwd), workbooks (.xlsx, .xlsm) ' +
+          'or P6 exports (.xer).',
+      });
+      continue;
+    }
+
+    const stats = (() => {
+      try {
+        return statSync(absolutePath);
+      } catch {
+        return null;
+      }
+    })();
+
+    if (stats === null || !stats.isFile()) {
+      rejected.push({
+        fileName,
+        reason: `${fileName} is not a file Matchline can open. Drop the file itself, not a folder.`,
+      });
+      continue;
+    }
+
+    if (stats.size > MAX_DROPPED_BYTES) {
+      rejected.push({
+        fileName,
+        reason:
+          `${fileName} is larger than Matchline will read from a drop. ` +
+          'Use the Choose files button if it really is a source file.',
+      });
+      continue;
+    }
+
+    accepted.push(absolutePath);
+  }
+
+  return { accepted, rejected };
+}
+
 /* ------------------------------------------------------------------ MEL rows */
 
 /** MEL columns the System Resolver can use. Everything else is ignored here. */

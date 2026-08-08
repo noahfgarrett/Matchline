@@ -5,10 +5,11 @@
  * tag reachable at two tiers is always reported at the stronger one. Two rules
  * shape everything else here:
  *
- * 1. Ambiguity is terminal. A tier that finds several distinct canonical tags
- *    stops the ladder and raises a review item. Falling through to a looser
- *    tier after refusing to decide at a stronger one would produce exactly the
- *    guess the refusal was protecting against.
+ * 1. A refusal is terminal. A tier that finds several distinct canonical tags,
+ *    or an alias naming a tag no asset carries, stops the ladder and raises a
+ *    review item. Falling through to a looser tier after refusing to decide at
+ *    a stronger one would produce exactly the guess the refusal was protecting
+ *    against.
  * 2. Fuzzy never matches. It only ever ranks proposals for a person
  *    ("Fuzzy identity should never auto-merge without review").
  */
@@ -21,6 +22,7 @@ import {
   type IdentityOutcome,
   type IdentityTier,
   type ReviewItem,
+  type UnresolvableAliasReviewItem,
 } from '@matchline/domain';
 
 import { anatomyIdentityKey, describeAnatomyKey } from './anatomy-key.js';
@@ -46,7 +48,9 @@ function compareText(left: string, right: string): number {
 type TierResult =
   | { readonly kind: 'miss' }
   | { readonly kind: 'match'; readonly assetId: string; readonly detail: string }
-  | { readonly kind: 'ambiguous'; readonly candidateAssetIds: ReadonlyArray<string> };
+  | { readonly kind: 'ambiguous'; readonly candidateAssetIds: ReadonlyArray<string> }
+  /** A configured alias naming a canonical tag the universe does not contain. */
+  | { readonly kind: 'unresolvable-alias'; readonly aliasTarget: string };
 
 type CandidateChoice =
   | { readonly kind: 'none' }
@@ -151,12 +155,23 @@ function normalizedTier(index: IdentityIndex, evidenceTag: string): TierResult {
   );
 }
 
+/**
+ * A configured alias is a statement about identity, so a dead one is terminal.
+ *
+ * The site said "this spelling is a DIFFERENT asset". If the named asset is not
+ * in this compile, falling through to the anatomy or suffix tier would attach
+ * the spelling to exactly the asset the alias was overriding -- the same reason
+ * ambiguity stops the ladder.
+ */
 function aliasTier(index: IdentityIndex, evidenceTag: string): TierResult {
   const canonical = index.config.aliases?.get(evidenceTag);
   if (canonical === undefined) {
     return { kind: 'miss' };
   }
   const entries = index.byExactTag.get(canonical) ?? [];
+  if (entries.length === 0) {
+    return { kind: 'unresolvable-alias', aliasTarget: canonical };
+  }
   return decide(
     chooseCandidate(entries),
     () => `profile alias "${evidenceTag}" names canonical tag "${canonical}"`,
@@ -272,7 +287,9 @@ function fuzzyCandidates(index: IdentityIndex, evidenceTag: string): ReadonlyArr
 
 interface Resolution {
   readonly outcome: IdentityOutcome;
-  readonly reviewItems: ReadonlyArray<FuzzyIdentityReviewItem | AmbiguousSuffixReviewItem>;
+  readonly reviewItems: ReadonlyArray<
+    FuzzyIdentityReviewItem | AmbiguousSuffixReviewItem | UnresolvableAliasReviewItem
+  >;
 }
 
 function unmatched(
@@ -339,6 +356,14 @@ function resolveOne(index: IdentityIndex, evidenceTag: string): Resolution {
         ],
       };
     }
+    if (result.kind === 'unresolvable-alias') {
+      return {
+        outcome: unmatched(evidenceTag, []),
+        reviewItems: [
+          { kind: 'unresolvable-alias', evidenceTag, aliasTarget: result.aliasTarget },
+        ],
+      };
+    }
   }
 
   return { outcome: unmatched(evidenceTag, []), reviewItems: [] };
@@ -347,9 +372,10 @@ function resolveOne(index: IdentityIndex, evidenceTag: string): Resolution {
 /**
  * Resolves one foreign spelling against the model-first universe.
  *
- * An ambiguity resolves to an unmatched outcome with no candidates; the review
- * item explaining which assets collided is produced by `resolveTags`, which is
- * where review output belongs.
+ * A refusal -- an ambiguity, or an alias with no target in this compile --
+ * resolves to an unmatched outcome with no candidates; the review item
+ * explaining it is produced by `resolveTags`, which is where review output
+ * belongs.
  */
 export function resolveTag(index: IdentityIndex, evidenceTag: string): IdentityOutcome {
   return resolveOne(index, evidenceTag).outcome;
@@ -368,18 +394,19 @@ export function resolveTags(
 ): ResolveTagsResult {
   const outcomes: IdentityOutcome[] = [];
   const reviewItems: ReviewItem[] = [];
-  const fuzzySeen = new Set<string>();
-  const ambiguousSeen = new Set<string>();
+  // NUL separator: no review kind and no tag contains one, so two distinct
+  // (kind, tag) pairs can never collide into one seen key.
+  const seen = new Set<string>();
 
   for (const tag of tags) {
     const resolution = resolveOne(index, tag);
     outcomes.push(resolution.outcome);
     for (const item of resolution.reviewItems) {
-      const seen = item.kind === 'fuzzy-identity' ? fuzzySeen : ambiguousSeen;
-      if (seen.has(tag)) {
+      const key = `${item.kind}\u0000${tag}`;
+      if (seen.has(key)) {
         continue;
       }
-      seen.add(tag);
+      seen.add(key);
       reviewItems.push(item);
     }
   }

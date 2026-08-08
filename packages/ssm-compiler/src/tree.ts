@@ -14,6 +14,7 @@
  */
 import type { ResolvedAssetNode, ResolvedSnapshot } from '@matchline/domain';
 
+import { NO_VALUE_GROUP } from './fold.js';
 import { compareText } from './order.js';
 import type {
   CompileInput,
@@ -162,10 +163,18 @@ export function hierarchyTree(
     let level = top;
     let bucket: LevelBucket | undefined;
     for (const step of node.levelPath) {
-      const existing = level.get(step.value);
+      // A refused value is filed under a named bucket rather than an empty one.
+      // The empty string is a real level path value (§11.3's `review` and
+      // `provisional-root` policies produce it), but as a *node title* it
+      // renders as a blank heading that sorts above every real building -- a
+      // rendering bug to look at, and indistinguishable from a level the tree
+      // failed to label. Only the projection's label changes; `levelPath` still
+      // reads empty, so the fold and the boundary comparisons are untouched.
+      const value = step.value === '' ? NO_VALUE_GROUP : step.value;
+      const existing = level.get(value);
       if (existing === undefined) {
-        bucket = newBucket(step.levelId, step.value);
-        level.set(step.value, bucket);
+        bucket = newBucket(step.levelId, value);
+        level.set(value, bucket);
       } else {
         bucket = existing;
       }

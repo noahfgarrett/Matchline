@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import { trainLearnedRules } from '../dist/index.js';
 import {
+  BLANK_SYSTEM_ROWS,
   DRAGON_TRAINING_ROWS,
   DRAGON_TRAINING_ROWS_REORDERED,
   GRADE_AT_THRESHOLD_ROWS,
@@ -202,4 +203,34 @@ test('a parent in another system is not a link', () => {
     },
   ]);
   assert.deepEqual(ruleSet.roleGates, []);
+});
+
+test('a link with no system on either end is not a link', () => {
+  const ruleSet = trainLearnedRules(BLANK_SYSTEM_ROWS);
+  // Application skips a partitionless asset outright (propose.ts). Counting
+  // one here would grade a rule the shipping algorithm never runs.
+  assert.deepEqual(ruleSet.roleGates, []);
+  assert.deepEqual(ruleSet.affinities, []);
+  assert.deepEqual(ruleSet.grades, []);
+});
+
+test('blank-system rows are noise: they move no affinity and no grade', () => {
+  const clean = trainLearnedRules(DRAGON_TRAINING_ROWS);
+  const noisy = trainLearnedRules([...DRAGON_TRAINING_ROWS, ...BLANK_SYSTEM_ROWS]);
+  assert.deepEqual(noisy.roleGates, clean.roleGates);
+  assert.deepEqual(noisy.affinities, clean.affinities);
+  assert.deepEqual(noisy.grades, clean.grades);
+});
+
+test('classification is ordered by code unit, never by a locale', () => {
+  const ruleSet = trainLearnedRules([
+    { equipmentTag: 'MAH001-10-01', description: 'PUMP', discipline: 'z', systemKey: 'SYS-10' },
+    { equipmentTag: 'MAH002-10-01', description: 'PUMP', discipline: 'é', systemKey: 'SYS-10' },
+  ]);
+  // A locale collator files "é" next to "e"; UTF-16 puts it after "z". Only the
+  // second answer is the same on every machine.
+  assert.deepEqual(
+    ruleSet.classification.map((entry) => entry.discipline),
+    ['z', 'é'],
+  );
 });

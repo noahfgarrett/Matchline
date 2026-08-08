@@ -174,3 +174,42 @@ test('collapsing a duplicate away leaves the survivor confirmed', () => {
     nestedCache.close();
   }
 });
+
+/**
+ * The `#` that separates a duplicate's object id is also a character a site can
+ * write in a tag:
+ *
+ *   2 Equipment  "X"     duplicated with 3, so its id ends `#2`
+ *   3 Equipment  "X"
+ *   4 Equipment  "X#2"   unique, and spelled exactly like object 2's id
+ *   5 Equipment  "X%23"  unique, and spelled exactly like object 4's escape
+ */
+const HASH_TAGS = {
+  objects: [
+    { id: 1, parentId: null, pathIndex: 0, depth: 0, displayName: 'Model', className: 'File' },
+    { id: 2, parentId: 1, pathIndex: 0, depth: 1, displayName: 'A', className: 'Equipment' },
+    { id: 3, parentId: 1, pathIndex: 1, depth: 1, displayName: 'B', className: 'Equipment' },
+    { id: 4, parentId: 1, pathIndex: 2, depth: 1, displayName: 'C', className: 'Equipment' },
+    { id: 5, parentId: 1, pathIndex: 3, depth: 1, displayName: 'D', className: 'Equipment' },
+  ],
+  properties: [
+    { objectId: 2, category: 'Dragon Data', name: 'Tag', valueText: 'X' },
+    { objectId: 3, category: 'Dragon Data', name: 'Tag', valueText: 'X' },
+    { objectId: 4, category: 'Dragon Data', name: 'Tag', valueText: 'X#2' },
+    { objectId: 5, category: 'Dragon Data', name: 'Tag', valueText: 'X%23' },
+  ],
+};
+
+test('a literal # in a tag can never collide with a duplicate id suffix', () => {
+  const path = join(directory, 'hash.sqlite');
+  writeSyntheticCache(path, HASH_TAGS);
+  const hashes = openExtractionCache(path);
+  try {
+    const { assets } = buildAssetCatalog(hashes, TAG_ONLY_MAPPINGS, FILTERS);
+    const ids = assets.map((asset) => asset.assetId);
+    assert.deepEqual(ids, ['tag:X#2', 'tag:X#3', 'tag:X%232', 'tag:X%2523']);
+    assert.equal(new Set(ids).size, ids.length);
+  } finally {
+    hashes.close();
+  }
+});

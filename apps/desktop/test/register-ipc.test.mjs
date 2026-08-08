@@ -158,12 +158,41 @@ test('a handler returning the wrong shape is caught as invalid-response', async 
   assert.equal(result.error.code, 'invalid-response');
 });
 
+/**
+ * The sender check compares whole origins, never prefixes.
+ *
+ * The last four rows are the ones a prefix test walks straight through:
+ * a hostname that merely *starts* with ours, and a port that starts with ours.
+ * `app://` has no standard origin (`URL.origin` is the string "null" for it),
+ * so scheme-and-host is what has to be compared.
+ */
 test('the sender check accepts only the configured origins', () => {
   const isTrusted = createSenderCheck([TRUSTED_ORIGIN, 'http://localhost:5173']);
+  const accepts = (url) => isTrusted({ senderFrame: { url } });
 
-  assert.equal(isTrusted({ senderFrame: { url: 'app://renderer/index.html' } }), true);
-  assert.equal(isTrusted({ senderFrame: { url: 'http://localhost:5173/' } }), true);
-  assert.equal(isTrusted({ senderFrame: { url: 'file:///etc/passwd' } }), false);
-  assert.equal(isTrusted({ senderFrame: { url: 'app://other/index.html' } }), false);
+  assert.equal(accepts('app://renderer/index.html'), true);
+  assert.equal(accepts('app://renderer/assets/index-a1b2.js'), true);
+  assert.equal(accepts('http://localhost:5173/'), true);
+
+  assert.equal(accepts('file:///etc/passwd'), false);
+  assert.equal(accepts('app://other/index.html'), false);
+  assert.equal(accepts('app://renderer-evil/x'), false, 'a longer hostname is not our hostname');
+  assert.equal(accepts('app://renderer.evil.example/x'), false);
+  assert.equal(accepts('http://localhost:51730/'), false, 'a longer port is not our port');
+  assert.equal(accepts('https://localhost:5173/'), false, 'a different scheme is not our scheme');
+  assert.equal(accepts('not a url at all'), false);
+  assert.equal(accepts(''), false);
   assert.equal(isTrusted({ senderFrame: null }), false);
+});
+
+test('an origin-lookalike sender is rejected through the real transport', async () => {
+  const { ipcMain, calls } = setup();
+
+  for (const url of ['app://renderer-evil/x', 'http://localhost:51730/']) {
+    const result = await ipcMain.invoke('dev:ping', { senderFrame: { url } }, { message: 'x' });
+    assert.equal(result.ok, false, url);
+    assert.equal(result.error.code, 'unauthorized-sender', url);
+  }
+
+  assert.deepEqual(calls, [], 'no handler ran for either');
 });

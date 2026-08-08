@@ -52,8 +52,10 @@ export type {
 
 export { reviewItemSummary } from './review.js';
 export type {
+  AbsorbedTaggedComponentReviewItem,
   AmbiguousParentReviewItem,
   AmbiguousSuffixReviewItem,
+  DeadClaimRuleReviewItem,
   DuplicateModelTagReviewItem,
   FuzzyIdentityCandidate,
   FuzzyIdentityReviewItem,
@@ -63,6 +65,7 @@ export type {
   StructuralCycleReviewItem,
   SystemCatalogConflictReviewItem,
   SystemConflictReviewItem,
+  UnresolvableAliasReviewItem,
 } from './review.js';
 
 export { LADDER_SOURCE_ORDER } from './hierarchy-config.js';

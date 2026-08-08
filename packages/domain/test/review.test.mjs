@@ -5,7 +5,7 @@ import { reviewItemSummary } from '../dist/index.js';
 import { DRAGON_REVIEW_ITEMS } from './dist/review.fixture.js';
 
 test('every review item kind summarizes to a non-empty line', () => {
-  assert.equal(DRAGON_REVIEW_ITEMS.length, 9);
+  assert.equal(DRAGON_REVIEW_ITEMS.length, 12);
   const kinds = new Set();
   for (const item of DRAGON_REVIEW_ITEMS) {
     kinds.add(item.kind);
@@ -91,6 +91,33 @@ test('a proposal-grade learned rule arrives as review, carrying its confidence',
   assert.equal(
     reviewItemSummary(proposal),
     'asset asset-0004: proposed parent asset-0003 (VFD parents TIT (7/8 sightings))',
+  );
+});
+
+test('a dead claim rule names the rule that produced nothing, and why', () => {
+  const dead = DRAGON_REVIEW_ITEMS[9];
+  assert.equal(dead.kind, 'dead-claim-rule');
+  assert.equal(
+    reviewItemSummary(dead),
+    'profile-lookup rule TIT603-10-01 -> MAH001-10-99 produced nothing (unresolvable-parent-tag)',
+  );
+});
+
+test('an unresolvable alias names the spelling and the target no asset carries', () => {
+  const alias = DRAGON_REVIEW_ITEMS[10];
+  assert.equal(alias.kind, 'unresolvable-alias');
+  assert.equal(
+    reviewItemSummary(alias),
+    'alias MAH-1 -> MAH001-10-99: no asset carries that tag',
+  );
+});
+
+test('an absorbed tagged component names the tag that stopped naming an asset', () => {
+  const absorbed = DRAGON_REVIEW_ITEMS[11];
+  assert.equal(absorbed.kind, 'absorbed-tagged-component');
+  assert.equal(
+    reviewItemSummary(absorbed),
+    'tag VFD001-10-01 was absorbed into asset-0001 (object 57)',
   );
 });
 

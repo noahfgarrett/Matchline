@@ -1,13 +1,21 @@
 import { BrowserWindow, dialog } from 'electron';
 
+import type { PathGrants } from '../security/path-grants.js';
+
 import type { IpcRequest, IpcResponse } from '../../shared/ipc.js';
 
 /**
  * File dialogs live in main (PRODUCT.md §16) — the renderer never sees a path it did not
  * receive through this channel.
+ *
+ * These three handlers are also the only place a path becomes usable: what the
+ * user picked is recorded in {@link PathGrants} on the way out, and every
+ * path-taking channel checks against that record (security/path-grants.ts). A
+ * path the renderer invented is refused rather than opened.
  */
 export function createOpenFileHandler(
   getWindow: () => BrowserWindow | null,
+  grants: PathGrants,
 ): (request: IpcRequest<'dialog:open-file'>) => Promise<IpcResponse<'dialog:open-file'>> {
   return async (request): Promise<IpcResponse<'dialog:open-file'>> => {
     const options: Electron.OpenDialogOptions = {
@@ -30,6 +38,7 @@ export function createOpenFileHandler(
       return { cancelled: true };
     }
 
+    grants.grant(selected);
     return { cancelled: false, path: selected };
   };
 }
@@ -37,6 +46,7 @@ export function createOpenFileHandler(
 /** Screen 1 takes several files at once, so the picker has to as well. */
 export function createOpenFilesHandler(
   getWindow: () => BrowserWindow | null,
+  grants: PathGrants,
 ): (
   request: IpcRequest<'dialog:open-files'>,
 ) => Promise<IpcResponse<'dialog:open-files'>> {
@@ -59,6 +69,7 @@ export function createOpenFilesHandler(
       return { cancelled: true };
     }
 
+    grants.grant(...result.filePaths);
     return { cancelled: false, paths: [...result.filePaths] };
   };
 }
@@ -66,13 +77,16 @@ export function createOpenFilesHandler(
 /** Where a new project file goes. The only channel that names a path to write. */
 export function createSaveFileHandler(
   getWindow: () => BrowserWindow | null,
+  grants: PathGrants,
 ): (request: IpcRequest<'dialog:save-file'>) => Promise<IpcResponse<'dialog:save-file'>> {
   return async (request): Promise<IpcResponse<'dialog:save-file'>> => {
     const options: Electron.SaveDialogOptions = {
       defaultPath: request.defaultName,
-      // The project file is created by ProjectStore, which refuses to overwrite;
-      // the dialog's own overwrite prompt would promise something we do not do.
-      properties: ['createDirectory', 'showOverwriteConfirmation'],
+      // No `showOverwriteConfirmation`: creating a project never overwrites, so
+      // an "are you sure you want to replace it?" prompt would be offering
+      // something that does not happen. `project:create` checks for an existing
+      // file itself and says so in plain language instead.
+      properties: ['createDirectory'],
       filters: request.filters.map((filter) => ({
         name: filter.name,
         extensions: [...filter.extensions],
@@ -89,6 +103,7 @@ export function createSaveFileHandler(
       return { cancelled: true };
     }
 
+    grants.grant(result.filePath);
     return { cancelled: false, path: result.filePath };
   };
 }

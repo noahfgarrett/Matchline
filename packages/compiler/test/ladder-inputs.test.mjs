@@ -89,6 +89,48 @@ test('a profile-lookup pair reaches the snapshot at tier 3, outranking the flow-
     idOf('MAH001-20-01'),
     'the dead row changes nothing; connectivity still places the D2 panel',
   );
+
+  // Loud means a person sees it. A count on `stats` and a list on `claims` are
+  // both things nobody opens; the review queue is the one place a site is asked
+  // to act, so the dead rule has to arrive there too.
+  assert.deepEqual(
+    project.reviewItems.filter((item) => item.kind === 'dead-claim-rule'),
+    [
+      {
+        kind: 'dead-claim-rule',
+        ladderSource: 'profile-lookup',
+        reason: 'unresolvable-parent-tag',
+        childRef: 'PLC001-20-01',
+        parentRef: UNKNOWN_TAG,
+      },
+    ],
+  );
+});
+
+test('a make-root directive whose asset is unknown is a dead rule with no parent named', () => {
+  const project = compileProject(
+    fullInput(handle.cache, {
+      manualRelationshipOverrides: [
+        { childAssetId: idOf(UNKNOWN_TAG), parentAssetId: null, note: 'commissioned standalone' },
+      ],
+    }),
+  );
+
+  // `SkippedClaimInput.parentRef` is `null` for a make-root -- the input names
+  // no parent by construction -- and the review item has to say that without
+  // inventing one.
+  assert.deepEqual(
+    project.reviewItems.filter((item) => item.kind === 'dead-claim-rule'),
+    [
+      {
+        kind: 'dead-claim-rule',
+        ladderSource: 'manual',
+        reason: 'unknown-child-asset',
+        childRef: idOf(UNKNOWN_TAG),
+        parentRef: '',
+      },
+    ],
+  );
 });
 
 test('a prior-SSM pair loses to every rung above it, and places the asset when there is none', () => {

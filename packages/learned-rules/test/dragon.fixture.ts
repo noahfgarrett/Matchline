@@ -78,6 +78,21 @@ function buildDragonRows(): TrainingRow[] {
 /** The finished Dragon SSM the rules train from: 40 rows, 30 parent links. */
 export const DRAGON_TRAINING_ROWS: ReadonlyArray<TrainingRow> = buildDragonRows();
 
+/**
+ * Four more units the export never partitioned: real equipment with real
+ * parent links and no system key at all.
+ *
+ * Application refuses to place an asset with no partition, so training must
+ * refuse to learn from one. If these rows counted, they would land in one
+ * enormous blank partition together and move every affinity and grade.
+ */
+export const BLANK_SYSTEM_ROWS: ReadonlyArray<TrainingRow> = [11, 12, 13, 14].flatMap((unit) => [
+  { ...dragonRow('MAH', unit, null), systemKey: '' },
+  { ...dragonRow('VFD', unit, 'MAH'), systemKey: '' },
+  { ...dragonRow('PLC', unit, 'MAH'), systemKey: '' },
+  { ...dragonRow('TIT', unit, 'VFD'), systemKey: '' },
+]);
+
 /** The same rows in a different order -- training must not notice. */
 export const DRAGON_TRAINING_ROWS_REORDERED: ReadonlyArray<TrainingRow> = [
   ...DRAGON_TRAINING_ROWS,

@@ -24,6 +24,11 @@ Newest last. "Locked" means: do not relitigate without Noah.
    TanStack Table/Virtual, dnd-kit, Zod — all pinned exact versions. Trims: prefer Node's
    built-in `node:sqlite` over a driver dependency; no Zustand initially (add only if React
    state demonstrably isn't enough).
+5b. **Letter-suffixed tags are distinct identities.** Inherited from SSManagement
+   v4.2.1/4.2.2 and carried forward as policy: `-A`/`-B`/`-C` endings name separate
+   equipment, never variants to merge. Identity tiers, anatomy keys, and learned-rule
+   containment guards are all built to refuse sibling merges; a site that wants an
+   ending merged teaches it explicitly (alias / normalize rule).
 6. **Fixture-site codename is "Dragon".** All invented fixture/model data uses the Dragon
    site. (The donor's "Falcon" mock site was likewise fictional — confirmed not a client
    name; donor history was audited and is clean.)

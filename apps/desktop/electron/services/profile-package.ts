@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -61,7 +61,17 @@ export function writePackage(
 
   const text = `${JSON.stringify(parsed.data, null, 2)}\n`;
   const bytes = Buffer.from(text, 'utf8');
-  writeFileSync(absolutePath, bytes);
+  // Temp file then rename (app-store.ts uses the same pattern): a package is
+  // usually written over the previous export of itself, and a half-written one
+  // wearing that name would be read as a whole one.
+  const temporaryPath = `${absolutePath}.tmp`;
+  try {
+    writeFileSync(temporaryPath, bytes);
+    renameSync(temporaryPath, absolutePath);
+  } catch (error: unknown) {
+    rmSync(temporaryPath, { force: true });
+    throw error;
+  }
   return {
     written: true,
     path: absolutePath,

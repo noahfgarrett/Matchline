@@ -145,6 +145,83 @@ test('the unassigned bucket is a visible level value', () => {
   ]);
 });
 
+test("a refused level value buckets under '(no value)', not under an empty title", () => {
+  // `review` and `provisional-root` refuse to bucket, so `levelPathOf` leaves
+  // the value empty. The tree still has to file the asset somewhere, and an
+  // empty-titled node that sorts to the top of the list reads as a rendering
+  // bug rather than as "the site never said". It is also not `(unassigned)`:
+  // that bucket is a policy the site chose, this is the absence of one.
+  const hierarchy = {
+    levels: [
+      {
+        levelId: 'building',
+        displayName: 'Building',
+        attributeKey: BUILDING,
+        boundary: false,
+        missingValuePolicy: 'review',
+        sort: 'label',
+      },
+    ],
+  };
+  const subjects = [
+    subject('asset-a', { [BUILDING]: 'D1' }),
+    subject('asset-b', {}),
+    subject('asset-c', {}),
+  ];
+  const snapshot = compileSnapshot({ subjects, claims: claims({}), hierarchy });
+  const tree = hierarchyTree(snapshot, hierarchy, subjects);
+
+  assert.deepEqual(treePaths(tree), ['(no value) -> asset-b,asset-c', 'D1 -> asset-a']);
+  // One group, not one per asset, and no node titled with the empty string.
+  assert.equal(tree.levels.length, 2);
+  assert.ok(!tree.levels.some((node) => node.value === ''));
+
+  // The fold's own data is untouched: the level path still reads empty, so
+  // nothing that compares level values changed meaning.
+  assert.deepEqual(snapshot.nodes.get('asset-b').levelPath, [
+    { levelId: 'building', value: '' },
+  ]);
+});
+
+test("'(no value)' and '(unassigned)' are different buckets under different policies", () => {
+  const levelOf = (missingValuePolicy) => ({
+    levels: [
+      {
+        levelId: 'building',
+        displayName: 'Building',
+        attributeKey: BUILDING,
+        boundary: false,
+        missingValuePolicy,
+        sort: 'label',
+      },
+    ],
+  });
+  const subjects = [subject('asset-a', {})];
+
+  const refused = levelOf('provisional-root');
+  const grouped = levelOf('unassigned-group');
+  assert.deepEqual(
+    treePaths(
+      hierarchyTree(
+        compileSnapshot({ subjects, claims: claims({}), hierarchy: refused }),
+        refused,
+        subjects,
+      ),
+    ),
+    ['(no value) -> asset-a'],
+  );
+  assert.deepEqual(
+    treePaths(
+      hierarchyTree(
+        compileSnapshot({ subjects, claims: claims({}), hierarchy: grouped }),
+        grouped,
+        subjects,
+      ),
+    ),
+    ['(unassigned) -> asset-a'],
+  );
+});
+
 test('a hierarchy with no levels puts every root asset at the top', () => {
   const subjects = [subject('asset-b', {}), subject('asset-a', {})];
   const snapshot = compileSnapshot({ subjects, claims: claims({}), hierarchy: { levels: [] } });

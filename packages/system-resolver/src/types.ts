@@ -136,6 +136,11 @@ export type SkipReason =
   | 'not-configured'
   /** A `mel-lookup` by systemKey with no key resolved by an earlier rung. */
   | 'no-join-key'
+  /**
+   * A `mel-lookup` by systemKey whose key several distinct MEL spellings reach
+   * once `normalization` has run. The rung refuses rather than picks one.
+   */
+  | 'ambiguous-join'
   /** A composite whose placeholders could not all be filled. */
   | 'placeholder-unfilled'
   /** The value was present but blank once trimmed. */

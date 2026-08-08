@@ -58,8 +58,13 @@ export interface ModelAssetProvenance {
 export interface ModelAsset {
   /**
    * Deterministic and content-derived, so the same cache rebuilds the same
-   * ids: `tag:<canonicalTag>` when the tag is unique, `tag:<canonicalTag>#<objectId>`
-   * when it is duplicated, and `object:<objectId>` for an untagged asset.
+   * ids: `tag:<tag>` when the tag is unique, `tag:<tag>#<objectId>` when it is
+   * duplicated, and `object:<objectId>` for an untagged asset.
+   *
+   * `<tag>` is the canonical tag with `%` escaped to `%25` and `#` to `%23`, in
+   * that order. `#` is the duplicate separator, so a site that writes one in a
+   * tag would otherwise be able to spell another asset's id exactly. The escape
+   * is injective, so two distinct tags always produce two distinct ids.
    */
   readonly assetId: string;
   /** The tag as the model spells it, trimmed. `''` when the asset is untagged. */
@@ -74,6 +79,15 @@ export interface ModelAsset {
    * ascending cache-ordinal order. Never empty.
    */
   readonly objectIds: ReadonlyArray<number>;
+  /**
+   * The tags carried by the components collapsed into this asset, in
+   * `objectIds` order. Empty when nothing tagged was absorbed.
+   *
+   * Those tags no longer name assets, so evidence spelled with one of them will
+   * attach here. Recording them keeps that traceable; each one also raises an
+   * `absorbed-tagged-component` review item.
+   */
+  readonly absorbedTags: ReadonlyArray<string>;
   /** Source model of the representative object; `null` when the cache has none. */
   readonly sourceModelId: number | null;
   readonly provenance: ModelAssetProvenance;

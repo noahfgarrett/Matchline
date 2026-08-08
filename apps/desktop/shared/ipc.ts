@@ -20,10 +20,10 @@ import {
   learnedRuleKindSchema,
   learnedSummarySchema,
   modelScanSchema,
-  openNoticeSchema,
   overrideRowSchema,
   profileSectionSchema,
   projectConfigSchema,
+  projectOpenResultSchema,
   projectSummarySchema,
   propertyCatalogRowSchema,
   propertySortSchema,
@@ -58,6 +58,8 @@ export const IPC_ERROR_CODES = [
   'invalid-response',
   'not-implemented',
   'handler-failed',
+  /** A file path the renderer named that no dialog ever handed it. */
+  'path-not-granted',
 ] as const;
 
 export type IpcErrorCode = (typeof IPC_ERROR_CODES)[number];
@@ -301,15 +303,25 @@ export const IPC_CHANNELS = {
   /**
    * Opens an existing project and restores its saved profile and configuration.
    *
-   * A file written by an older build is migrated in place rather than refused —
-   * it is backed up first, and `notice` names the backup so the UI can say so.
+   * A file written by an older build is **not** upgraded on sight: the response
+   * comes back as `migration-needed` instead of a project, the UI asks, and the
+   * second call carries `acceptMigration: true`. Upgrading rewrites the only
+   * copy of a site's decisions, so it is a decision the user makes.
    */
   'project:open': {
-    request: z.object({ path: z.string().min(1) }),
-    response: z.object({ project: projectSummarySchema, notice: openNoticeSchema }),
+    request: z.object({
+      path: z.string().min(1),
+      /** Answers a `migration-needed` result. Absent means "ask me first". */
+      acceptMigration: z.boolean().optional(),
+    }),
+    response: projectOpenResultSchema,
     example: {
       request: { path: '/Users/dragon/Dragon.matchline' },
-      response: { project: EXAMPLE_PROJECT, notice: EXAMPLE_OPEN_NOTICE },
+      response: {
+        outcome: 'opened',
+        project: EXAMPLE_PROJECT,
+        notice: EXAMPLE_OPEN_NOTICE,
+      },
     },
   },
 
@@ -368,6 +380,36 @@ export const IPC_CHANNELS = {
               note: 'Extraction cache with 42 objects from 3 source models.',
               sheets: [],
             },
+          },
+        ],
+      },
+    },
+  },
+
+  /**
+   * The same registration as `source:add`, for paths that came off a drag.
+   *
+   * A separate channel because the two have different provenance and therefore
+   * different rules. `source:add` takes paths a dialog handed the renderer and
+   * refuses anything else (electron/security/path-grants.ts). A drop never goes
+   * through a dialog: the renderer reads the path out of the drag payload
+   * itself, so the string arrives with nothing proving a person produced it and
+   * there is no grant to check it against. This channel is what main does
+   * instead — it re-derives everything it needs from the filesystem and admits
+   * only what screens as a source file. `screenDroppedPaths` in
+   * electron/services/sources.ts carries the full reasoning.
+   */
+  'source:add-dropped': {
+    request: z.object({ paths: z.array(z.string().min(1)).min(1) }),
+    response: z.object({ results: z.array(addSourceResultSchema) }),
+    example: {
+      request: { paths: ['/Users/dragon/Dragon-MEL.xlsx'] },
+      response: {
+        results: [
+          {
+            outcome: 'rejected',
+            fileName: 'Dragon-MEL.xlsx',
+            reason: 'Matchline could not find Dragon-MEL.xlsx.',
           },
         ],
       },
@@ -983,7 +1025,20 @@ export const IPC_CHANNELS = {
     },
   },
 
-  /** Records a decision. Earlier decisions for the key are kept, never replaced. */
+  /**
+   * Records a decision. Earlier decisions for the key are kept, never replaced.
+   *
+   * The key is whatever `reviewKey` in `@matchline/ssm-compiler` produced for the
+   * item: the kind, then that kind's identifying fields, joined by U+241F SYMBOL
+   * FOR UNIT SEPARATOR, with list members inside a field joined by `,`. A system
+   * conflict is `kind ␟ assetId ␟ the proposed values, type-tagged and sorted` —
+   * the values themselves rather than how many there were, so two different
+   * conflicts over the same asset cannot inherit each other's decision.
+   *
+   * The renderer never assembles one of these. It sends back the key the row
+   * arrived with, and `ipc-table.test.mjs` holds this example to what the
+   * compiler actually emits.
+   */
   'review:decide': {
     request: z.object({
       reviewKey: z.string().min(1),
@@ -992,7 +1047,11 @@ export const IPC_CHANNELS = {
     }),
     response: z.object({ recorded: z.boolean() }),
     example: {
-      request: { reviewKey: 'system-conflict|tag:MAH001-10-01|2', decision: 'accepted', note: '' },
+      request: {
+        reviewKey: 'system-conflict␟tag:MAH001-10-01␟string:001,string:002',
+        decision: 'accepted',
+        note: '',
+      },
       response: { recorded: true },
     },
   },

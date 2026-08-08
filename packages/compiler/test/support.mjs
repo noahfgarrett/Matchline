@@ -431,6 +431,61 @@ export function nestedSkid(context) {
 }
 
 /**
+ * An untagged skid that absorbs a tagged pump.
+ *
+ * ```text
+ * Dragon-Mechanical.nwc
+ * +- D1
+ *    +- (Assembly, no Tag property)   <- the representative object
+ *       +- PMP002-10-01 (Equipment)   <- absorbed, and it carries a tag
+ * ```
+ *
+ * The catalog reads `canonicalTag` off the representative only, so this asset's
+ * tag is `''` -- an absorbed component is a part of the asset, not the asset,
+ * and its tag never renames the whole. The property-bag seam reads across every
+ * owned object, so without a special case the same asset would report a tag the
+ * catalog says it does not have. That disagreement is what
+ * `properties.test.mjs` pins.
+ *
+ * Both objects are class `Assembly`/`Equipment` so that
+ * {@link UNTAGGED_SKID_FILTERS}'s class restriction makes exactly these two the
+ * collapse candidates: the D1 layer above them is a different class and never
+ * becomes a candidate ancestor, so nothing else in Dragon collapses.
+ */
+export const UNTAGGED_SKID_TAG = 'PMP002-10-01';
+
+export function untaggedSkid(context) {
+  const d1 = context.layerId('D1', SOURCE_MODEL_MECHANICAL);
+  const skid = context.addObject({
+    sourceModelId: SOURCE_MODEL_MECHANICAL,
+    parentId: d1,
+    depth: 2,
+    displayName: 'Unlabelled Skid',
+    className: 'Assembly',
+  });
+  // A property the skid does state, so the bag is not empty and the assertion
+  // is about the tag specifically rather than about reading nothing at all.
+  context.addProperty(skid, 'Dragon Data', 'Building', 'D1');
+  context.addEquipment({
+    sourceModelId: SOURCE_MODEL_MECHANICAL,
+    parentId: skid,
+    depth: 3,
+    tag: UNTAGGED_SKID_TAG,
+    className: 'Equipment',
+    upn: '001',
+    building: 'D1',
+    service: 'Chilled Water',
+  });
+}
+
+/** Keeps untagged objects, and restricts collapse to the skid and its pump. */
+export const UNTAGGED_SKID_FILTERS = {
+  includedClasses: ['Assembly', 'Equipment'],
+  requireTagProperty: false,
+  collapseComponents: true,
+};
+
+/**
  * PRODUCT.md §2.5's own example, in Dragon spelling: an electrical panel in
  * System 603 feeding a remote I/O commissioned under System 650.
  *

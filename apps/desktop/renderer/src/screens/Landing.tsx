@@ -19,6 +19,13 @@ const PROJECT_FILTERS = [{ name: 'Matchline project', extensions: ['matchline'] 
 
 type Busy = 'idle' | 'creating' | 'opening';
 
+/** A file written by an older build, waiting for the user to say yes. */
+interface PendingUpgrade {
+  readonly path: string;
+  readonly fromVersion: number;
+  readonly toVersion: number;
+}
+
 /**
  * What opening the project did to it, in a sentence — or `null` when it did
  * nothing worth saying.
@@ -63,6 +70,7 @@ export function Landing({
   const [recents, setRecents] = useState<readonly WireRecentProject[]>([]);
   const [busy, setBusy] = useState<Busy>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [pendingUpgrade, setPendingUpgrade] = useState<PendingUpgrade | null>(null);
 
   useEffect((): (() => void) => {
     let cancelled = false;
@@ -112,8 +120,16 @@ export function Landing({
     }
   }, [name, onOpened]);
 
+  /**
+   * Opens a project, or asks first.
+   *
+   * `acceptMigration` is only ever `true` on the second call, made by the
+   * confirm card below. Until then an older file is left exactly as it was
+   * found — nothing on this screen rewrites a file the user has not agreed to
+   * have rewritten.
+   */
   const openProject = useCallback(
-    async (knownPath?: string): Promise<void> => {
+    async (knownPath?: string, acceptMigration = false): Promise<void> => {
       setBusy('opening');
       setError(null);
       try {
@@ -127,7 +143,29 @@ export function Landing({
           }
           target = chosen.path;
         }
-        const opened = await call(window.matchline.project.open({ path: target }));
+
+        const opened = await call(
+          window.matchline.project.open(
+            acceptMigration ? { path: target, acceptMigration: true } : { path: target },
+          ),
+        );
+
+        if (opened.outcome === 'migration-needed') {
+          setPendingUpgrade({ path: target, ...opened.migrationNeeded });
+          return;
+        }
+        if (opened.outcome === 'backup-blocked') {
+          setPendingUpgrade(null);
+          setError(
+            'Matchline copies a project file before upgrading it, and a backup from an ' +
+              `earlier upgrade attempt is already sitting at ${opened.backupPath}. That file ` +
+              'is the record of what went wrong last time, so Matchline will not write over ' +
+              'it. Move it somewhere else, then open the project again.',
+          );
+          return;
+        }
+
+        setPendingUpgrade(null);
         onOpened(opened.project, describeNotice(opened.notice));
       } catch (caught: unknown) {
         setError(messageOf(caught));
@@ -225,6 +263,48 @@ export function Landing({
           )}
         </section>
       </div>
+
+      {pendingUpgrade === null ? null : (
+        <section
+          className="callout callout--warning landing__confirm"
+          role="alertdialog"
+          aria-label="Upgrade this project file?"
+          data-testid="migration-confirm"
+        >
+          <p>
+            {pendingUpgrade.path} was written by an older version of Matchline (file format{' '}
+            {String(pendingUpgrade.fromVersion)}). Opening it here upgrades it to file format{' '}
+            {String(pendingUpgrade.toVersion)}, which rewrites the file — and this file is the
+            only copy of everything the site has been taught. Matchline copies the original
+            alongside it first and tells you exactly where afterwards. Until you choose Upgrade,
+            the file is left untouched.
+          </p>
+          <div className="landing__confirm-actions">
+            <button
+              className="button button--primary"
+              type="button"
+              data-testid="migration-accept"
+              disabled={busy !== 'idle'}
+              onClick={(): void => {
+                void openProject(pendingUpgrade.path, true);
+              }}
+            >
+              {busy === 'opening' ? 'Upgrading…' : 'Upgrade and open'}
+            </button>
+            <button
+              className="button"
+              type="button"
+              data-testid="migration-cancel"
+              disabled={busy !== 'idle'}
+              onClick={(): void => {
+                setPendingUpgrade(null);
+              }}
+            >
+              Leave it as it is
+            </button>
+          </div>
+        </section>
+      )}
 
       {error === null ? null : (
         <p className="callout callout--error" role="alert" data-testid="landing-error">

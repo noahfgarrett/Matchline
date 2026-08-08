@@ -8,6 +8,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { ladderRung } from '@matchline/relationship-claims';
+
 import { compileSnapshot } from '../dist/index.js';
 import {
   BUILDING,
@@ -148,6 +150,39 @@ test('one parent named by two rungs is one demotion, matching the one dependency
   assert.equal(snapshot.nodes.get('asset-child').dependencies.length, 1);
   // Both claims are retained; neither won.
   assert.equal(snapshot.nodes.get('asset-child').losingClaims.length, 2);
+});
+
+test('a parent demoted twice keeps the strongest rung as the dependency provenance', () => {
+  // Two rungs name the same out-of-system parent, so the walk demotes twice.
+  // The reviewer asking "why is this not under asset-far?" is asking about the
+  // strongest rung that named it -- the weaker rung's provenance overwriting it
+  // would answer with the wrong row and the wrong rung.
+  const snapshot = compileSnapshot({
+    subjects: [
+      subject('asset-child', IN_SYSTEM),
+      subject('asset-far', { [BUILDING]: 'D1', [SYSTEM]: '002' }),
+    ],
+    claims: claims({
+      structural: [
+        claim('profile-lookup', 'asset-child', 'asset-far', 11),
+        claim('prior-ssm', 'asset-child', 'asset-far', 77),
+      ],
+    }),
+    hierarchy: DRAGON_HIERARCHY,
+  });
+
+  const child = snapshot.nodes.get('asset-child');
+  assert.equal(child.dependencies.length, 1);
+  const [demoted] = child.dependencies;
+  assert.equal(demoted.parentAssetId, 'asset-far');
+  assert.equal(demoted.provenance.rule, 'ssm.boundaryDemotion');
+  assert.equal(demoted.provenance.sourceRef.row, 11, 'the profile-lookup row, not the prior-ssm one');
+  assert.equal(demoted.provenance.fallbackRung, ladderRung('profile-lookup'));
+  // And the demotion record agrees with the dependency it produced.
+  assert.deepEqual(child.parent.demotedFrom, {
+    parentAssetId: 'asset-far',
+    boundaryLevelId: 'system',
+  });
 });
 
 test('two children blocked by the same unstated parent raise one review item', () => {

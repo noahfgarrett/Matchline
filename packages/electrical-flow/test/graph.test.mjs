@@ -3,8 +3,14 @@ import test from 'node:test';
 
 import { buildIdentityIndex } from '@matchline/identity';
 
-import { buildElectricalFlowFromIndex } from '../dist/index.js';
+import { buildElectricalFlow, buildElectricalFlowFromIndex } from '../dist/index.js';
+import { snapshot } from './support.mjs';
 import {
+  COLLIDING_ASSET_ID,
+  COLLIDING_ENRICHMENT,
+  COLLIDING_OBSERVATIONS,
+  COLLIDING_OBSERVATIONS_REVERSED,
+  COLLIDING_OUTCOMES,
   DRAGON_ALIASES,
   DRAGON_ASSETS,
   DRAGON_ENRICHMENT,
@@ -196,4 +202,31 @@ test('nodes iterate in code-unit ascending id order', () => {
       'tag:PIT001-10-09',
     ],
   );
+});
+
+test('a spelling that collides with an asset id never costs the node its identity', () => {
+  const flow = buildElectricalFlow(
+    COLLIDING_OBSERVATIONS,
+    { outcomes: COLLIDING_OUTCOMES },
+    COLLIDING_ENRICHMENT,
+  );
+  const node = flow.nodes.get(COLLIDING_ASSET_ID);
+  assert.equal(node.assetId, COLLIDING_ASSET_ID);
+  assert.equal(node.matchStatus, 'model-confirmed');
+  assert.equal(node.identityTier, 'exact');
+  assert.equal(node.enrichment.description, 'Dragon 480V distribution panel');
+});
+
+test('which spelling was written first decides nothing about the node', () => {
+  const forward = buildElectricalFlow(
+    COLLIDING_OBSERVATIONS,
+    { outcomes: COLLIDING_OUTCOMES },
+    COLLIDING_ENRICHMENT,
+  );
+  const reversed = buildElectricalFlow(
+    COLLIDING_OBSERVATIONS_REVERSED,
+    { outcomes: COLLIDING_OUTCOMES },
+    COLLIDING_ENRICHMENT,
+  );
+  assert.equal(snapshot(forward), snapshot(reversed));
 });
