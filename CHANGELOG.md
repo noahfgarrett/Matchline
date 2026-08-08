@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0 — 2026-08-08 — H1: hardening and packaging
+
+- Review keys made storage-safe end to end; project files carry their whole
+  configuration (schema v2 config table, opt-in migration with automatic backup).
+- Unsigned try-it builds: Windows Setup exe + portable zip, mac zip — see
+  docs/INSTALL-TRY-IT.md. Code signing, icon, and the updater remain open items.
+- Suite: 1627 tests, 0 failures.
+
 ## 0.6.0 — 2026-08-08 — A1: desktop application
 
 - Electron shell: sandboxed renderer, app:// scheme with enforced CSP, typed Zod IPC
