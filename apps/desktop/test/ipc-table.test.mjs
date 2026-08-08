@@ -55,6 +55,49 @@ test("each channel's example round-trips through both schemas unchanged", () => 
   }
 });
 
+test('a void-request channel declares its example request as undefined', () => {
+  for (const channel of IPC_CHANNEL_NAMES) {
+    const { request, example } = IPC_CHANNELS[channel];
+    // The façade calls a void-request channel with no argument, so a declared
+    // example of anything else would describe a call that cannot happen.
+    if (request.safeParse(undefined).success && !request.safeParse({}).success) {
+      assert.equal(
+        example.request,
+        undefined,
+        `"${channel}" takes no request but its example supplies one`,
+      );
+    }
+  }
+});
+
+test('the round-2 channels are all declared', () => {
+  const expected = [
+    'dialog:save-file',
+    'dialog:open-files',
+    'project:create',
+    'project:open',
+    'project:close',
+    'project:current',
+    'project:recent',
+    'source:add',
+    'source:list',
+    'source:remove',
+    'model:scan',
+    'model:property-page',
+    'model:class-list',
+    'asset:preview',
+    'anatomy:preview',
+    'resolver:preview',
+    'profile:draft',
+    'profile:update',
+    'profile:save',
+  ];
+
+  for (const channel of expected) {
+    assert.ok(IPC_CHANNEL_NAMES.includes(channel), `"${channel}" is missing from the table`);
+  }
+});
+
 test('examples survive the structured clone that IPC actually performs', () => {
   for (const channel of IPC_CHANNEL_NAMES) {
     const { example } = IPC_CHANNELS[channel];

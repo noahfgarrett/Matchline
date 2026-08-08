@@ -1,40 +1,55 @@
 import { useCallback, useEffect, useState, type JSX } from 'react';
 
+import type { WireProjectSummary } from '../../shared/schemas';
+import { call } from './api';
+import { Landing } from './screens/Landing';
+import { Wizard } from './screens/Wizard';
+
 /**
- * The shell. One header, one empty state, one action — everything else arrives with the
- * wizard and workspace screens (APP.md "UI surface").
+ * The shell. Two states: no project, or a project with the setup wizard in it.
+ *
+ * Which one is showing is decided by the main process, not by this component —
+ * a reloaded renderer asks `project:current` and lands back where the session
+ * actually is, rather than assuming it starts empty.
  */
 
-type VersionState =
+type Shell =
   | { readonly status: 'loading' }
-  | { readonly status: 'ready'; readonly version: string }
-  | { readonly status: 'failed' };
-
-type ProjectState =
-  | { readonly status: 'none' }
-  | { readonly status: 'selecting' }
-  | { readonly status: 'selected'; readonly path: string }
-  | { readonly status: 'failed'; readonly message: string };
+  | { readonly status: 'landing' }
+  | { readonly status: 'open'; readonly project: WireProjectSummary };
 
 export function App(): JSX.Element {
-  const [version, setVersion] = useState<VersionState>({ status: 'loading' });
-  const [project, setProject] = useState<ProjectState>({ status: 'none' });
+  const [version, setVersion] = useState<string>('');
+  const [shell, setShell] = useState<Shell>({ status: 'loading' });
 
   useEffect((): (() => void) => {
     let cancelled = false;
 
-    void window.matchline.app.version().then(
-      (result): void => {
+    void call(window.matchline.app.version()).then(
+      (data): void => {
+        if (!cancelled) {
+          setVersion(data.version);
+        }
+      },
+      (): void => {
+        // A missing version string is cosmetic; the app still works.
+      },
+    );
+
+    void call(window.matchline.project.current()).then(
+      (data): void => {
         if (cancelled) {
           return;
         }
-        setVersion(
-          result.ok ? { status: 'ready', version: result.data.version } : { status: 'failed' },
+        setShell(
+          data.project === null
+            ? { status: 'landing' }
+            : { status: 'open', project: data.project },
         );
       },
       (): void => {
         if (!cancelled) {
-          setVersion({ status: 'failed' });
+          setShell({ status: 'landing' });
         }
       },
     );
@@ -44,78 +59,29 @@ export function App(): JSX.Element {
     };
   }, []);
 
-  const openProject = useCallback(async (): Promise<void> => {
-    setProject({ status: 'selecting' });
+  const onOpened = useCallback((project: WireProjectSummary): void => {
+    setShell({ status: 'open', project });
+  }, []);
 
-    // Contract failures come back as `ok: false`; invoke itself only rejects if the
-    // channel is gone entirely (main process torn down mid-call).
-    let result: Awaited<ReturnType<typeof window.matchline.dialog.openFile>>;
-    try {
-      result = await window.matchline.dialog.openFile({
-        filters: [{ name: 'Matchline project', extensions: ['matchline'] }],
-      });
-    } catch (error: unknown) {
-      setProject({
-        status: 'failed',
-        message: error instanceof Error ? error.message : 'The file dialog is unavailable.',
-      });
-      return;
-    }
-
-    if (!result.ok) {
-      setProject({ status: 'failed', message: result.error.message });
-      return;
-    }
-
-    setProject(
-      result.data.cancelled ? { status: 'none' } : { status: 'selected', path: result.data.path },
-    );
+  const onClosed = useCallback((): void => {
+    setShell({ status: 'landing' });
   }, []);
 
   return (
     <div className="app">
       <header className="app__header">
         <span className="app__wordmark">Matchline</span>
-        <span className="app__version">
-          {version.status === 'ready' ? `v${version.version}` : ''}
-          {version.status === 'loading' ? 'checking version…' : ''}
-          {version.status === 'failed' ? 'version unavailable' : ''}
-        </span>
+        <span className="app__version">{version === '' ? '' : `v${version}`}</span>
       </header>
 
-      <main className="app__main">
-        <div className="empty-state">
-          <h1 className="empty-state__title">No project open</h1>
-          <p className="empty-state__body">
-            A Matchline project holds your models, spreadsheets, site profile, and every
-            compile it has produced. Open one to pick up where you left off, or start a new
-            one to import your first sources.
-          </p>
-
-          <button
-            className="empty-state__action"
-            type="button"
-            onClick={(): void => {
-              void openProject();
-            }}
-            disabled={project.status === 'selecting'}
-          >
-            {project.status === 'selecting' ? 'Choosing…' : 'Open project…'}
-          </button>
-
-          {project.status === 'selected' ? (
-            <p className="empty-state__note" role="status">
-              Selected <code>{project.path}</code>. Opening projects arrives with the project
-              store.
-            </p>
-          ) : null}
-
-          {project.status === 'failed' ? (
-            <p className="empty-state__note empty-state__note--error" role="alert">
-              {project.message}
-            </p>
-          ) : null}
-        </div>
+      <main className="app__main" data-testid="app-main">
+        {shell.status === 'loading' ? (
+          <p className="callout callout--info">Starting up…</p>
+        ) : null}
+        {shell.status === 'landing' ? <Landing onOpened={onOpened} /> : null}
+        {shell.status === 'open' ? (
+          <Wizard project={shell.project} onClosed={onClosed} />
+        ) : null}
       </main>
     </div>
   );

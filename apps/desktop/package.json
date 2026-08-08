@@ -14,6 +14,16 @@
     "test": "tsc -b && node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@matchline/asset-catalog": "0.1.0",
+    "@matchline/compiler": "0.1.0",
+    "@matchline/connectivity-import": "0.1.0",
+    "@matchline/domain": "0.1.0",
+    "@matchline/model-schema": "0.1.0",
+    "@matchline/project-store": "0.1.0",
+    "@matchline/spreadsheet-import": "0.1.0",
+    "@matchline/system-resolver": "0.1.0",
+    "@matchline/tag-anatomy": "0.1.0",
+    "@tanstack/react-virtual": "3.14.9",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "zod": "4.4.3"

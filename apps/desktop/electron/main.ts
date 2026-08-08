@@ -4,11 +4,17 @@ import { BrowserWindow, app, ipcMain, session } from 'electron';
 
 import { getVersion } from './handlers/app.js';
 import { ping } from './handlers/dev.js';
-import { createOpenFileHandler } from './handlers/dialog.js';
-import { createProject, openProject, runCompile } from './handlers/placeholders.js';
+import {
+  createOpenFileHandler,
+  createOpenFilesHandler,
+  createSaveFileHandler,
+} from './handlers/dialog.js';
+import { runCompile } from './handlers/placeholders.js';
+import { createSessionHandlers } from './handlers/session.js';
 import { createSenderCheck, registerIpc, type IpcHandlerMap } from './ipc/register.js';
 import { registerAppScheme, serveRendererFrom } from './security/app-protocol.js';
 import { APP_ORIGIN, buildCsp } from './security/csp.js';
+import { createProjectService, type ProjectService } from './services/project-session.js';
 
 /**
  * Matchline main process (APP.md process model, PRODUCT.md §16).
@@ -25,15 +31,23 @@ const devServerUrl: string | undefined = process.env['MATCHLINE_DEV_SERVER_URL']
 const rendererOrigin = devServerUrl === undefined ? APP_ORIGIN : new URL(devServerUrl).origin;
 
 let mainWindow: BrowserWindow | null = null;
+let projectService: ProjectService | null = null;
 
-const handlers: IpcHandlerMap = {
-  'app:version': getVersion,
-  'dialog:open-file': createOpenFileHandler(() => mainWindow),
-  'project:create': createProject,
-  'project:open': openProject,
-  'compile:run': runCompile,
-  'dev:ping': ping,
-};
+/**
+ * Built after `app.whenReady()` because the project service needs the
+ * installation's userData directory, which `app` only answers for once it is up.
+ */
+function buildHandlers(service: ProjectService): IpcHandlerMap {
+  return {
+    'app:version': getVersion,
+    'dialog:open-file': createOpenFileHandler(() => mainWindow),
+    'dialog:open-files': createOpenFilesHandler(() => mainWindow),
+    'dialog:save-file': createSaveFileHandler(() => mainWindow),
+    'compile:run': runCompile,
+    'dev:ping': ping,
+    ...createSessionHandlers(service),
+  };
+}
 
 /** Send the CSP as a header rather than a meta tag so it also covers dev-server responses. */
 function applyContentSecurityPolicy(): void {
@@ -123,7 +137,11 @@ if (!app.requestSingleInstanceLock()) {
         serveRendererFrom(RENDERER_ROOT);
       }
 
-      registerIpc(ipcMain, handlers, createSenderCheck([rendererOrigin]));
+      projectService = createProjectService({
+        userDataDir: app.getPath('userData'),
+        appVersion: app.getVersion(),
+      });
+      registerIpc(ipcMain, buildHandlers(projectService), createSenderCheck([rendererOrigin]));
       await createMainWindow();
 
       app.on('activate', (): void => {
@@ -142,5 +160,12 @@ if (!app.requestSingleInstanceLock()) {
     if (process.platform !== 'darwin') {
       app.quit();
     }
+  });
+
+  // The project file is SQLite; the handle is released deliberately rather than
+  // left to process teardown, so a quit mid-write cannot leave a stale lock.
+  app.on('will-quit', (): void => {
+    projectService?.close();
+    projectService = null;
   });
 }
