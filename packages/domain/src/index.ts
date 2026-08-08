@@ -15,6 +15,17 @@ export type {
 
 export type { SystemConflictStatus, SystemResolution } from './system.js';
 
+export type { ConnectivityObservation, ConnectivitySourceKind } from './connectivity.js';
+
+export { IDENTITY_TIER_ORDER } from './identity.js';
+export type {
+  IdentityCandidate,
+  IdentityMatch,
+  IdentityMiss,
+  IdentityOutcome,
+  IdentityTier,
+} from './identity.js';
+
 export type {
   CanonicalAsset,
   HierarchyAttributes,
@@ -41,7 +52,10 @@ export type {
 
 export { reviewItemSummary } from './review.js';
 export type {
+  AmbiguousSuffixReviewItem,
   DuplicateModelTagReviewItem,
+  FuzzyIdentityCandidate,
+  FuzzyIdentityReviewItem,
   ReviewItem,
   SystemCatalogConflictReviewItem,
   SystemConflictReviewItem,
