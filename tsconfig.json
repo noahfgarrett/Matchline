@@ -5,6 +5,9 @@
     { "path": "./packages/domain" },
     { "path": "./packages/model-schema" },
     { "path": "./packages/tag-anatomy" },
-    { "path": "./packages/spreadsheet-import" }
+    { "path": "./packages/spreadsheet-import" },
+    { "path": "./packages/asset-catalog" },
+    { "path": "./packages/system-resolver" },
+    { "path": "./packages/mel-export" }
   ]
 }
