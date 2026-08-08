@@ -14,7 +14,7 @@
     "build": "tsc -b",
     "clean": "tsc -b --clean",
     "test": "npm run test:workspaces && npm run test:legacy",
-    "test:workspaces": "npm test --workspace @matchline/domain && npm test --workspace @matchline/model-schema",
+    "test:workspaces": "npm test --workspace @matchline/domain && npm test --workspace @matchline/model-schema && npm test --workspace @matchline/tag-anatomy && npm test --workspace @matchline/spreadsheet-import",
     "test:legacy": "npm test --prefix packages/legacy-parity"
   },
   "devDependencies": {
