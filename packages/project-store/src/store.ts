@@ -22,6 +22,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import type { ManualRelationshipOverride, SiteProfile } from '@matchline/domain';
 
+import { backupBeforeMigration } from './backup.js';
 import { ProjectStoreError } from './errors.js';
 import { canonicalJson, parseStoredJson } from './json.js';
 import {
@@ -34,17 +35,21 @@ import {
 import { validateSiteProfile } from './profile-json.js';
 import { optionalText, requireInteger, requireText, type SqlRow } from './rows.js';
 import {
+  CONFIG_KEYS,
   DECISION_VALUES,
   DEFAULT_APP_VERSION,
   LEARNED_RULE_KINDS,
+  MIGRATION_STEPS,
   OVERRIDE_KINDS,
   PROJECT_SCHEMA_SQL,
   PROJECT_SCHEMA_VERSION,
   REQUIRED_META_KEYS,
   REQUIRED_TABLES,
   SOURCE_ROLES,
+  type ConfigKey,
   type DecisionValue,
   type LearnedRuleKind,
+  type MigrationStep,
   type OverrideKind,
   type SourceRole,
 } from './schema.js';
@@ -74,6 +79,26 @@ export interface CreateProjectOptions {
 export interface OpenProjectOptions {
   /** Defaults to the system clock. */
   readonly now?: Clock;
+  /**
+   * Whether an older project file may be upgraded in place. Defaults to
+   * `false`, so a caller that has not decided how to tell the user about a
+   * migration gets a `migration-required` refusal instead of a rewritten file.
+   *
+   * When `true`, the file is backed up first (`backupBeforeMigration`), every
+   * step is applied in one transaction, and the result is revalidated before
+   * the handle is returned. {@link ProjectStore.migration} says what happened.
+   */
+  readonly migrate?: boolean;
+}
+
+/** What opening a project file had to do to it before it could be read. */
+export interface MigrationReport {
+  /** The schema version the file declared when it was found. */
+  readonly fromVersion: number;
+  /** The schema version it declares now. Always `PROJECT_SCHEMA_VERSION`. */
+  readonly toVersion: number;
+  /** Where the untouched original was copied to, for the user to be told. */
+  readonly backupPath: string;
 }
 
 /** The `meta` table, typed and already validated. */
@@ -172,10 +197,27 @@ export interface ReviewDecision {
   readonly decidedAt: string;
 }
 
+/** One stored configuration section (v2). */
+export interface ConfigEntry {
+  readonly key: ConfigKey;
+  /** Whatever the caller stored, parsed. Shape is the caller's business. */
+  readonly value: unknown;
+  readonly updatedAt: string;
+}
+
 /** A validated, read-write project file. */
 export interface ProjectStore {
   /** The file this handle was opened from. */
   readonly path: string;
+
+  /**
+   * What opening this file migrated, or `null` when it was already current.
+   *
+   * Never `null` because a migration was skipped: `openProject` either migrates
+   * or refuses, so a handle in your hand is always a file this build fully
+   * understands.
+   */
+  readonly migration: MigrationReport | null;
 
   /** The `meta` table, re-read each call so `modifiedAt` is current. */
   meta(): ProjectMeta;
@@ -231,6 +273,19 @@ export interface ProjectStore {
    * JSON verbatim and never assumes a shape for it.
    */
   getLatestSnapshot<T = unknown>(validate?: (value: unknown) => T): LatestSnapshot<T> | undefined;
+
+  /**
+   * Stores one configuration section, replacing whatever was there.
+   *
+   * Replace rather than append: unlike `profile`, a config section has no
+   * revision history to answer questions from, and the compiler only ever
+   * reads the current one.
+   */
+  saveConfig(key: ConfigKey, value: unknown): void;
+  /** One section, or `undefined` when it has never been written. */
+  getConfig(key: ConfigKey): ConfigEntry | undefined;
+  /** Every stored section, ordered by key. Empty means nothing was configured. */
+  listConfig(): readonly ConfigEntry[];
 
   /** Appends a review decision. Earlier decisions for the key are kept. */
   recordDecision(input: DecisionInput): void;
@@ -308,24 +363,28 @@ function metaFrom(entries: ReadonlyMap<string, string>): ProjectMeta {
   };
 }
 
-/**
- * Refuses anything that is not a v1 project file.
- *
- * Version first, like the extraction cache: a project written by a newer build
- * is refused by version rather than by complaining about keys that version
- * never promised.
- */
-function validateProject(db: DatabaseSync): void {
-  const tables = new Set(
+function tableNames(db: DatabaseSync): ReadonlySet<string> {
+  return new Set(
     db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
       .all()
       .map((row) => requireText(row, 'sqlite_master', 'name')),
   );
-  for (const table of REQUIRED_TABLES) {
-    if (!tables.has(table)) {
-      throw new ProjectStoreError({ kind: 'missing-table', table });
-    }
+}
+
+/**
+ * Refuses anything that is not a current project file.
+ *
+ * Version first, like the extraction cache, and load-bearing now that a table
+ * has been added: a v1 file is missing `config`, and answering "missing table
+ * 'config'" when the honest answer is "this file is a version older than you"
+ * would send the user looking for corruption that is not there. Only `meta` is
+ * checked ahead of the version, because the version is read out of it.
+ */
+function validateProject(db: DatabaseSync): void {
+  const tables = tableNames(db);
+  if (!tables.has('meta')) {
+    throw new ProjectStoreError({ kind: 'missing-table', table: 'meta' });
   }
 
   const entries = readMetaEntries(db);
@@ -338,8 +397,6 @@ function validateProject(db: DatabaseSync): void {
     });
   }
   if (found < PROJECT_SCHEMA_VERSION) {
-    // Where the v2 migration hook attaches: back the file up
-    // (`backupBeforeMigration`), run the migration, record it in `migrations`.
     throw new ProjectStoreError({
       kind: 'migration-required',
       found,
@@ -347,11 +404,116 @@ function validateProject(db: DatabaseSync): void {
     });
   }
 
+  for (const table of REQUIRED_TABLES) {
+    if (!tables.has(table)) {
+      throw new ProjectStoreError({ kind: 'missing-table', table });
+    }
+  }
+
   for (const key of REQUIRED_META_KEYS) {
     if (!entries.has(key)) {
       throw new ProjectStoreError({ kind: 'missing-meta-key', key });
     }
   }
+}
+
+/**
+ * The steps that carry `found` all the way to the current version, or none.
+ *
+ * All-or-nothing on purpose: a partial walk would leave a file at a version
+ * between two the build understands, which is a state nothing else in this
+ * package knows how to describe.
+ */
+function migrationStepsFrom(found: number): readonly MigrationStep[] {
+  const steps = MIGRATION_STEPS.filter((step: MigrationStep): boolean => step.to > found);
+  const first = steps[0];
+  const last = steps[steps.length - 1];
+  if (first === undefined || last === undefined) {
+    return [];
+  }
+  return first.to === found + 1 && last.to === PROJECT_SCHEMA_VERSION ? steps : [];
+}
+
+/**
+ * Upgrades a project file in place, after copying it.
+ *
+ * The file must be closed when this is called: `backupBeforeMigration` copies
+ * bytes, and a copy taken with a transaction open would copy a database whose
+ * rollback journal lives in another file.
+ *
+ * Everything after the backup runs in one transaction — the new tables, the
+ * `migrations` rows and the `meta.schema_version` bump together — so a failure
+ * anywhere leaves a file that still declares the version it really is.
+ */
+function migrateProjectFile(path: string, found: number, clock: Clock): MigrationReport {
+  const steps = migrationStepsFrom(found);
+  if (steps.length === 0) {
+    throw new ProjectStoreError({
+      kind: 'no-migration-path',
+      found,
+      supported: PROJECT_SCHEMA_VERSION,
+    });
+  }
+
+  const backupPath = backupBeforeMigration(path);
+
+  let db: DatabaseSync;
+  try {
+    db = new DatabaseSync(path);
+  } catch (cause) {
+    throw cannotOpen(path, cause);
+  }
+
+  try {
+    db.exec('PRAGMA foreign_keys = ON');
+    const appliedAt = isoNow(clock);
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const record = db.prepare('INSERT INTO migrations (version, applied_at) VALUES (?, ?)');
+      for (const step of steps) {
+        db.exec(step.sql);
+        record.run(step.to, appliedAt);
+      }
+      db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(
+        String(PROJECT_SCHEMA_VERSION),
+      );
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  } catch (error) {
+    throw error instanceof ProjectStoreError ? error : cannotOpen(path, error);
+  } finally {
+    db.close();
+  }
+
+  return { fromVersion: found, toVersion: PROJECT_SCHEMA_VERSION, backupPath };
+}
+
+/** Opens a file and validates it, closing the handle on any refusal. */
+function openValidated(path: string): DatabaseSync {
+  let db: DatabaseSync;
+  try {
+    db = new DatabaseSync(path);
+  } catch (cause) {
+    throw cannotOpen(path, cause);
+  }
+
+  try {
+    db.exec('PRAGMA foreign_keys = ON');
+    validateProject(db);
+  } catch (error) {
+    db.close();
+    if (error instanceof ProjectStoreError) {
+      throw error;
+    }
+    // SQLite defers reading the file header, so a file that is not a database
+    // at all fails here rather than at construction. Callers still get one
+    // error type, not a raw driver error.
+    throw cannotOpen(path, error);
+  }
+  return db;
 }
 
 /**
@@ -416,40 +578,41 @@ export function createProject(path: string, options: CreateProjectOptions): Proj
 }
 
 /**
- * Opens an existing project file.
+ * Opens an existing project file, migrating it first when asked to.
  *
  * @throws ProjectStoreError `not-found`, `cannot-open` (not a database),
  * `missing-table`, `missing-meta-key`, `malformed-meta-value`,
- * `unsupported-schema-version` (written by a newer build) or
- * `migration-required` (written by an older one).
+ * `unsupported-schema-version` (written by a newer build), `migration-required`
+ * (written by an older one, and `migrate` was not set), `no-migration-path`
+ * (written by an older one this build cannot reach) or `backup-exists` (a
+ * previous migration's backup is still sitting there).
  */
 export function openProject(path: string, options: OpenProjectOptions = {}): ProjectStore {
   if (!existsSync(path)) {
     throw new ProjectStoreError({ kind: 'not-found', path });
   }
+  const clock = options.now ?? SYSTEM_CLOCK;
 
+  let migration: MigrationReport | null = null;
   let db: DatabaseSync;
   try {
-    db = new DatabaseSync(path);
-  } catch (cause) {
-    throw cannotOpen(path, cause);
-  }
-
-  try {
-    db.exec('PRAGMA foreign_keys = ON');
-    validateProject(db);
+    db = openValidated(path);
   } catch (error) {
-    db.close();
-    if (error instanceof ProjectStoreError) {
+    if (
+      options.migrate !== true ||
+      !(error instanceof ProjectStoreError) ||
+      error.reason.kind !== 'migration-required'
+    ) {
       throw error;
     }
-    // SQLite defers reading the file header, so a file that is not a database
-    // at all fails here rather than at construction. Callers still get one
-    // error type, not a raw driver error.
-    throw cannotOpen(path, error);
+    migration = migrateProjectFile(path, error.reason.found, clock);
+    // Revalidated rather than assumed: a migration that produced a file this
+    // build cannot read is a failure, not a success with a warning. The backup
+    // is on disk either way, which is what it is for.
+    db = openValidated(path);
   }
 
-  return new SqliteProjectStore(db, path, options.now ?? SYSTEM_CLOCK);
+  return new SqliteProjectStore(db, path, clock, migration);
 }
 
 function isoNow(clock: Clock): string {
@@ -463,15 +626,22 @@ function isoNow(clock: Clock): string {
 
 class SqliteProjectStore implements ProjectStore {
   readonly path: string;
+  readonly migration: MigrationReport | null;
 
   #db: DatabaseSync | null;
   readonly #clock: Clock;
   #depth = 0;
 
-  constructor(db: DatabaseSync, path: string, clock: Clock) {
+  constructor(
+    db: DatabaseSync,
+    path: string,
+    clock: Clock,
+    migration: MigrationReport | null = null,
+  ) {
     this.#db = db;
     this.path = path;
     this.#clock = clock;
+    this.migration = migration;
   }
 
   #open(): DatabaseSync {
@@ -881,6 +1051,45 @@ class SqliteProjectStore implements ProjectStore {
     // `T` defaults to; the assertion cannot widen anything they can misuse.
     const snapshot = validate === undefined ? (parsed as T) : validate(parsed);
     return { compileId: requireInteger(row, 'snapshots', 'compile_id'), snapshot };
+  }
+
+  saveConfig(key: ConfigKey, value: unknown): void {
+    const checkedKey = requireMemberArgument(key, CONFIG_KEYS, 'key');
+    const json = canonicalJson(value, `config.${checkedKey}`);
+    this.#mutate((updatedAt) => {
+      this.#open()
+        .prepare(
+          `INSERT INTO config (key, config_json, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT (key) DO UPDATE SET
+             config_json = excluded.config_json,
+             updated_at = excluded.updated_at`,
+        )
+        .run(checkedKey, json, updatedAt);
+    });
+  }
+
+  getConfig(key: ConfigKey): ConfigEntry | undefined {
+    const checkedKey = requireMemberArgument(key, CONFIG_KEYS, 'key');
+    const row = this.#open()
+      .prepare('SELECT key, config_json, updated_at FROM config WHERE key = ?')
+      .get(checkedKey);
+    return row === undefined ? undefined : this.#readConfig(row);
+  }
+
+  listConfig(): readonly ConfigEntry[] {
+    return this.#open()
+      .prepare('SELECT key, config_json, updated_at FROM config ORDER BY key')
+      .all()
+      .map((row) => this.#readConfig(row));
+  }
+
+  #readConfig(row: SqlRow): ConfigEntry {
+    return {
+      key: requireMemberArgument(requireText(row, 'config', 'key'), CONFIG_KEYS, 'config.key'),
+      value: parseStoredJson(requireText(row, 'config', 'config_json'), 'config'),
+      updatedAt: requireText(row, 'config', 'updated_at'),
+    };
   }
 
   recordDecision(input: DecisionInput): void {

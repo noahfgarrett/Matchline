@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { existsSync, writeFileSync } from 'node:fs';
 import test, { after } from 'node:test';
 
-import { backupBeforeMigration, createProject, ProjectStoreError } from '../dist/index.js';
+import {
+  backupBeforeMigration,
+  createProject,
+  PROJECT_SCHEMA_VERSION,
+  ProjectStoreError,
+} from '../dist/index.js';
 
 import { digest, dragonProfile, dumpTables, steppingClock, tempDirectory } from './support.mjs';
 
@@ -45,7 +50,7 @@ test('the backup is named after the version it holds and copies every row', () =
   const path = seededProject('backup-me.matchline');
   const backupPath = backupBeforeMigration(path);
 
-  assert.equal(backupPath, `${path}.backup-1`);
+  assert.equal(backupPath, `${path}.backup-${PROJECT_SCHEMA_VERSION}`);
   assert.ok(existsSync(backupPath));
   assert.deepEqual(dumpTables(backupPath), dumpTables(path));
 });
@@ -65,5 +70,9 @@ test('backing up something that is not a project is refused', () => {
   const notADatabase = temp.file('notes.txt');
   writeFileSync(notADatabase, 'a note, not a project');
   assert.equal(reason(() => backupBeforeMigration(notADatabase)).kind, 'cannot-open');
-  assert.equal(existsSync(`${notADatabase}.backup-1`), false, 'nothing was copied');
+  assert.equal(
+    existsSync(`${notADatabase}.backup-${PROJECT_SCHEMA_VERSION}`),
+    false,
+    'nothing was copied',
+  );
 });

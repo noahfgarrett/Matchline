@@ -31,13 +31,17 @@ renderer asks for pages/summaries (TanStack Virtual consumes windowed slices).
 
 ## Project file (PRODUCT.md §15)
 
-`ProjectName.matchline` = SQLite. Tables v1: `meta` (schema version, app version,
+`ProjectName.matchline` = SQLite. Tables v2: `meta` (schema version, app version,
 created/modified), `sources` (manifest + sha256 + role), `profile` (JSON snapshot +
 revision), `learned` (learned-rule sets + item-master tables, JSON), `overrides`
 (manual system/relationship overrides, JSON rows), `compiles` (history: input hashes,
-profile revision, stats JSON, timestamp), `snapshots` (latest resolved snapshot JSON,
-keyed by compile), `decisions` (review decisions). Transactional writes; schema_version
-gate like the extraction cache; automatic pre-migration backup copy.
+profile revision, stats JSON incl. generated-MEL assets for diff baselines, timestamp),
+`snapshots` (latest resolved snapshot JSON, keyed by compile), `decisions` (review
+decisions), `config` (v2: hierarchy, roleGraph, ladder, ssmDisciplineProjection,
+parentTagProperty — the whole configuration travels WITH the file). Transactional
+writes; schema_version gate like the extraction cache; v1→v2 migration runs only with
+explicit opt-in after an automatic backup copy. The app-state JSON holds only recents
+and the sha256→path index.
 
 Extraction caches stay in `%LOCALAPPDATA%/Matchline/cache/models/` (or the platform
 equivalent via app.getPath) — referenced by hash from `sources`, never embedded.

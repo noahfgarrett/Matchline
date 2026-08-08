@@ -413,11 +413,14 @@ test('the full screens 1-5 flow, over the Dragon fixture', async (t) => {
 test('reopening restores the draft from the saved revision', () => {
   const service = newService();
   try {
-    const project = service.open(projectPath);
+    const { project, notice } = service.open(projectPath);
     assert.equal(project.name, 'Dragon');
     assert.equal(project.savedRevision, 1);
     assert.equal(project.sourceCount, 2);
     assert.equal(project.hasModel, true, 'the model was re-found through the sha256 index');
+
+    // Written by this build, so there was nothing for opening to fix.
+    assert.deepEqual(notice, { migration: null, adoptedAppStateConfig: false });
 
     const { draft, savedRevision } = service.draftState();
     assert.equal(savedRevision, 1);

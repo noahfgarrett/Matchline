@@ -16,7 +16,19 @@ import { Wizard } from './screens/Wizard';
 type Shell =
   | { readonly status: 'loading' }
   | { readonly status: 'landing' }
-  | { readonly status: 'open'; readonly project: WireProjectSummary };
+  | {
+      readonly status: 'open';
+      readonly project: WireProjectSummary;
+      /**
+       * What opening the project had to do to the file first, or `null`.
+       *
+       * Held here rather than on the Landing screen, which is unmounted the
+       * moment a project opens. A reloaded renderer restores the project from
+       * `project:current` and has no notice to show, which is right: the file
+       * was already fixed, and saying so twice would read as it happening again.
+       */
+      readonly notice: string | null;
+    };
 
 export function App(): JSX.Element {
   const [version, setVersion] = useState<string>('');
@@ -44,7 +56,7 @@ export function App(): JSX.Element {
         setShell(
           data.project === null
             ? { status: 'landing' }
-            : { status: 'open', project: data.project },
+            : { status: 'open', project: data.project, notice: null },
         );
       },
       (): void => {
@@ -59,9 +71,12 @@ export function App(): JSX.Element {
     };
   }, []);
 
-  const onOpened = useCallback((project: WireProjectSummary): void => {
-    setShell({ status: 'open', project });
-  }, []);
+  const onOpened = useCallback(
+    (project: WireProjectSummary, notice: string | null): void => {
+      setShell({ status: 'open', project, notice });
+    },
+    [],
+  );
 
   const onClosed = useCallback((): void => {
     setShell({ status: 'landing' });
@@ -80,7 +95,14 @@ export function App(): JSX.Element {
         ) : null}
         {shell.status === 'landing' ? <Landing onOpened={onOpened} /> : null}
         {shell.status === 'open' ? (
-          <Wizard project={shell.project} onClosed={onClosed} />
+          <>
+            {shell.notice === null ? null : (
+              <p className="callout callout--info" role="status" data-testid="open-notice">
+                {shell.notice}
+              </p>
+            )}
+            <Wizard project={shell.project} onClosed={onClosed} />
+          </>
         ) : null}
       </main>
     </div>

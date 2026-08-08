@@ -100,7 +100,7 @@ export function createSessionHandlers(service: ProjectService): SessionHandlers 
     async 'project:open'(
       request: IpcRequest<'project:open'>,
     ): Promise<IpcResponse<'project:open'>> {
-      return { project: guard(() => service.open(request.path)) };
+      return guard(() => service.open(request.path));
     },
 
     async 'project:close'(): Promise<IpcResponse<'project:close'>> {

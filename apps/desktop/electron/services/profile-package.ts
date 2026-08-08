@@ -15,9 +15,12 @@ import {
  *
  * A profile package is decisions and nothing else — no model files, no
  * spreadsheet rows, not even the file names of either. It is the artifact that
- * makes a second site's setup start from the first site's answers, and it is
- * the only thing that carries the screens 6-7 sections between machines (see
- * `app-store.ts` for why those cannot live in the `.matchline` file yet).
+ * makes a second site's setup start from the first site's answers.
+ *
+ * It carries the screens 6-7 sections alongside the draft, and since schema v2
+ * so does the `.matchline` file itself (`project-config.ts`). The two are not
+ * redundant: the project file is how *this* project keeps its configuration
+ * when it moves, and the package is how a *different* project starts from it.
  *
  * The package is validated on the way out as well as on the way in: §13.3 says
  * every save validates before publication, and a package that cannot be read

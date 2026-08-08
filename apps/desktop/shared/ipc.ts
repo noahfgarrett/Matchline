@@ -20,6 +20,7 @@ import {
   learnedRuleKindSchema,
   learnedSummarySchema,
   modelScanSchema,
+  openNoticeSchema,
   overrideRowSchema,
   profileSectionSchema,
   projectConfigSchema,
@@ -115,12 +116,18 @@ const openFilesResultSchema = z.discriminatedUnion('cancelled', [
 const EXAMPLE_PROJECT = {
   path: '/Users/dragon/Dragon.matchline',
   name: 'Dragon',
-  schemaVersion: 1,
+  schemaVersion: 2,
   createdAt: '2026-08-08T09:00:00.000Z',
   modifiedAt: '2026-08-08T09:12:00.000Z',
   sourceCount: 2,
   savedRevision: null,
   hasModel: true,
+} as const;
+
+/** The common case: a current file, opened without the app having to fix it. */
+const EXAMPLE_OPEN_NOTICE = {
+  migration: null,
+  adoptedAppStateConfig: false,
 } as const;
 
 const EXAMPLE_DRAFT = {
@@ -291,13 +298,18 @@ export const IPC_CHANNELS = {
     },
   },
 
-  /** Opens an existing project and restores its most recent saved profile. */
+  /**
+   * Opens an existing project and restores its saved profile and configuration.
+   *
+   * A file written by an older build is migrated in place rather than refused —
+   * it is backed up first, and `notice` names the backup so the UI can say so.
+   */
   'project:open': {
     request: z.object({ path: z.string().min(1) }),
-    response: z.object({ project: projectSummarySchema }),
+    response: z.object({ project: projectSummarySchema, notice: openNoticeSchema }),
     example: {
       request: { path: '/Users/dragon/Dragon.matchline' },
-      response: { project: EXAMPLE_PROJECT },
+      response: { project: EXAMPLE_PROJECT, notice: EXAMPLE_OPEN_NOTICE },
     },
   },
 

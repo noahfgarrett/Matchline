@@ -49,12 +49,13 @@ test('a new project records its meta from the injected clock', () => {
     store.close();
   }
 
-  // The migration scaffold records v1 as applied, so a future v2 migration has
-  // a history to read rather than an empty table to guess at.
+  // A new file records the version it was written at, so "when did this file
+  // become v2" has an answer whether it was created there or migrated there.
   const dump = dumpTables(path);
   assert.deepEqual(dump.migrations, [
-    JSON.stringify({ applied_at: '2026-01-15T09:30:00.000Z', version: 1 }),
+    JSON.stringify({ applied_at: '2026-01-15T09:30:00.000Z', version: PROJECT_SCHEMA_VERSION }),
   ]);
+  assert.deepEqual(dump.config, [], 'a new project configures nothing until asked to');
 });
 
 test('a project survives a close and reopen', () => {
@@ -124,11 +125,11 @@ test('openProject refuses a file that is not a database', () => {
 test('openProject refuses a project written by a newer build', () => {
   const path = temp.file('future.matchline');
   createProject(path, { name: 'Dragon', now: frozenClock() }).close();
-  rawExec(path, "UPDATE meta SET value = '2' WHERE key = 'schema_version'");
+  rawExec(path, `UPDATE meta SET value = '${PROJECT_SCHEMA_VERSION + 1}' WHERE key = 'schema_version'`);
 
   const failure = reason(() => openProject(path));
   assert.equal(failure.kind, 'unsupported-schema-version');
-  assert.equal(failure.found, 2);
+  assert.equal(failure.found, PROJECT_SCHEMA_VERSION + 1);
   assert.equal(failure.supported, PROJECT_SCHEMA_VERSION);
 });
 
@@ -137,6 +138,9 @@ test('openProject asks for a migration when the project predates this build', ()
   createProject(path, { name: 'Dragon', now: frozenClock() }).close();
   rawExec(path, "UPDATE meta SET value = '0' WHERE key = 'schema_version'");
 
+  // Default is to refuse: rewriting the only copy of a site's decisions is not
+  // something a caller does by accident. `migration.test.mjs` covers the
+  // opt-in.
   const failure = reason(() => openProject(path));
   assert.equal(failure.kind, 'migration-required');
   assert.equal(failure.found, 0);
