@@ -9,7 +9,6 @@ import {
   createOpenFilesHandler,
   createSaveFileHandler,
 } from './handlers/dialog.js';
-import { runCompile } from './handlers/placeholders.js';
 import { createSessionHandlers } from './handlers/session.js';
 import { createSenderCheck, registerIpc, type IpcHandlerMap } from './ipc/register.js';
 import { registerAppScheme, serveRendererFrom } from './security/app-protocol.js';
@@ -43,7 +42,6 @@ function buildHandlers(service: ProjectService): IpcHandlerMap {
     'dialog:open-file': createOpenFileHandler(() => mainWindow),
     'dialog:open-files': createOpenFilesHandler(() => mainWindow),
     'dialog:save-file': createSaveFileHandler(() => mainWindow),
-    'compile:run': runCompile,
     'dev:ping': ping,
     ...createSessionHandlers(service),
   };

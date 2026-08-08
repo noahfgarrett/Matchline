@@ -98,6 +98,85 @@ test('the round-2 channels are all declared', () => {
   }
 });
 
+test('the round-3 channels are all declared', () => {
+  const expected = [
+    // screens 6 and 7
+    'hierarchy:attributes',
+    'config:get',
+    'config:update',
+    'config:roles',
+    'config:disciplines',
+    'learned:train',
+    'learned:list',
+    // screen 8
+    'compile:run',
+    'compile:status',
+    'compile:issues',
+    'compile:history',
+    // the workspace
+    'tree:children',
+    'tree:search',
+    'tree:reparent-preview',
+    'override:set',
+    'override:list',
+    'override:remove',
+    'flow:roots',
+    'flow:walk',
+    'review:page',
+    'review:decide',
+    // exports and packages
+    'export:generated-mel',
+    'export:template-analyze',
+    'export:template-mel',
+    'export:exto',
+    'export:predecessors',
+    'export:revision-diff',
+    'profile:sections',
+    'profile:export',
+    'profile:import',
+  ];
+
+  for (const channel of expected) {
+    assert.ok(IPC_CHANNEL_NAMES.includes(channel), `"${channel}" is missing from the table`);
+  }
+});
+
+test('every paged channel caps its page size, so paging cannot be defeated', () => {
+  const paged = [
+    'model:property-page',
+    'compile:issues',
+    'tree:children',
+    'tree:search',
+    'flow:roots',
+    'flow:walk',
+    'review:page',
+  ];
+
+  for (const channel of paged) {
+    const { request } = IPC_CHANNELS[channel];
+    const oversized = { ...IPC_CHANNELS[channel].example.request, limit: 100_000 };
+    assert.equal(
+      request.safeParse(oversized).success,
+      false,
+      `"${channel}" accepts an unbounded page size`,
+    );
+  }
+});
+
+test('a null parent is expressible wherever "make this a root" is a real answer', () => {
+  // `ManualRelationshipOverride.parentAssetId` is nullable rather than optional
+  // precisely because null is an instruction, not an absence. The wire has to
+  // preserve that distinction or the instruction cannot be sent.
+  for (const channel of ['tree:reparent-preview', 'override:set']) {
+    const { request, example } = IPC_CHANNELS[channel];
+    const asRoot = { ...example.request, parentAssetId: null };
+    assert.ok(
+      request.safeParse(asRoot).success,
+      `"${channel}" cannot express a make-root instruction`,
+    );
+  }
+});
+
 test('examples survive the structured clone that IPC actually performs', () => {
   for (const channel of IPC_CHANNEL_NAMES) {
     const { example } = IPC_CHANNELS[channel];

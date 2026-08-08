@@ -5,7 +5,12 @@ import path from 'node:path';
 import { detectWorkbook } from '@matchline/connectivity-import';
 import { openExtractionCache } from '@matchline/model-schema';
 import { SOURCE_ROLES, type SourceRole } from '@matchline/project-store';
-import { readMelTable, readWorkbook, sheetAoa } from '@matchline/spreadsheet-import';
+import {
+  readMelTable,
+  readWorkbook,
+  sheetAoa,
+  type MelMapping,
+} from '@matchline/spreadsheet-import';
 import type { MelCatalogRow } from '@matchline/system-resolver';
 
 import {
@@ -378,6 +383,60 @@ export function readMelCatalogRows(
   }
 
   return rows;
+}
+
+/**
+ * The MEL sheet a compile joins against, addressed the way
+ * `@matchline/compiler`'s `MelWorkbookInput` wants it.
+ *
+ * `readMelCatalogRows` above answers screen 5's live preview from an already
+ * loaded file; this answers screen 8, which hands the compiler the bytes and
+ * the explicit column mapping instead. Both read the same headers through the
+ * same {@link melColumnNames}, so the preview and the compile can never join on
+ * different columns.
+ */
+export interface MelSheetDescriptor {
+  readonly sheetName: string;
+  readonly mapping: MelMapping;
+  /** Zero-based AoA row holding the headers, as the compiler counts them. */
+  readonly headerRow: number;
+}
+
+/** `null` when no recognized sheet carries a readable equipment-tag column. */
+export function melSheetDescriptor(
+  bytes: Uint8Array,
+  sheets: readonly WireSheetSummary[],
+): MelSheetDescriptor | null {
+  const workbook = readWorkbook(bytes);
+
+  for (const summary of sheets) {
+    if (summary.kind !== 'mel' || summary.headerRow === 0) {
+      continue;
+    }
+    const headerRow = summary.headerRow - 1;
+    const { aoa } = sheetAoa(workbook.getSheet(summary.sheet));
+    const headers = aoa[headerRow];
+    if (headers === undefined) {
+      continue;
+    }
+    const names = melColumnNames(headers);
+    if (names === null) {
+      continue;
+    }
+
+    const mapping: { equipmentTag: string; upn?: string; systemDescription?: string } = {
+      equipmentTag: names.equipmentTag,
+    };
+    if (names.upn !== undefined) {
+      mapping.upn = names.upn;
+    }
+    if (names.systemDescription !== undefined) {
+      mapping.systemDescription = names.systemDescription;
+    }
+    return { sheetName: summary.sheet, mapping, headerRow };
+  }
+
+  return null;
 }
 
 /**

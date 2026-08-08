@@ -33,6 +33,36 @@ export type SessionChannel = Extract<
   | 'profile:draft'
   | 'profile:update'
   | 'profile:save'
+  | 'hierarchy:attributes'
+  | 'config:get'
+  | 'config:update'
+  | 'config:roles'
+  | 'config:disciplines'
+  | 'learned:train'
+  | 'learned:list'
+  | 'compile:run'
+  | 'compile:status'
+  | 'compile:issues'
+  | 'compile:history'
+  | 'tree:children'
+  | 'tree:search'
+  | 'tree:reparent-preview'
+  | 'override:set'
+  | 'override:list'
+  | 'override:remove'
+  | 'flow:roots'
+  | 'flow:walk'
+  | 'review:page'
+  | 'review:decide'
+  | 'export:generated-mel'
+  | 'export:template-analyze'
+  | 'export:template-mel'
+  | 'export:exto'
+  | 'export:predecessors'
+  | 'export:revision-diff'
+  | 'profile:sections'
+  | 'profile:export'
+  | 'profile:import'
 >;
 
 export type SessionHandlers = {
@@ -141,6 +171,186 @@ export function createSessionHandlers(service: ProjectService): SessionHandlers 
       request: IpcRequest<'profile:save'>,
     ): Promise<IpcResponse<'profile:save'>> {
       return guard(() => service.saveProfile(request.note));
+    },
+
+    /* ----------------------------------------------------- screens 6 and 7 */
+
+    async 'hierarchy:attributes'(): Promise<IpcResponse<'hierarchy:attributes'>> {
+      return { attributes: [...guard(() => service.attributeChoices())] };
+    },
+
+    async 'config:get'(): Promise<IpcResponse<'config:get'>> {
+      return { config: guard(() => service.config()) };
+    },
+
+    async 'config:update'(
+      request: IpcRequest<'config:update'>,
+    ): Promise<IpcResponse<'config:update'>> {
+      return { config: guard(() => service.updateConfig(request.patch)) };
+    },
+
+    async 'config:roles'(): Promise<IpcResponse<'config:roles'>> {
+      return { roles: [...guard(() => service.roleValues())] };
+    },
+
+    async 'config:disciplines'(): Promise<IpcResponse<'config:disciplines'>> {
+      return { disciplines: [...guard(() => service.disciplineValues())] };
+    },
+
+    async 'learned:train'(
+      request: IpcRequest<'learned:train'>,
+    ): Promise<IpcResponse<'learned:train'>> {
+      return { summary: guard(() => service.trainLearnedRules(request.kind, request.path)) };
+    },
+
+    async 'learned:list'(): Promise<IpcResponse<'learned:list'>> {
+      return { summaries: [...guard(() => service.learnedSummaries())] };
+    },
+
+    /* ------------------------------------------------------------ screen 8 */
+
+    async 'compile:run'(): Promise<IpcResponse<'compile:run'>> {
+      return { status: guard(() => service.compile()) };
+    },
+
+    async 'compile:status'(): Promise<IpcResponse<'compile:status'>> {
+      return { status: service.compileStatus() };
+    },
+
+    async 'compile:issues'(
+      request: IpcRequest<'compile:issues'>,
+    ): Promise<IpcResponse<'compile:issues'>> {
+      const page = guard(() => service.compileIssues(request.kind, request.offset, request.limit));
+      return { total: page.total, rows: [...page.rows] };
+    },
+
+    async 'compile:history'(): Promise<IpcResponse<'compile:history'>> {
+      return { compiles: [...guard(() => service.compileHistory())] };
+    },
+
+    /* ----------------------------------------------------------- workspace */
+
+    async 'tree:children'(
+      request: IpcRequest<'tree:children'>,
+    ): Promise<IpcResponse<'tree:children'>> {
+      return guard(() => service.treeChildren(request.nodeKey, request.offset, request.limit));
+    },
+
+    async 'tree:search'(request: IpcRequest<'tree:search'>): Promise<IpcResponse<'tree:search'>> {
+      return { rows: [...guard(() => service.treeSearch(request.query, request.limit))] };
+    },
+
+    async 'tree:reparent-preview'(
+      request: IpcRequest<'tree:reparent-preview'>,
+    ): Promise<IpcResponse<'tree:reparent-preview'>> {
+      return {
+        preview: guard(() => service.reparentPreview(request.childAssetId, request.parentAssetId)),
+      };
+    },
+
+    async 'override:set'(request: IpcRequest<'override:set'>): Promise<IpcResponse<'override:set'>> {
+      return {
+        overrides: [
+          ...guard(() =>
+            service.setRelationshipOverride(
+              request.childAssetId,
+              request.parentAssetId,
+              request.note,
+            ),
+          ),
+        ],
+      };
+    },
+
+    async 'override:list'(): Promise<IpcResponse<'override:list'>> {
+      return { overrides: [...guard(() => service.listRelationshipOverrides())] };
+    },
+
+    async 'override:remove'(
+      request: IpcRequest<'override:remove'>,
+    ): Promise<IpcResponse<'override:remove'>> {
+      const removed = guard(() => service.removeRelationshipOverride(request.childAssetId));
+      return { removed, overrides: [...guard(() => service.listRelationshipOverrides())] };
+    },
+
+    async 'flow:roots'(request: IpcRequest<'flow:roots'>): Promise<IpcResponse<'flow:roots'>> {
+      const page = guard(() => service.flowRoots(request.offset, request.limit));
+      return { total: page.total, rows: [...page.rows] };
+    },
+
+    async 'flow:walk'(request: IpcRequest<'flow:walk'>): Promise<IpcResponse<'flow:walk'>> {
+      const page = guard(() =>
+        service.flowWalk(request.rootNodeId, request.offset, request.limit),
+      );
+      return { total: page.total, rows: [...page.rows] };
+    },
+
+    async 'review:page'(request: IpcRequest<'review:page'>): Promise<IpcResponse<'review:page'>> {
+      return guard(() => service.reviewPage(request.kind, request.offset, request.limit));
+    },
+
+    async 'review:decide'(
+      request: IpcRequest<'review:decide'>,
+    ): Promise<IpcResponse<'review:decide'>> {
+      return {
+        recorded: guard(() =>
+          service.recordDecision(request.reviewKey, request.decision, request.note),
+        ),
+      };
+    },
+
+    /* ------------------------------------------------- exports and packages */
+
+    async 'export:generated-mel'(
+      request: IpcRequest<'export:generated-mel'>,
+    ): Promise<IpcResponse<'export:generated-mel'>> {
+      return { result: guard(() => service.exportGeneratedMel(request.path)) };
+    },
+
+    async 'export:template-analyze'(
+      request: IpcRequest<'export:template-analyze'>,
+    ): Promise<IpcResponse<'export:template-analyze'>> {
+      return { analysis: guard(() => service.analyzeTemplate(request.path)) };
+    },
+
+    async 'export:template-mel'(
+      request: IpcRequest<'export:template-mel'>,
+    ): Promise<IpcResponse<'export:template-mel'>> {
+      return { result: guard(() => service.exportTemplateMel(request.path, request.bindings)) };
+    },
+
+    async 'export:exto'(request: IpcRequest<'export:exto'>): Promise<IpcResponse<'export:exto'>> {
+      return { result: guard(() => service.exportExto(request.path)) };
+    },
+
+    async 'export:predecessors'(
+      request: IpcRequest<'export:predecessors'>,
+    ): Promise<IpcResponse<'export:predecessors'>> {
+      return { result: guard(() => service.exportPredecessors(request.path)) };
+    },
+
+    async 'export:revision-diff'(
+      request: IpcRequest<'export:revision-diff'>,
+    ): Promise<IpcResponse<'export:revision-diff'>> {
+      return {
+        result: guard(() => service.exportRevisionDiff(request.path, request.previousCompileId)),
+      };
+    },
+
+    async 'profile:sections'(): Promise<IpcResponse<'profile:sections'>> {
+      return { sections: [...guard(() => service.profileSections())] };
+    },
+
+    async 'profile:export'(
+      request: IpcRequest<'profile:export'>,
+    ): Promise<IpcResponse<'profile:export'>> {
+      return { result: guard(() => service.exportProfilePackage(request.path)) };
+    },
+
+    async 'profile:import'(
+      request: IpcRequest<'profile:import'>,
+    ): Promise<IpcResponse<'profile:import'>> {
+      return guard(() => service.importProfilePackage(request.path));
     },
   };
 }

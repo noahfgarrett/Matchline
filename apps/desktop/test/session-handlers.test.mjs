@@ -24,7 +24,6 @@ const NON_SESSION_CHANNELS = [
   'dialog:open-file',
   'dialog:open-files',
   'dialog:save-file',
-  'compile:run',
   'dev:ping',
 ];
 
@@ -91,6 +90,8 @@ test('every session handler is registrable and returns a schema-valid response',
     ['project:current', undefined],
     ['project:recent', undefined],
     ['profile:draft', undefined],
+    ['compile:status', undefined],
+    ['hierarchy:attributes', undefined],
     ['project:close', undefined],
   ];
 

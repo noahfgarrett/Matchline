@@ -572,11 +572,19 @@ code {
   text-align: center;
 }
 
+/* Top-aligned because a toggle may carry a sentence under its label; a
+   centred checkbox would float halfway down two lines of text. */
 .toggle {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-2);
   font-size: 0.84rem;
+}
+
+.toggle__what {
+  display: block;
+  color: var(--text-faint);
+  font-size: 0.76rem;
 }
 
 .button {
@@ -1073,6 +1081,459 @@ code {
 .class-lists {
   display: flex;
   flex-direction: column;
+}
+
+/* --------------------------------------------------------------- sortables */
+
+/*
+ * dnd-kit sets a transform on the dragging item; the list itself must not
+ * clip, or a row lifted past its neighbour disappears mid-drag.
+ */
+.sortable {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sortable__item {
+  position: relative;
+}
+
+.sortable__item--dragging {
+  z-index: 2;
+  opacity: 0.9;
+}
+
+.sortable__handle {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--surface-sunken);
+  color: var(--text-faint);
+  cursor: grab;
+  font-size: 0.85rem;
+  line-height: 1;
+  touch-action: none;
+}
+
+.sortable__handle:hover {
+  border-color: var(--border-strong);
+  color: var(--text-muted);
+}
+
+.sortable__handle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* --------------------------------------------------------------- screen 6 */
+
+.level-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--surface-sunken);
+}
+
+.level-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.level-card__head .control--text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.level-card__body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.level-card__what {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 0.78rem;
+}
+
+/*
+ * A field whose label is a sentence stacks instead of sitting in a row: the
+ * row form squeezes the control until its selected option is truncated, and a
+ * control you cannot read the value of is broken however correct the value is.
+ */
+.inline-field--wide {
+  width: 100%;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+}
+
+.inline-field--wide .control--select {
+  width: 100%;
+}
+
+/* ------------------------------------------------------------------- chips */
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.chip {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--surface-sunken);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.chip:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.chip--active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.chip__label {
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.chip__hint {
+  color: var(--text-faint);
+  font-size: 0.72rem;
+}
+
+/* --------------------------------------------------------------- screen 7 */
+
+.rule-builder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.rule-builder__arrow {
+  padding-bottom: var(--space-1);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+}
+
+.ladder-rung {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--surface-sunken);
+}
+
+.ladder-rung__text {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.ladder-rung__title {
+  font-size: 0.84rem;
+  font-weight: 500;
+}
+
+.ladder-rung__what {
+  color: var(--text-faint);
+  font-size: 0.74rem;
+}
+
+/* --------------------------------------------------------------- screen 8 */
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr));
+  gap: var(--space-3);
+}
+
+.qa-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--surface-sunken);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.qa-card:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.qa-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.qa-card--open {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* A count worth looking at is coloured; zero of the same thing stays neutral,
+   so the wall of cards does not read as a wall of problems. */
+.qa-card--attention .qa-card__value {
+  color: var(--warning);
+}
+
+.qa-card__value {
+  font-size: 1.3rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+
+.qa-card__label {
+  font-size: 0.78rem;
+}
+
+.qa-card__hint {
+  color: var(--text-faint);
+  font-size: 0.72rem;
+}
+
+/* ------------------------------------------------------------- workspace */
+
+.workspace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 78rem;
+}
+
+.workspace__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.workspace__meta {
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.84rem;
+}
+
+.tab:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.tab--current {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.tab__count {
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.step--workspace {
+  width: 100%;
+  margin-top: var(--space-3);
+}
+
+.recompile-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+/* ------------------------------------------------------------ trees */
+
+.tree {
+  display: flex;
+  overflow: hidden;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--surface-sunken);
+}
+
+.tree__viewport {
+  overflow: auto;
+  height: 30rem;
+}
+
+.tree__canvas {
+  position: relative;
+  width: 100%;
+  min-width: 42rem;
+}
+
+.tree__row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-2);
+  padding-right: var(--space-3);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.82rem;
+}
+
+.tree__row--over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.tree__row--dragging {
+  opacity: 0.5;
+}
+
+.tree__twisty {
+  flex: 0 0 auto;
+  width: 1.25rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.tree__twisty:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.tree__grip {
+  flex: 0 0 auto;
+  width: 1rem;
+  color: var(--text-faint);
+  cursor: grab;
+  font-size: 0.8rem;
+  line-height: 1;
+  touch-action: none;
+}
+
+.tree__grip--empty {
+  cursor: default;
+}
+
+.tree__label {
+  overflow: hidden;
+  flex: 0 0 auto;
+  max-width: 16rem;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree__label--level {
+  color: var(--accent);
+}
+
+.tree__detail {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree__badges {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--space-1);
+}
+
+.tree__action {
+  flex: 0 0 auto;
+}
+
+/* A decided review row stays readable but stops competing for attention. */
+.review-row--decided td {
+  opacity: 0.55;
 }
 
 /* Narrow windows: the split screens stack rather than squeeze. */

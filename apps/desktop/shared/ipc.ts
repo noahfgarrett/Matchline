@@ -4,17 +4,38 @@ import {
   addSourceResultSchema,
   anatomyPreviewSchema,
   assetPreviewSchema,
+  attributeChoiceSchema,
   classCountSchema,
+  compileHistoryEntrySchema,
+  compileIssueKindSchema,
+  compileIssueRowSchema,
+  compileStatusSchema,
+  configPatchSchema,
+  decisionValueSchema,
   draftPatchSchema,
   draftProfileSchema,
+  exportResultSchema,
+  flowPageSchema,
+  flowRootSchema,
+  learnedRuleKindSchema,
+  learnedSummarySchema,
   modelScanSchema,
+  overrideRowSchema,
+  profileSectionSchema,
+  projectConfigSchema,
   projectSummarySchema,
   propertyCatalogRowSchema,
   propertySortSchema,
   recentProjectSchema,
+  reparentPreviewSchema,
   resolverPreviewSchema,
+  reviewPageSchema,
   sourceRoleSchema,
   sourceSummarySchema,
+  templateAnalysisSchema,
+  templateBindingSchema,
+  treeNodeSchema,
+  treePageSchema,
 } from './schemas.js';
 
 /**
@@ -137,6 +158,82 @@ const EXAMPLE_DRAFT = {
     conflictPolicy: 'review',
     labelTemplate: '',
   },
+} as const;
+
+/** The screens 6-7 sections, at their defaults (DECISIONS.md #1). */
+const EXAMPLE_CONFIG = {
+  hierarchy: {
+    levels: [
+      {
+        levelId: 'building',
+        displayName: 'Building',
+        attributeKey: 'building',
+        boundary: true,
+        missingValuePolicy: 'unassigned-group',
+        sort: 'label',
+      },
+    ],
+  },
+  roleGraph: { rules: [{ parentRole: 'MAH', childRole: 'PLC' }] },
+  ladder: {
+    tiers: [
+      'manual',
+      'explicit-model',
+      'profile-lookup',
+      'flow-family',
+      'family-role',
+      'learned-description',
+      'prior-ssm',
+      'model-tree',
+    ],
+  },
+  ssmDisciplineProjection: [{ from: 'I&C', to: 'Mechanical' }],
+  parentTagProperty: null,
+} as const;
+
+const EXAMPLE_COMPILE_SUMMARY = {
+  compileId: 1,
+  profileRevision: 1,
+  finishedAt: '2026-08-08T09:30:00.000Z',
+  durationMs: 412,
+
+  assetCount: 34,
+  duplicateTagCount: 0,
+  resolvedSystemCount: 34,
+  missingSystemCount: 0,
+  systemConflictCount: 0,
+
+  flowNodeCount: 8,
+  modelConfirmedCount: 8,
+  flowOnlyCount: 0,
+  pmdOnlyCount: 0,
+  multiFeedNodeCount: 0,
+
+  rootCount: 30,
+  demotionCount: 1,
+  ambiguousParentCount: 0,
+  cycleCount: 0,
+  unresolvedParentCount: 0,
+
+  learnedProposalCount: 0,
+  skippedClaimInputCount: 0,
+  generatedMelRowCount: 34,
+  reviewItemCount: 2,
+  undecidedReviewItemCount: 2,
+} as const;
+
+const EXAMPLE_TREE_NODE = {
+  nodeKey: 'asset:tag:MAH001-10-01',
+  kind: 'asset',
+  label: 'MAH001-10-01',
+  detail: 'Dragon Air',
+  childCount: 1,
+  assetId: 'tag:MAH001-10-01',
+  dependencyCount: 0,
+  reviewFlagCount: 0,
+  parentStatus: 'root',
+  overridden: false,
+  demoted: false,
 } as const;
 
 export const IPC_CHANNELS = {
@@ -530,16 +627,523 @@ export const IPC_CHANNELS = {
     },
   },
 
-  /** Placeholder until the compile service lands. */
+  /* ------------------------------------- screens 6-7: hierarchy and rules */
+
+  /**
+   * Every attribute a hierarchy level may group by.
+   *
+   * Exactly `@matchline/compiler`'s `ATTRIBUTE_KEYS`, with the plain-language
+   * name and one real example each. Sent rather than hardcoded so a level can
+   * never name a key the engine does not populate.
+   */
+  'hierarchy:attributes': {
+    request: z.void(),
+    response: z.object({ attributes: z.array(attributeChoiceSchema) }),
+    example: {
+      request: undefined,
+      response: {
+        attributes: [
+          {
+            attributeKey: 'building',
+            label: 'Building',
+            what: 'Which building the model puts the equipment in.',
+            example: 'D1',
+            distinctValueCount: 2,
+          },
+        ],
+      },
+    },
+  },
+
+  /** The screens 6-7 sections. Always answers, defaults included. */
+  'config:get': {
+    request: z.void(),
+    response: z.object({ config: projectConfigSchema }),
+    example: { request: undefined, response: { config: EXAMPLE_CONFIG } },
+  },
+
+  /** Writes one or more sections. Sections not named are left untouched. */
+  'config:update': {
+    request: z.object({ patch: configPatchSchema }),
+    response: z.object({ config: projectConfigSchema }),
+    example: {
+      request: { patch: { roleGraph: { rules: [{ parentRole: 'MAH', childRole: 'PLC' }] } } },
+      response: { config: EXAMPLE_CONFIG },
+    },
+  },
+
+  /** Distinct tag `role` values across the catalog, for the role-graph pickers. */
+  'config:roles': {
+    request: z.void(),
+    response: z.object({ roles: z.array(z.string().min(1)) }),
+    example: { request: undefined, response: { roles: ['MAH', 'PLC', 'TIT', 'VFD'] } },
+  },
+
+  /** Distinct `nativeDiscipline` values, for the projection table's left column. */
+  'config:disciplines': {
+    request: z.void(),
+    response: z.object({ disciplines: z.array(z.string().min(1)) }),
+    example: { request: undefined, response: { disciplines: ['I&C', 'Mechanical'] } },
+  },
+
+  /**
+   * Trains a rule set from a finished SSM / registry export and stores it.
+   *
+   * The workbook is read in main and never crosses IPC; the renderer gets the
+   * summary a reviewer judges the training by.
+   */
+  'learned:train': {
+    request: z.object({ kind: learnedRuleKindSchema, path: z.string().min(1) }),
+    response: z.object({ summary: learnedSummarySchema }),
+    example: {
+      request: { kind: 'nesting', path: '/Users/dragon/Prior-SSM.xlsx' },
+      response: {
+        summary: {
+          kind: 'nesting',
+          label: 'Prior-SSM.xlsx',
+          savedAt: '2026-08-08T09:25:00.000Z',
+          rowCount: 120,
+          classCount: 6,
+          gateCount: 6,
+          affinityCount: 4,
+          claimGradeCount: 2,
+          proposalGradeCount: 4,
+          suspectRowCount: 0,
+          grades: [
+            { className: 'VFD', predicted: 12, correct: 11, precision: 0.9167, grade: 'claim' },
+          ],
+        },
+      },
+    },
+  },
+
+  /** Whatever training the project already carries, newest per kind. */
+  'learned:list': {
+    request: z.void(),
+    response: z.object({ summaries: z.array(learnedSummarySchema) }),
+    example: { request: undefined, response: { summaries: [] } },
+  },
+
+  /* --------------------------------------------------- screen 8: compiling */
+
+  /**
+   * Runs the whole pipeline and records it (PRODUCT.md §7 screen 8).
+   *
+   * The compiled project stays in main. What comes back is the checklist; the
+   * lists behind each card are paged through `compile:issues`.
+   */
   'compile:run': {
-    request: z.object({ projectPath: z.string().min(1) }),
+    request: z.void(),
+    response: z.object({ status: compileStatusSchema }),
+    example: {
+      request: undefined,
+      response: { status: { state: 'done', summary: EXAMPLE_COMPILE_SUMMARY } },
+    },
+  },
+
+  /** The current compile, so a reopened workspace knows what it is looking at. */
+  'compile:status': {
+    request: z.void(),
+    response: z.object({ status: compileStatusSchema }),
+    example: { request: undefined, response: { status: { state: 'never-run' } } },
+  },
+
+  /** One page of the list behind a screen-8 card. */
+  'compile:issues': {
+    request: z.object({
+      kind: compileIssueKindSchema,
+      offset: z.number().int().nonnegative(),
+      limit: z.number().int().positive().max(500),
+    }),
     response: z.object({
-      compileId: z.string().min(1),
-      assetCount: z.number().int().nonnegative(),
+      total: z.number().int().nonnegative(),
+      rows: z.array(compileIssueRowSchema),
     }),
     example: {
-      request: { projectPath: '/Users/dragon/Dragon.matchline' },
-      response: { compileId: 'compile-1', assetCount: 0 },
+      request: { kind: 'demotions', offset: 0, limit: 50 },
+      response: {
+        total: 1,
+        rows: [
+          {
+            id: 'tag:RIO603-10-01',
+            title: 'RIO603-10-01',
+            detail: 'PNL603-10-01 became a dependency: System differs.',
+            badge: 'system',
+          },
+        ],
+      },
+    },
+  },
+
+  /** Compile history, newest first. The revision diff picks its baseline here. */
+  'compile:history': {
+    request: z.void(),
+    response: z.object({ compiles: z.array(compileHistoryEntrySchema) }),
+    example: {
+      request: undefined,
+      response: {
+        compiles: [
+          {
+            compileId: 1,
+            profileRevision: 1,
+            finishedAt: '2026-08-08T09:30:00.000Z',
+            assetCount: 34,
+            diffable: true,
+          },
+        ],
+      },
+    },
+  },
+
+  /* ------------------------------------------------- workspace: the SSM tree */
+
+  /** One page of a node's children. `nodeKey: ''` asks for the top level. */
+  'tree:children': {
+    request: z.object({
+      nodeKey: z.string(),
+      offset: z.number().int().nonnegative(),
+      limit: z.number().int().positive().max(500),
+    }),
+    response: treePageSchema,
+    example: {
+      request: { nodeKey: '', offset: 0, limit: 100 },
+      response: { total: 1, rows: [EXAMPLE_TREE_NODE] },
+    },
+  },
+
+  /** Assets whose tag contains `query`, so a big tree stays navigable. */
+  'tree:search': {
+    request: z.object({ query: z.string(), limit: z.number().int().positive().max(200) }),
+    response: z.object({ rows: z.array(treeNodeSchema) }),
+    example: {
+      request: { query: 'MAH001', limit: 50 },
+      response: { rows: [EXAMPLE_TREE_NODE] },
+    },
+  },
+
+  /**
+   * What a drag would do, before it is written.
+   *
+   * `parentAssetId: null` is the make-root question, not "unknown" — the same
+   * distinction `ManualRelationshipOverride` draws.
+   */
+  'tree:reparent-preview': {
+    request: z.object({
+      childAssetId: z.string().min(1),
+      parentAssetId: z.string().min(1).nullable(),
+    }),
+    response: z.object({ preview: reparentPreviewSchema }),
+    example: {
+      request: { childAssetId: 'tag:TIT005-10-01', parentAssetId: 'tag:MAH005-10-01' },
+      response: {
+        preview: {
+          allowed: true,
+          explanation: 'Both are in Building D1 and System 005, so this nests.',
+          boundaryLevelId: '',
+          wouldDemote: false,
+        },
+      },
+    },
+  },
+
+  /* -------------------------------------------- workspace: manual overrides */
+
+  'override:set': {
+    request: z.object({
+      childAssetId: z.string().min(1),
+      parentAssetId: z.string().min(1).nullable(),
+      note: z.string(),
+    }),
+    response: z.object({ overrides: z.array(overrideRowSchema) }),
+    example: {
+      request: {
+        childAssetId: 'tag:TIT005-10-01',
+        parentAssetId: 'tag:MAH005-10-01',
+        note: 'Commissioned as one skid.',
+      },
+      response: {
+        overrides: [
+          {
+            childAssetId: 'tag:TIT005-10-01',
+            childTag: 'TIT005-10-01',
+            parentAssetId: 'tag:MAH005-10-01',
+            parentTag: 'MAH005-10-01',
+            note: 'Commissioned as one skid.',
+            updatedAt: '2026-08-08T09:35:00.000Z',
+          },
+        ],
+      },
+    },
+  },
+
+  'override:list': {
+    request: z.void(),
+    response: z.object({ overrides: z.array(overrideRowSchema) }),
+    example: { request: undefined, response: { overrides: [] } },
+  },
+
+  /** Removing an override is the undo: remove, then recompile. */
+  'override:remove': {
+    request: z.object({ childAssetId: z.string().min(1) }),
+    response: z.object({
+      removed: z.boolean(),
+      overrides: z.array(overrideRowSchema),
+    }),
+    example: {
+      request: { childAssetId: 'tag:TIT005-10-01' },
+      response: { removed: true, overrides: [] },
+    },
+  },
+
+  /* ------------------------------------------ workspace: Electrical Flow */
+
+  /** Sources: nodes that feed something and are fed by nothing. */
+  'flow:roots': {
+    request: z.object({
+      offset: z.number().int().nonnegative(),
+      limit: z.number().int().positive().max(500),
+    }),
+    response: z.object({
+      total: z.number().int().nonnegative(),
+      rows: z.array(flowRootSchema),
+    }),
+    example: {
+      request: { offset: 0, limit: 100 },
+      response: {
+        total: 1,
+        rows: [
+          {
+            nodeId: 'tag:MAH005-10-01',
+            tag: 'MAH005-10-01',
+            matchStatus: 'model-confirmed',
+            reachableCount: 4,
+          },
+        ],
+      },
+    },
+  },
+
+  /** One page of the source-to-load walk from one root, in pre-order. */
+  'flow:walk': {
+    request: z.object({
+      rootNodeId: z.string().min(1),
+      offset: z.number().int().nonnegative(),
+      limit: z.number().int().positive().max(500),
+    }),
+    response: flowPageSchema,
+    example: {
+      request: { rootNodeId: 'tag:MAH005-10-01', offset: 0, limit: 100 },
+      response: {
+        total: 1,
+        rows: [
+          {
+            nodeId: 'tag:MAH005-10-01',
+            tag: 'MAH005-10-01',
+            matchStatus: 'model-confirmed',
+            depth: 0,
+            viaCable: '',
+            description: '',
+            systemLabel: '005',
+            building: 'D1',
+            pmdInstruments: [],
+            feedCount: 1,
+            fedByCount: 0,
+            multiFed: false,
+          },
+        ],
+      },
+    },
+  },
+
+  /* -------------------------------------------------- workspace: review */
+
+  /** One page of the review queue. `kind: ''` means every kind. */
+  'review:page': {
+    request: z.object({
+      kind: z.string(),
+      offset: z.number().int().nonnegative(),
+      limit: z.number().int().positive().max(500),
+    }),
+    response: reviewPageSchema,
+    example: {
+      request: { kind: '', offset: 0, limit: 50 },
+      response: { total: 0, rows: [], kinds: [], undecidedCount: 0 },
+    },
+  },
+
+  /** Records a decision. Earlier decisions for the key are kept, never replaced. */
+  'review:decide': {
+    request: z.object({
+      reviewKey: z.string().min(1),
+      decision: decisionValueSchema,
+      note: z.string(),
+    }),
+    response: z.object({ recorded: z.boolean() }),
+    example: {
+      request: { reviewKey: 'system-conflict|tag:MAH001-10-01|2', decision: 'accepted', note: '' },
+      response: { recorded: true },
+    },
+  },
+
+  /* ------------------------------------------------- workspace: exports */
+
+  'export:generated-mel': {
+    request: z.object({ path: z.string().min(1) }),
+    response: z.object({ result: exportResultSchema }),
+    example: {
+      request: { path: '/Users/dragon/Dragon-MEL.xlsx' },
+      response: {
+        result: {
+          written: true,
+          path: '/Users/dragon/Dragon-MEL.xlsx',
+          byteSize: 8192,
+          note: '34 rows on the canonical column set.',
+        },
+      },
+    },
+  },
+
+  /** Reads a site's own MEL layout and suggests a binding per column (§12.2). */
+  'export:template-analyze': {
+    request: z.object({ path: z.string().min(1) }),
+    response: z.object({ analysis: templateAnalysisSchema }),
+    example: {
+      request: { path: '/Users/dragon/Site-Template.xlsx' },
+      response: {
+        analysis: {
+          path: '/Users/dragon/Site-Template.xlsx',
+          sheetName: 'Site Template',
+          sheetNames: ['Site Template'],
+          headerRow: 1,
+          columns: [{ index: 0, header: 'UPN', suggestedField: 'systemKey', match: 'synonym' }],
+          fieldChoices: ['systemKey', 'blank'],
+        },
+      },
+    },
+  },
+
+  'export:template-mel': {
+    request: z.object({
+      path: z.string().min(1),
+      bindings: z.array(templateBindingSchema).min(1),
+    }),
+    response: z.object({ result: exportResultSchema }),
+    example: {
+      request: {
+        path: '/Users/dragon/Dragon-Site-MEL.xlsx',
+        bindings: [{ templateColumn: 'UPN', field: 'systemKey' }],
+      },
+      response: {
+        result: {
+          written: true,
+          path: '/Users/dragon/Dragon-Site-MEL.xlsx',
+          byteSize: 6144,
+          note: '34 rows on the site template’s own 1 columns.',
+        },
+      },
+    },
+  },
+
+  'export:exto': {
+    request: z.object({ path: z.string().min(1) }),
+    response: z.object({ result: exportResultSchema }),
+    example: {
+      request: { path: '/Users/dragon/Dragon-EXTO.xlsx' },
+      response: {
+        result: {
+          written: true,
+          path: '/Users/dragon/Dragon-EXTO.xlsx',
+          byteSize: 12288,
+          note: '34 rows on the Rev21 upload sheet. No P6 schedule, so the milestone column is blank.',
+        },
+      },
+    },
+  },
+
+  'export:predecessors': {
+    request: z.object({ path: z.string().min(1) }),
+    response: z.object({ result: exportResultSchema }),
+    example: {
+      request: { path: '/Users/dragon/Dragon-Predecessors.xlsx' },
+      response: {
+        result: {
+          written: true,
+          path: '/Users/dragon/Dragon-Predecessors.xlsx',
+          byteSize: 4096,
+          note: '3 systems, 1 predecessor edge.',
+        },
+      },
+    },
+  },
+
+  /** §12.4: this compile against a stored earlier one. */
+  'export:revision-diff': {
+    request: z.object({
+      path: z.string().min(1),
+      previousCompileId: z.number().int().positive(),
+    }),
+    response: z.object({ result: exportResultSchema }),
+    example: {
+      request: { path: '/Users/dragon/Dragon-Revision-Diff.xlsx', previousCompileId: 1 },
+      response: {
+        result: {
+          written: true,
+          path: '/Users/dragon/Dragon-Revision-Diff.xlsx',
+          byteSize: 5120,
+          note: '1 added, 1 removed, 1 description changed, 1 parent moved.',
+        },
+      },
+    },
+  },
+
+  /* ----------------------------------------- screen 9: profile packages */
+
+  /** What is configured and what is not, in the wizard's own words. */
+  'profile:sections': {
+    request: z.void(),
+    response: z.object({ sections: z.array(profileSectionSchema) }),
+    example: {
+      request: undefined,
+      response: {
+        sections: [
+          {
+            name: 'Tag anatomy',
+            what: 'How a tag decomposes into role, system and family.',
+            configured: true,
+            detail: '4 segments taught.',
+          },
+        ],
+      },
+    },
+  },
+
+  /** Writes the portable JSON package (PRODUCT.md §13.3). */
+  'profile:export': {
+    request: z.object({ path: z.string().min(1) }),
+    response: z.object({ result: exportResultSchema }),
+    example: {
+      request: { path: '/Users/dragon/Dragon.matchline-profile.json' },
+      response: {
+        result: {
+          written: true,
+          path: '/Users/dragon/Dragon.matchline-profile.json',
+          byteSize: 2048,
+          note: 'Profile package written. It carries decisions only — no model or spreadsheet rows.',
+        },
+      },
+    },
+  },
+
+  /** Reads a package back into the draft and the screens 6-7 sections. */
+  'profile:import': {
+    request: z.object({ path: z.string().min(1) }),
+    response: z.object({
+      draft: draftProfileSchema,
+      config: projectConfigSchema,
+    }),
+    example: {
+      request: { path: '/Users/dragon/Dragon.matchline-profile.json' },
+      response: { draft: EXAMPLE_DRAFT, config: EXAMPLE_CONFIG },
     },
   },
 

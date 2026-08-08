@@ -2,51 +2,55 @@ import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'rea
 
 import type {
   WireClassCount,
+  WireCompileStatus,
+  WireConfigPatch,
   WireDraftPatch,
   WireDraftProfile,
   WireModelScan,
+  WireProjectConfig,
   WireProjectSummary,
   WirePropertyCatalogRow,
   WireSourceSummary,
 } from '../../../shared/schemas';
 import { call, messageOf } from '../api';
+import { Workspace } from '../workspace/Workspace';
 
 import { Screen1Sources } from './Screen1Sources';
 import { Screen2Model } from './Screen2Model';
 import { Screen3Assets } from './Screen3Assets';
 import { Screen4Anatomy } from './Screen4Anatomy';
 import { Screen5Resolver } from './Screen5Resolver';
+import { Screen6Hierarchy } from './Screen6Hierarchy';
+import { Screen7Relationships } from './Screen7Relationships';
+import { Screen8Preview } from './Screen8Preview';
+import { Screen9Publish } from './Screen9Publish';
 
 /**
- * The Site Setup wizard shell (PRODUCT.md §7).
+ * The Site Setup wizard shell (PRODUCT.md §7), and the project workspace it
+ * opens onto.
  *
- * All nine screens are listed from the start. Screens 6-9 are visible and
- * disabled rather than hidden, because the shape of the work is part of the
- * promise the first screen makes — "about an hour" is only credible if you can
- * see how far it goes.
- *
- * The draft Site Profile lives in the main process. This component holds a
- * mirror of it for rendering and re-reads that mirror from every `profile:update`
- * response, so the screen can never drift from what main will actually save.
+ * The draft Site Profile and the screens 6-7 sections both live in the main
+ * process. This component holds a mirror of each for rendering and re-reads
+ * that mirror from every write's response, so a screen can never drift from
+ * what main will actually compile.
  */
 
 export interface WizardScreen {
   readonly number: number;
   readonly title: string;
   readonly subtitle: string;
-  readonly available: boolean;
 }
 
 export const WIZARD_SCREENS: readonly WizardScreen[] = [
-  { number: 1, title: 'Project sources', subtitle: 'Models and spreadsheets', available: true },
-  { number: 2, title: 'Model scan', subtitle: 'What the model contains', available: true },
-  { number: 3, title: 'Asset definition', subtitle: 'What counts as equipment', available: true },
-  { number: 4, title: 'Tag anatomy', subtitle: 'How your tags decompose', available: true },
-  { number: 5, title: 'System Resolver', subtitle: 'Where systems come from', available: true },
-  { number: 6, title: 'Hierarchy Composer', subtitle: 'Next round', available: false },
-  { number: 7, title: 'Relationship rules', subtitle: 'Next round', available: false },
-  { number: 8, title: 'Preview and QA', subtitle: 'Next round', available: false },
-  { number: 9, title: 'Publish Site Profile', subtitle: 'Next round', available: false },
+  { number: 1, title: 'Project sources', subtitle: 'Models and spreadsheets' },
+  { number: 2, title: 'Model scan', subtitle: 'What the model contains' },
+  { number: 3, title: 'Asset definition', subtitle: 'What counts as equipment' },
+  { number: 4, title: 'Tag anatomy', subtitle: 'How your tags decompose' },
+  { number: 5, title: 'System Resolver', subtitle: 'Where systems come from' },
+  { number: 6, title: 'Hierarchy Composer', subtitle: 'Levels and boundaries' },
+  { number: 7, title: 'Relationship rules', subtitle: 'What may parent what' },
+  { number: 8, title: 'Preview and QA', subtitle: 'Compile and check' },
+  { number: 9, title: 'Publish Site Profile', subtitle: 'Save and reuse' },
 ];
 
 /** How many catalog rows the property pickers offer. Sorted by coverage. */
@@ -54,6 +58,7 @@ const PICKER_PROPERTY_LIMIT = 500;
 
 export interface WizardContext {
   readonly draft: WireDraftProfile;
+  readonly config: WireProjectConfig;
   readonly properties: readonly WirePropertyCatalogRow[];
   readonly classes: readonly WireClassCount[];
   readonly scan: WireModelScan | null;
@@ -69,6 +74,15 @@ export interface WizardContext {
    * updaters one at a time, makes that impossible.
    */
   update: (build: (draft: WireDraftProfile) => WireDraftPatch) => Promise<void>;
+  /**
+   * Writes one screens-6/7 section.
+   *
+   * A plain patch rather than an updater: these sections are whole values the
+   * screen already holds (a level list, a rule list), so there is no
+   * read-modify-write to lose. Writes are still queued, so two fast edits land
+   * in order.
+   */
+  updateConfig: (patch: WireConfigPatch) => Promise<void>;
   refreshModel: () => Promise<void>;
 }
 
@@ -80,12 +94,15 @@ export function Wizard({
   readonly onClosed: () => void;
 }): JSX.Element {
   const [screen, setScreen] = useState<number>(1);
+  const [inWorkspace, setInWorkspace] = useState<boolean>(false);
   const [draft, setDraft] = useState<WireDraftProfile | null>(null);
+  const [config, setConfig] = useState<WireProjectConfig | null>(null);
   const [savedRevision, setSavedRevision] = useState<number | null>(project.savedRevision);
   const [sources, setSources] = useState<readonly WireSourceSummary[]>([]);
   const [scan, setScan] = useState<WireModelScan | null>(null);
   const [properties, setProperties] = useState<readonly WirePropertyCatalogRow[]>([]);
   const [classes, setClasses] = useState<readonly WireClassCount[]>([]);
+  const [compileStatus, setCompileStatus] = useState<WireCompileStatus>({ state: 'never-run' });
   const [error, setError] = useState<string | null>(null);
   const [saveNote, setSaveNote] = useState<string>('');
   const [saving, setSaving] = useState<boolean>(false);
@@ -136,13 +153,19 @@ export function Wizard({
 
     void (async (): Promise<void> => {
       try {
-        const state = await call(window.matchline.profile.draft());
+        const [state, configState, status] = await Promise.all([
+          call(window.matchline.profile.draft()),
+          call(window.matchline.config.get()),
+          call(window.matchline.compile.status()),
+        ]);
         if (cancelled) {
           return;
         }
         latestDraft.current = state.draft;
         setDraft(state.draft);
+        setConfig(configState.config);
         setSavedRevision(state.savedRevision);
+        setCompileStatus(status.status);
         await refreshSources();
         await refreshModel();
       } catch (caught: unknown) {
@@ -157,47 +180,81 @@ export function Wizard({
     };
   }, [refreshModel, refreshSources]);
 
+  /** Chained through `finally` so one failed write cannot wedge the queue. */
+  const enqueue = useCallback(async (run: () => Promise<void>): Promise<void> => {
+    const queued = updateQueue.current.then(run, run);
+    updateQueue.current = queued;
+    await queued;
+  }, []);
+
   const update = useCallback(
     async (build: (current: WireDraftProfile) => WireDraftPatch): Promise<void> => {
-      const run = async (): Promise<void> => {
+      await enqueue(async (): Promise<void> => {
         const current = latestDraft.current;
         if (current === null) {
           return;
         }
         try {
-          const result = await call(
-            window.matchline.profile.update({ patch: build(current) }),
-          );
+          const result = await call(window.matchline.profile.update({ patch: build(current) }));
           latestDraft.current = result.draft;
           setDraft(result.draft);
           setError(null);
         } catch (caught: unknown) {
           setError(messageOf(caught));
         }
-      };
+      });
+    },
+    [enqueue],
+  );
 
-      // Chained through `finally` so one failed write cannot wedge the queue.
-      const queued = updateQueue.current.then(run, run);
-      updateQueue.current = queued;
-      await queued;
+  const updateConfig = useCallback(
+    async (patch: WireConfigPatch): Promise<void> => {
+      await enqueue(async (): Promise<void> => {
+        try {
+          const result = await call(window.matchline.config.update({ patch }));
+          setConfig(result.config);
+          setError(null);
+        } catch (caught: unknown) {
+          setError(messageOf(caught));
+        }
+      });
+    },
+    [enqueue],
+  );
+
+  const saveProfile = useCallback(
+    async (note: string): Promise<number | null> => {
+      setSaving(true);
+      setSaveMessage(null);
+      try {
+        const result = await call(window.matchline.profile.save({ note }));
+        setSavedRevision(result.revision);
+        setSaveMessage(`Saved as revision ${String(result.revision)}.`);
+        setError(null);
+        return result.revision;
+      } catch (caught: unknown) {
+        setError(messageOf(caught));
+        return null;
+      } finally {
+        setSaving(false);
+      }
     },
     [],
   );
 
-  const saveProfile = useCallback(async (): Promise<void> => {
-    setSaving(true);
-    setSaveMessage(null);
-    try {
-      const result = await call(window.matchline.profile.save({ note: saveNote.trim() }));
-      setSavedRevision(result.revision);
-      setSaveMessage(`Saved as revision ${String(result.revision)}.`);
-      setError(null);
-    } catch (caught: unknown) {
-      setError(messageOf(caught));
-    } finally {
-      setSaving(false);
-    }
-  }, [saveNote]);
+  /** After an imported package: re-read both mirrors from main. */
+  const reloadFromMain = useCallback(async (): Promise<void> => {
+    const [state, configState, status] = await Promise.all([
+      call(window.matchline.profile.draft()),
+      call(window.matchline.config.get()),
+      call(window.matchline.compile.status()),
+    ]);
+    latestDraft.current = state.draft;
+    setDraft(state.draft);
+    setConfig(configState.config);
+    setSavedRevision(state.savedRevision);
+    setCompileStatus(status.status);
+  }, []);
 
   const closeProject = useCallback(async (): Promise<void> => {
     try {
@@ -210,16 +267,18 @@ export function Wizard({
 
   const context: WizardContext | null = useMemo(
     (): WizardContext | null =>
-      draft === null
+      draft === null || config === null
         ? null
-        : { draft, properties, classes, scan, sources, update, refreshModel },
-    [draft, properties, classes, scan, sources, update, refreshModel],
+        : { draft, config, properties, classes, scan, sources, update, updateConfig, refreshModel },
+    [draft, config, properties, classes, scan, sources, update, updateConfig, refreshModel],
   );
 
   const refreshSourcesAndModel = useCallback(async (): Promise<void> => {
     await refreshSources();
     await refreshModel();
   }, [refreshModel, refreshSources]);
+
+  const compiled = compileStatus.state === 'done';
 
   return (
     <div className="wizard">
@@ -236,11 +295,11 @@ export function Wizard({
             <li key={entry.number}>
               <button
                 type="button"
-                className={`step${screen === entry.number ? ' step--current' : ''}`}
+                className={`step${screen === entry.number && !inWorkspace ? ' step--current' : ''}`}
                 data-testid={`step-${String(entry.number)}`}
-                disabled={!entry.available}
-                aria-current={screen === entry.number ? 'step' : undefined}
+                aria-current={screen === entry.number && !inWorkspace ? 'step' : undefined}
                 onClick={(): void => {
+                  setInWorkspace(false);
                   setScreen(entry.number);
                 }}
               >
@@ -253,6 +312,25 @@ export function Wizard({
             </li>
           ))}
         </ol>
+
+        <button
+          type="button"
+          className={`step step--workspace${inWorkspace ? ' step--current' : ''}`}
+          data-testid="open-workspace"
+          disabled={!compiled}
+          aria-current={inWorkspace ? 'step' : undefined}
+          onClick={(): void => {
+            setInWorkspace(true);
+          }}
+        >
+          <span className="step__number">→</span>
+          <span className="step__text">
+            <span className="step__title">Project workspace</span>
+            <span className="step__subtitle">
+              {compiled ? 'Tree, flow, review, exports' : 'Compile on screen 8 first'}
+            </span>
+          </span>
+        </button>
 
         <div className="wizard__save">
           <label className="wizard__save-label" htmlFor="save-note">
@@ -279,7 +357,7 @@ export function Wizard({
             data-testid="save-profile"
             disabled={saving}
             onClick={(): void => {
-              void saveProfile();
+              void saveProfile(saveNote.trim());
             }}
           >
             {saving ? 'Saving…' : 'Save profile'}
@@ -315,8 +393,32 @@ export function Wizard({
 
         {context === null ? (
           <p className="callout callout--info">Loading this project…</p>
+        ) : inWorkspace ? (
+          <Workspace
+            projectName={project.name}
+            status={compileStatus}
+            onStatusChange={setCompileStatus}
+          />
         ) : (
-          <ScreenBody screen={screen} context={context} onSourcesChanged={refreshSourcesAndModel} />
+          <ScreenBody
+            screen={screen}
+            context={context}
+            savedRevision={savedRevision}
+            onSourcesChanged={refreshSourcesAndModel}
+            onSave={saveProfile}
+            onImported={reloadFromMain}
+            onCompiled={(): void => {
+              void call(window.matchline.compile.status()).then(
+                (data): void => {
+                  setCompileStatus(data.status);
+                },
+                (): void => {
+                  // The compile itself already reported; a status re-read that
+                  // fails changes nothing the user can act on.
+                },
+              );
+            }}
+          />
         )}
       </main>
     </div>
@@ -326,11 +428,19 @@ export function Wizard({
 function ScreenBody({
   screen,
   context,
+  savedRevision,
   onSourcesChanged,
+  onSave,
+  onImported,
+  onCompiled,
 }: {
   readonly screen: number;
   readonly context: WizardContext;
+  readonly savedRevision: number | null;
   readonly onSourcesChanged: () => Promise<void>;
+  readonly onSave: (note: string) => Promise<number | null>;
+  readonly onImported: () => Promise<void>;
+  readonly onCompiled: () => void;
 }): JSX.Element {
   switch (screen) {
     case 1:
@@ -343,11 +453,22 @@ function ScreenBody({
       return <Screen4Anatomy context={context} />;
     case 5:
       return <Screen5Resolver context={context} />;
-    default:
+    case 6:
+      return <Screen6Hierarchy context={context} />;
+    case 7:
+      return <Screen7Relationships context={context} />;
+    case 8:
+      return <Screen8Preview context={context} onCompiled={onCompiled} />;
+    case 9:
       return (
-        <p className="callout callout--info">
-          This screen arrives in the next round. Screens 1 to 5 are ready now.
-        </p>
+        <Screen9Publish
+          context={context}
+          savedRevision={savedRevision}
+          onSave={onSave}
+          onImported={onImported}
+        />
       );
+    default:
+      return <p className="callout callout--info">That screen does not exist.</p>;
   }
 }

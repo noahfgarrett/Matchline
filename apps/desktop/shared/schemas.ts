@@ -459,3 +459,456 @@ export const resolverPreviewSchema = z.discriminatedUnion('state', [
   }),
 ]);
 export type WireResolverPreview = z.infer<typeof resolverPreviewSchema>;
+
+/* ============================================================ screen 6: the
+ * hierarchy
+ *
+ * Mirrors `HierarchyConfig` / `HierarchyLevelConfig` in `@matchline/domain`.
+ * The wire shape is identical because a level has no "undecided" state: every
+ * field is answered the moment the level exists.
+ */
+
+export const missingValuePolicySchema = z.enum([
+  'unassigned-group',
+  'review',
+  'provisional-root',
+]);
+export type WireMissingValuePolicy = z.infer<typeof missingValuePolicySchema>;
+
+export const levelSortSchema = z.enum(['label', 'key']);
+export type WireLevelSort = z.infer<typeof levelSortSchema>;
+
+export const hierarchyLevelSchema = z.object({
+  levelId: z.string().min(1),
+  displayName: z.string().min(1),
+  attributeKey: z.string().min(1),
+  boundary: z.boolean(),
+  missingValuePolicy: missingValuePolicySchema,
+  sort: levelSortSchema,
+});
+export type WireHierarchyLevel = z.infer<typeof hierarchyLevelSchema>;
+
+export const hierarchyConfigSchema = z.object({
+  levels: z.array(hierarchyLevelSchema),
+});
+export type WireHierarchyConfig = z.infer<typeof hierarchyConfigSchema>;
+
+/**
+ * One attribute a level can group by, with the plain-language name and the
+ * example screen 6 shows for it.
+ *
+ * Sent from main rather than hardcoded in the renderer so the list is exactly
+ * `@matchline/compiler`'s `ATTRIBUTE_KEYS` — a level naming anything else finds
+ * no value and silently groups nothing.
+ */
+export const attributeChoiceSchema = z.object({
+  attributeKey: z.string().min(1),
+  label: z.string().min(1),
+  what: z.string().min(1),
+  example: z.string().min(1),
+  /** Distinct values this attribute has across the compiled assets, if known. */
+  distinctValueCount: z.number().int().nonnegative().nullable(),
+});
+export type WireAttributeChoice = z.infer<typeof attributeChoiceSchema>;
+
+/* ==================================================== screen 7: relationships */
+
+/** Mirrors `RoleRule`: taught pairings are directional, one rule each way. */
+export const roleRuleSchema = z.object({
+  parentRole: z.string().min(1),
+  childRole: z.string().min(1),
+});
+export type WireRoleRule = z.infer<typeof roleRuleSchema>;
+
+export const roleGraphSchema = z.object({ rules: z.array(roleRuleSchema) });
+export type WireRoleGraph = z.infer<typeof roleGraphSchema>;
+
+/** Mirrors `LadderSourceKind` (PRODUCT.md §11.1). */
+export const ladderSourceSchema = z.enum([
+  'manual',
+  'explicit-model',
+  'profile-lookup',
+  'flow-family',
+  'family-role',
+  'learned-description',
+  'prior-ssm',
+  'model-tree',
+]);
+export type WireLadderSource = z.infer<typeof ladderSourceSchema>;
+
+/** The walk order. A rung left out of `tiers` is disabled, exactly as in the engine. */
+export const ladderConfigSchema = z.object({ tiers: z.array(ladderSourceSchema) });
+export type WireLadderConfig = z.infer<typeof ladderConfigSchema>;
+
+/**
+ * One `nativeDiscipline -> ssmDiscipline` rewrite.
+ *
+ * A list of pairs rather than a record, so the row order the user sees is the
+ * order that round-trips and a half-typed `from` cannot collide with another row.
+ */
+export const disciplineRewriteSchema = z.object({
+  from: z.string().min(1),
+  to: z.string(),
+});
+export type WireDisciplineRewrite = z.infer<typeof disciplineRewriteSchema>;
+
+/**
+ * The sections screens 6-7 configure.
+ *
+ * Deliberately separate from {@link draftProfileSchema}: `SiteProfile` in
+ * `@matchline/domain` carries no hierarchy, role graph, ladder, discipline
+ * projection or parent-tag property, and `@matchline/compiler` takes all five
+ * on `CompileProjectInput` instead. The wire keeps them together in the shape a
+ * profile section would eventually hold, so widening the domain type later is a
+ * move, not a redesign.
+ */
+export const projectConfigSchema = z.object({
+  hierarchy: hierarchyConfigSchema,
+  roleGraph: roleGraphSchema,
+  ladder: ladderConfigSchema,
+  ssmDisciplineProjection: z.array(disciplineRewriteSchema),
+  /** The model property naming an asset's parent, or `null` when unmapped. */
+  parentTagProperty: propertyRefSchema.nullable(),
+});
+export type WireProjectConfig = z.infer<typeof projectConfigSchema>;
+
+/** A partial write from screen 6 or 7. Absent sections are left alone. */
+export const configPatchSchema = z.object({
+  hierarchy: hierarchyConfigSchema.optional(),
+  roleGraph: roleGraphSchema.optional(),
+  ladder: ladderConfigSchema.optional(),
+  ssmDisciplineProjection: z.array(disciplineRewriteSchema).optional(),
+  parentTagProperty: propertyRefSchema.nullable().optional(),
+});
+export type WireConfigPatch = z.infer<typeof configPatchSchema>;
+
+/* ------------------------------------------------------------ learned rules */
+
+export const learnedRuleKindSchema = z.enum(['nesting', 'item-master']);
+export type WireLearnedRuleKind = z.infer<typeof learnedRuleKindSchema>;
+
+/** One trained class, as the training panel prints it. */
+export const learnedGradeSchema = z.object({
+  className: z.string(),
+  predicted: z.number().int().nonnegative(),
+  correct: z.number().int().nonnegative(),
+  precision: z.number(),
+  grade: z.string().min(1),
+});
+export type WireLearnedGrade = z.infer<typeof learnedGradeSchema>;
+
+/**
+ * What one training run learned, in numbers a reviewer can judge.
+ *
+ * `claimGradeCount` is the number that matters: a class only builds hierarchy
+ * once it has proven itself (DECISIONS.md #3), and everything else is a
+ * proposal for the review queue.
+ */
+export const learnedSummarySchema = z.object({
+  kind: learnedRuleKindSchema,
+  label: z.string(),
+  savedAt: z.string(),
+  rowCount: z.number().int().nonnegative(),
+  /** Nesting: description classes. Item master: learned keys. */
+  classCount: z.number().int().nonnegative(),
+  /** Nesting: role gates. Item master: keys at or above the 0.9 gate. */
+  gateCount: z.number().int().nonnegative(),
+  affinityCount: z.number().int().nonnegative(),
+  claimGradeCount: z.number().int().nonnegative(),
+  proposalGradeCount: z.number().int().nonnegative(),
+  /** Rows training refused to learn from, with the reason. */
+  suspectRowCount: z.number().int().nonnegative(),
+  grades: z.array(learnedGradeSchema),
+});
+export type WireLearnedSummary = z.infer<typeof learnedSummarySchema>;
+
+/* ======================================================= screen 8: the compile */
+
+/**
+ * Where a compile is right now.
+ *
+ * `running` is honest rather than decorative: `compileProject` is synchronous
+ * in the main process, so the renderer sets `running` itself when it asks and
+ * replaces it with whatever main answers.
+ */
+export const compileStateSchema = z.enum(['never-run', 'running', 'done', 'failed']);
+export type WireCompileState = z.infer<typeof compileStateSchema>;
+
+/** One drill-down list screen 8's cards open. */
+export const compileIssueKindSchema = z.enum([
+  'assets',
+  'flow-nodes',
+  'demotions',
+  'duplicate-tags',
+  'ambiguous-parents',
+  'cycles',
+  'missing-systems',
+  'system-conflicts',
+  'unresolved-parents',
+  'review-items',
+]);
+export type WireCompileIssueKind = z.infer<typeof compileIssueKindSchema>;
+
+/** One row of any drill-down list. Deliberately one shape for all of them. */
+export const compileIssueRowSchema = z.object({
+  /** Stable within its list; the asset id, the tag, or a review key. */
+  id: z.string().min(1),
+  title: z.string().min(1),
+  detail: z.string(),
+  badge: z.string(),
+});
+export type WireCompileIssueRow = z.infer<typeof compileIssueRowSchema>;
+
+/** Everything screen 8's checklist prints (PRODUCT.md §7 screen 8). */
+export const compileSummarySchema = z.object({
+  compileId: z.number().int().positive(),
+  profileRevision: z.number().int().positive(),
+  finishedAt: z.string().min(1),
+  durationMs: z.number().int().nonnegative(),
+
+  assetCount: z.number().int().nonnegative(),
+  duplicateTagCount: z.number().int().nonnegative(),
+  resolvedSystemCount: z.number().int().nonnegative(),
+  missingSystemCount: z.number().int().nonnegative(),
+  systemConflictCount: z.number().int().nonnegative(),
+
+  flowNodeCount: z.number().int().nonnegative(),
+  modelConfirmedCount: z.number().int().nonnegative(),
+  flowOnlyCount: z.number().int().nonnegative(),
+  pmdOnlyCount: z.number().int().nonnegative(),
+  multiFeedNodeCount: z.number().int().nonnegative(),
+
+  rootCount: z.number().int().nonnegative(),
+  demotionCount: z.number().int().nonnegative(),
+  ambiguousParentCount: z.number().int().nonnegative(),
+  cycleCount: z.number().int().nonnegative(),
+  unresolvedParentCount: z.number().int().nonnegative(),
+
+  learnedProposalCount: z.number().int().nonnegative(),
+  skippedClaimInputCount: z.number().int().nonnegative(),
+  generatedMelRowCount: z.number().int().nonnegative(),
+  reviewItemCount: z.number().int().nonnegative(),
+  undecidedReviewItemCount: z.number().int().nonnegative(),
+});
+export type WireCompileSummary = z.infer<typeof compileSummarySchema>;
+
+export const compileStatusSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('never-run') }),
+  z.object({ state: z.literal('running') }),
+  z.object({ state: z.literal('done'), summary: compileSummarySchema }),
+  z.object({ state: z.literal('failed'), reason: z.string().min(1) }),
+]);
+export type WireCompileStatus = z.infer<typeof compileStatusSchema>;
+
+/** One entry of the compile history, for the revision-diff picker. */
+export const compileHistoryEntrySchema = z.object({
+  compileId: z.number().int().positive(),
+  profileRevision: z.number().int().positive(),
+  finishedAt: z.string().min(1),
+  assetCount: z.number().int().nonnegative(),
+  /** Whether this compile stored the generated-MEL assets a diff needs. */
+  diffable: z.boolean(),
+});
+export type WireCompileHistoryEntry = z.infer<typeof compileHistoryEntrySchema>;
+
+/* ==================================================== workspace: the SSM tree */
+
+export const treeNodeKindSchema = z.enum(['level', 'asset']);
+export type WireTreeNodeKind = z.infer<typeof treeNodeKindSchema>;
+
+/**
+ * One row of the SSM tree.
+ *
+ * `nodeKey` addresses the row for a children-of request; it is opaque to the
+ * renderer, which never constructs one. `''` is the root.
+ */
+export const treeNodeSchema = z.object({
+  nodeKey: z.string().min(1),
+  kind: treeNodeKindSchema,
+  label: z.string().min(1),
+  /** The level's display name, or the asset's description. */
+  detail: z.string(),
+  childCount: z.number().int().nonnegative(),
+  /** Assets only; `''` on level rows. */
+  assetId: z.string(),
+  dependencyCount: z.number().int().nonnegative(),
+  reviewFlagCount: z.number().int().nonnegative(),
+  /** `resolved`, `root`, `provisional-root`, `unresolved`, or `''` on levels. */
+  parentStatus: z.string(),
+  /** True when this asset's parent came from a manual override. */
+  overridden: z.boolean(),
+  /** True when the boundary fold took this asset's selected parent away. */
+  demoted: z.boolean(),
+});
+export type WireTreeNode = z.infer<typeof treeNodeSchema>;
+
+export const treePageSchema = z.object({
+  total: z.number().int().nonnegative(),
+  rows: z.array(treeNodeSchema),
+});
+export type WireTreePage = z.infer<typeof treePageSchema>;
+
+/** What a drag reparent would do, checked in main before anything is written. */
+export const reparentPreviewSchema = z.object({
+  allowed: z.boolean(),
+  /** One sentence, always present — a refusal and an approval both explain themselves. */
+  explanation: z.string().min(1),
+  /** The level whose value differs, when a boundary is what stops it. */
+  boundaryLevelId: z.string(),
+  /** True when the parent survives the ladder but the fold would demote it. */
+  wouldDemote: z.boolean(),
+});
+export type WireReparentPreview = z.infer<typeof reparentPreviewSchema>;
+
+/** One stored manual relationship override, as the overrides panel lists it. */
+export const overrideRowSchema = z.object({
+  childAssetId: z.string().min(1),
+  childTag: z.string(),
+  /** `''` when the override is "make this a root". */
+  parentAssetId: z.string(),
+  parentTag: z.string(),
+  note: z.string(),
+  updatedAt: z.string(),
+});
+export type WireOverrideRow = z.infer<typeof overrideRowSchema>;
+
+/* =============================================== workspace: Electrical Flow */
+
+export const flowNodeSchema = z.object({
+  nodeId: z.string().min(1),
+  tag: z.string().min(1),
+  /** `model-confirmed`, `flow-only` or `pmd-only`. */
+  matchStatus: z.string().min(1),
+  depth: z.number().int().nonnegative(),
+  /** The cable the feed came in on, when the source named one. */
+  viaCable: z.string(),
+  description: z.string(),
+  systemLabel: z.string(),
+  building: z.string(),
+  /** Instruments terminating here. Listed, never descended into (PRODUCT.md §10). */
+  pmdInstruments: z.array(z.string()),
+  feedCount: z.number().int().nonnegative(),
+  fedByCount: z.number().int().nonnegative(),
+  /** Two or more incoming feeds: an alternate or parallel supply. */
+  multiFed: z.boolean(),
+});
+export type WireFlowNode = z.infer<typeof flowNodeSchema>;
+
+export const flowPageSchema = z.object({
+  total: z.number().int().nonnegative(),
+  rows: z.array(flowNodeSchema),
+});
+export type WireFlowPage = z.infer<typeof flowPageSchema>;
+
+export const flowRootSchema = z.object({
+  nodeId: z.string().min(1),
+  tag: z.string().min(1),
+  matchStatus: z.string().min(1),
+  /** Nodes reachable from this root, the root included. */
+  reachableCount: z.number().int().nonnegative(),
+});
+export type WireFlowRoot = z.infer<typeof flowRootSchema>;
+
+/* ======================================================== workspace: review */
+
+export const decisionValueSchema = z.enum(['accepted', 'rejected', 'deferred']);
+export type WireDecisionValue = z.infer<typeof decisionValueSchema>;
+
+export const reviewRowSchema = z.object({
+  reviewKey: z.string().min(1),
+  kind: z.string().min(1),
+  /** `reviewItemSummary`'s own sentence, never reworded here. */
+  summary: z.string().min(1),
+  /** The tags behind the ids, so the queue reads in site vocabulary. */
+  detail: z.string(),
+  /** `null` until somebody decides. */
+  decision: decisionValueSchema.nullable(),
+  decidedAt: z.string(),
+  note: z.string(),
+});
+export type WireReviewRow = z.infer<typeof reviewRowSchema>;
+
+export const reviewPageSchema = z.object({
+  total: z.number().int().nonnegative(),
+  rows: z.array(reviewRowSchema),
+  /** Every kind present in this compile with its count, for the filter. */
+  kinds: z.array(
+    z.object({ kind: z.string().min(1), count: z.number().int().nonnegative() }),
+  ),
+  undecidedCount: z.number().int().nonnegative(),
+});
+export type WireReviewPage = z.infer<typeof reviewPageSchema>;
+
+/* ======================================================= workspace: exports */
+
+/** Where an export went, and what it contains. */
+export const exportResultSchema = z.discriminatedUnion('written', [
+  z.object({ written: z.literal(false), reason: z.string().min(1) }),
+  z.object({
+    written: z.literal(true),
+    path: z.string().min(1),
+    byteSize: z.number().int().nonnegative(),
+    /** One plain-language line: what was written and how much of it. */
+    note: z.string().min(1),
+  }),
+]);
+export type WireExportResult = z.infer<typeof exportResultSchema>;
+
+/** One column of a picked site-template MEL, with what Matchline suggests for it. */
+export const templateColumnSchema = z.object({
+  index: z.number().int().nonnegative(),
+  header: z.string(),
+  /** A §12.1 field name, `'blank'`, or `''` when nothing was suggested. */
+  suggestedField: z.string(),
+  /** `exact`, `trimmed-case-insensitive`, `synonym`, or `''`. */
+  match: z.string(),
+});
+export type WireTemplateColumn = z.infer<typeof templateColumnSchema>;
+
+export const templateAnalysisSchema = z.object({
+  path: z.string().min(1),
+  sheetName: z.string(),
+  sheetNames: z.array(z.string()),
+  headerRow: z.number().int().nonnegative(),
+  columns: z.array(templateColumnSchema),
+  /** Every §12.1 field a column may be bound to, plus `blank`. */
+  fieldChoices: z.array(z.string().min(1)),
+});
+export type WireTemplateAnalysis = z.infer<typeof templateAnalysisSchema>;
+
+/** One column binding, as the mapping table sends it back. */
+export const templateBindingSchema = z.object({
+  templateColumn: z.string(),
+  /** A §12.1 field name or `'blank'`. */
+  field: z.string().min(1),
+});
+export type WireTemplateBinding = z.infer<typeof templateBindingSchema>;
+
+/* ================================================ screen 9: profile packages */
+
+/**
+ * The portable profile package (PRODUCT.md §13.3).
+ *
+ * A superset of the domain `SiteProfile`: the wizard's own draft plus the
+ * sections screens 6-7 configure, which the domain type cannot carry yet. Raw
+ * model files and spreadsheet rows are never in here — only decisions.
+ */
+export const profilePackageSchema = z.object({
+  formatVersion: z.literal(1),
+  exportedAt: z.string().min(1),
+  appVersion: z.string(),
+  draft: draftProfileSchema,
+  config: projectConfigSchema,
+});
+export type WireProfilePackage = z.infer<typeof profilePackageSchema>;
+
+/** What screen 9 prints about the profile as it stands. */
+export const profileSectionSchema = z.object({
+  name: z.string().min(1),
+  /** One line about what this section decides. */
+  what: z.string().min(1),
+  configured: z.boolean(),
+  /** What it is set to, in words. `''` when nothing is set. */
+  detail: z.string(),
+});
+export type WireProfileSection = z.infer<typeof profileSectionSchema>;
