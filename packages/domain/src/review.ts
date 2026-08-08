@@ -124,6 +124,48 @@ export interface NestingProposalReviewItem {
   readonly confidence: number;
 }
 
+/**
+ * A profile-stated claim rule that produced nothing because a tag it names has
+ * no identity in this compile (relationship-claims' skipped list, surfaced).
+ *
+ * Skipping is loud by design: a mistyped tag in a profile lookup would
+ * otherwise vanish silently and the site would never learn its rule is dead.
+ */
+export interface DeadClaimRuleReviewItem {
+  readonly kind: 'dead-claim-rule';
+  readonly ladderSource: string;
+  readonly reason: string;
+  readonly childRef: string;
+  readonly parentRef: string;
+}
+
+/**
+ * A profile alias whose target names a canonical tag no asset carries.
+ *
+ * Terminal by the same rule as ambiguity: the site said "this spelling is a
+ * different asset" -- falling through to a weaker tier would attach the tag to
+ * exactly the asset the alias was overriding.
+ */
+export interface UnresolvableAliasReviewItem {
+  readonly kind: 'unresolvable-alias';
+  readonly evidenceTag: string;
+  readonly aliasTarget: string;
+}
+
+/**
+ * Component collapse absorbed an object that carries its own tag.
+ *
+ * The tag no longer names an asset; evidence spelled with it will attach to
+ * the absorbing asset. A person should confirm that is what the site means
+ * (or list the class as separately commissionable).
+ */
+export interface AbsorbedTaggedComponentReviewItem {
+  readonly kind: 'absorbed-tagged-component';
+  readonly absorbedTag: string;
+  readonly absorbingAssetId: string;
+  readonly objectId: number;
+}
+
 export type ReviewItem =
   | SystemConflictReviewItem
   | DuplicateModelTagReviewItem
@@ -133,7 +175,10 @@ export type ReviewItem =
   | AmbiguousParentReviewItem
   | StructuralCycleReviewItem
   | MissingBoundaryReviewItem
-  | NestingProposalReviewItem;
+  | NestingProposalReviewItem
+  | DeadClaimRuleReviewItem
+  | UnresolvableAliasReviewItem
+  | AbsorbedTaggedComponentReviewItem;
 
 /**
  * A one-line description of what needs deciding.
@@ -161,6 +206,12 @@ export function reviewItemSummary(item: ReviewItem): string {
       return `asset ${item.assetId}: boundary level ${item.levelId} has no value`;
     case 'nesting-proposal':
       return `asset ${item.assetId}: proposed parent ${item.proposedParentId} (${item.ruleDetail})`;
+    case 'dead-claim-rule':
+      return `${item.ladderSource} rule ${item.childRef} -> ${item.parentRef} produced nothing (${item.reason})`;
+    case 'unresolvable-alias':
+      return `alias ${item.evidenceTag} -> ${item.aliasTarget}: no asset carries that tag`;
+    case 'absorbed-tagged-component':
+      return `tag ${item.absorbedTag} was absorbed into ${item.absorbingAssetId} (object ${item.objectId})`;
   }
   return assertNever(item, 'unhandled ReviewItem');
 }
