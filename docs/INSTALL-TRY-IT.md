@@ -187,7 +187,12 @@ build in section 1 was cross-built on a Mac.
 
 To run it from source without packaging: `npm run dev:desktop`.
 
-To check the engine is healthy: `npm run build && npm test`.
+To check the engine is healthy, run what CI runs — `npm run build && npm run test:workspaces &&
+npm run test:integration && (cd packages/legacy-parity && node --test --test-skip-pattern "frozen
+SSM Builder|preserves a frozen edge contract|budget" tests/*.test.mjs)`. Plain `npm test` adds the
+legacy differential tests, which compare against a frozen SSM Builder checkout at an absolute path
+that exists only on the maintainer's machine, plus wall-clock performance budgets; both fail
+everywhere else for reasons that are not about your build.
 
 ---
 

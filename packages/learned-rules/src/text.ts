@@ -103,6 +103,19 @@ export function sharedRun(a: ReadonlyArray<string>, b: ReadonlyArray<string>): n
   return best;
 }
 
+/**
+ * UTF-16 code-unit order, so ordering never depends on a locale.
+ *
+ * The house comparator, matching `@matchline/identity` and
+ * `@matchline/electrical-flow`. `localeCompare` files "B" after "a" and "e"
+ * next to "é", which makes the emitted rule set depend on the machine that
+ * trained it -- and byte-stable output is the whole contract here.
+ */
+export function compareText(left: string, right: string): number {
+  if (left < right) return -1;
+  return left > right ? 1 : 0;
+}
+
 /** Rounds for byte-stable serialization; `NaN`/infinities collapse to 0. */
 export function round(value: number, places: number): number {
   if (!Number.isFinite(value)) return 0;

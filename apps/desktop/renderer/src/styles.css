@@ -170,6 +170,18 @@ code {
   font-size: 0.82rem;
 }
 
+/* The migration confirm card: one paragraph, then the two answers. */
+.landing__confirm > p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.landing__confirm-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
 .recent-list {
   display: flex;
   flex-direction: column;
@@ -884,7 +896,8 @@ code {
   color: var(--warning);
 }
 
-.badge--file-missing {
+.badge--file-missing,
+.badge--file-changed {
   border-color: var(--danger);
   color: var(--danger);
 }

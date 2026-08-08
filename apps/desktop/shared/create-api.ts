@@ -1,10 +1,13 @@
 import { IPC_CHANNEL_NAMES } from './ipc.js';
 
-import type { MatchlineApi } from './api-types.js';
+import type { MatchlineChannelApi } from './api-types.js';
 
 /**
- * Generates the preload façade from the channel table. Kept free of Electron imports so
- * it can be unit-tested against a fake invoker.
+ * Generates the channel half of the preload façade from the channel table. Kept free of
+ * Electron imports so it can be unit-tested against a fake invoker.
+ *
+ * The other half — `files`, which needs `webUtils` and so cannot be built here — is
+ * added in preload/index.ts, the one place that is allowed to touch Electron.
  */
 
 export type IpcInvoker = (channel: string, request: unknown) => Promise<unknown>;
@@ -16,7 +19,7 @@ export function toCamelCase(segment: string): string {
   );
 }
 
-export function createMatchlineApi(invoke: IpcInvoker): MatchlineApi {
+export function createMatchlineApi(invoke: IpcInvoker): MatchlineChannelApi {
   const api: Record<string, Record<string, (request: unknown) => Promise<unknown>>> = {};
 
   for (const channel of IPC_CHANNEL_NAMES) {
@@ -33,7 +36,8 @@ export function createMatchlineApi(invoke: IpcInvoker): MatchlineApi {
     api[domain] = methods;
   }
 
-  // The loop above builds exactly the domain/verb structure MatchlineApi describes; the
-  // shape cannot be proven to the compiler because it is assembled from dynamic keys.
-  return api as unknown as MatchlineApi;
+  // The loop above builds exactly the domain/verb structure MatchlineChannelApi
+  // describes; the shape cannot be proven to the compiler because it is assembled from
+  // dynamic keys.
+  return api as unknown as MatchlineChannelApi;
 }

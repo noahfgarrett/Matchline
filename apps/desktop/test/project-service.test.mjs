@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test, { after, before } from 'node:test';
 
 import { writeDragonFixture } from '@matchline/model-schema/fixtures/dragon';
@@ -413,7 +414,9 @@ test('the full screens 1-5 flow, over the Dragon fixture', async (t) => {
 test('reopening restores the draft from the saved revision', () => {
   const service = newService();
   try {
-    const { project, notice } = service.open(projectPath);
+    const opened = service.open(projectPath, false);
+    assert.equal(opened.outcome, 'opened');
+    const { project, notice } = opened;
     assert.equal(project.name, 'Dragon');
     assert.equal(project.savedRevision, 1);
     assert.equal(project.sourceCount, 2);
@@ -452,7 +455,7 @@ test('reopening restores the draft from the saved revision', () => {
 test('removing the model source takes screens 2-5 back to blocked', () => {
   const service = newService();
   try {
-    service.open(projectPath);
+    service.open(projectPath, false);
     assert.equal(service.removeSource('model', 'Dragon.matchline-cache'), true);
     assert.equal(service.modelScan(), null);
     assert.deepEqual(service.classList(), []);
@@ -479,6 +482,231 @@ test('the recent-projects list survives a new service on the same userData', () 
     assert.equal(recents[0].path, projectPath);
     assert.equal(recents[0].name, 'Dragon');
     assert.equal(recents[0].missing, false);
+  } finally {
+    service.close();
+  }
+});
+
+/* ------------------------------------------- the sha256 index is not authority */
+
+/** Every screen 3-5 answer, so a project set up this way can compile. */
+function teachDragon(service) {
+  service.updateDraft({
+    propertyMappings: {
+      equipmentTag: { category: 'Dragon Data', name: 'Tag' },
+      description: { category: 'Dragon Data', name: 'Manufacturer' },
+      equipmentType: { category: 'Item', name: 'Type' },
+      building: { category: 'Dragon Data', name: 'Building' },
+      nativeDiscipline: null,
+    },
+  });
+  service.updateDraft({ tagAnatomy: DRAGON_ANATOMY });
+  service.updateDraft({ systemResolver: DRAGON_RESOLVER });
+}
+
+test('a source whose bytes changed is reported as changed, not read anyway', () => {
+  // Its own copies of everything: this test edits a source file, and the
+  // fixtures above are shared with every test in this file.
+  const ownMelPath = join(workDir, 'Changed-MEL.xlsx');
+  const ownProjectPath = join(workDir, 'Changed.matchline');
+  copyFileSync(melPath, ownMelPath);
+
+  const setup = newService();
+  try {
+    setup.create(ownProjectPath, 'Changed');
+    setup.addSources([cachePath, ownMelPath]);
+    teachDragon(setup);
+    assert.equal(setup.compile().state, 'done', 'it compiles before anything is touched');
+  } finally {
+    setup.close();
+  }
+
+  // Same name, same folder, different bytes — a new revision of the MEL saved
+  // over the old one, which is exactly what happens on a real job.
+  writeFileSync(
+    ownMelPath,
+    writeWorkbook([
+      {
+        name: 'MEL',
+        aoa: [
+          ['Equipment Tag', 'UPN', 'System Description'],
+          ['MAH001-10-01', '001', 'Mechanical Dry Air Handling'],
+          ['MAH002-10-01', '002', 'Mechanical Hot Water'],
+          ['TIT603-10-01', '603', 'Temperature Instrumentation'],
+          ['PLC001-10-01', '001', 'Controls'],
+        ],
+      },
+    ]),
+  );
+
+  const service = newService();
+  try {
+    const opened = service.open(ownProjectPath, false);
+    assert.equal(opened.outcome, 'opened');
+
+    const mel = service.listSources().find((source) => source.role === 'mel');
+    assert.equal(mel.status, 'file-changed', 'distinct from file-missing: the file is right there');
+    assert.match(mel.note, /has changed since it was added/);
+    assert.match(mel.note, /Add it again/);
+
+    const model = service.listSources().find((source) => source.role === 'model');
+    assert.equal(model.status, 'ready', 'the file that did not change is untouched by this');
+
+    const refused = service.compile();
+    assert.equal(refused.state, 'failed');
+    assert.match(refused.reason, /Changed-MEL\.xlsx/, 'the refusal names the file');
+    assert.match(refused.reason, /changed on disk/);
+
+    // Re-adding is the fix, because adding is what records the hash.
+    const [readded] = service.addSources([ownMelPath]);
+    assert.equal(readded.outcome, 'added');
+    assert.equal(readded.source.status, 'ready');
+    assert.equal(service.listSources().find((source) => source.role === 'mel').status, 'ready');
+
+    assert.equal(service.compile().state, 'done', 'and the compile runs again');
+  } finally {
+    service.close();
+  }
+});
+
+/* ------------------------------------------ the recorded revision is the real one */
+
+test('a compile records the revision it compiled, not the last one saved', () => {
+  const ownProjectPath = join(workDir, 'Revisions.matchline');
+  const service = newService();
+  try {
+    service.create(ownProjectPath, 'Revisions');
+    service.addSources([cachePath, melPath]);
+    teachDragon(service);
+
+    const saved = service.saveProfile('Screens 1-5');
+    assert.equal(saved.revision, 1);
+    assert.equal(service.draftState().savedRevision, 1);
+
+    const first = service.compile();
+    assert.equal(first.state, 'done');
+    assert.equal(first.summary.profileRevision, 1, 'a saved draft compiles as itself');
+
+    // One real change to the profile, and no save.
+    service.updateDraft({
+      tagAnatomy: { ...DRAGON_ANATOMY, ignoredSuffixes: ['-SPARE'] },
+    });
+    assert.equal(
+      service.draftState().savedRevision,
+      null,
+      'the stored revision is no longer what is in memory',
+    );
+
+    const second = service.compile();
+    assert.equal(second.state, 'done');
+    assert.equal(second.summary.profileRevision, 2, 'the edit was saved as its own revision');
+    assert.equal(service.draftState().savedRevision, 2);
+
+    const history = service.compileHistory();
+    assert.deepEqual(
+      history.map((entry) => entry.profileRevision).sort(),
+      [1, 2],
+      'each compile points at the profile that produced it',
+    );
+  } finally {
+    service.close();
+  }
+
+  // And revision 2 really holds the edit: reopening restores from it.
+  const reopened = newService();
+  try {
+    reopened.open(ownProjectPath, false);
+    assert.deepEqual(reopened.draftState().draft.tagAnatomy.ignoredSuffixes, ['-SPARE']);
+  } finally {
+    reopened.close();
+  }
+});
+
+/* ------------------------------------------------------ migration is opt-in */
+
+/**
+ * A project file that declares itself version 1.
+ *
+ * Built by walking a current file back rather than from a frozen v1 DDL:
+ * whether the migration preserves a real v1 file's rows is
+ * `@matchline/project-store`'s own test, and what this file is about is who
+ * gets asked before it runs.
+ */
+function writeOlderProject(name) {
+  const olderPath = join(workDir, name);
+  const service = newService();
+  service.create(olderPath, 'Older');
+  service.close();
+
+  const db = new DatabaseSync(olderPath);
+  try {
+    db.exec('DROP TABLE config');
+    db.exec('DELETE FROM migrations WHERE version > 1');
+    db.exec("UPDATE meta SET value = '1' WHERE key = 'schema_version'");
+  } finally {
+    db.close();
+  }
+  return olderPath;
+}
+
+test('an older project file is not upgraded until the user says so', () => {
+  const olderPath = writeOlderProject('Older.matchline');
+
+  const service = newService();
+  try {
+    const asked = service.open(olderPath, false);
+    assert.equal(asked.outcome, 'migration-needed');
+    assert.equal(asked.migrationNeeded.fromVersion, 1);
+    assert.equal(asked.migrationNeeded.toVersion, 2);
+    assert.equal(service.current(), null, 'nothing was opened');
+    assert.equal(existsSync(`${olderPath}.backup-1`), false, 'and nothing was written');
+
+    const accepted = service.open(olderPath, true);
+    assert.equal(accepted.outcome, 'opened');
+    assert.equal(accepted.project.schemaVersion, 2);
+    assert.deepEqual(accepted.notice.migration, {
+      fromVersion: 1,
+      toVersion: 2,
+      backupPath: `${olderPath}.backup-1`,
+    });
+    assert.equal(existsSync(`${olderPath}.backup-1`), true, 'the original is kept');
+  } finally {
+    service.close();
+  }
+});
+
+test('a backup from an earlier upgrade attempt blocks the next one, by path', () => {
+  const olderPath = writeOlderProject('Blocked.matchline');
+  writeFileSync(`${olderPath}.backup-1`, 'left over from last time');
+
+  const service = newService();
+  try {
+    const blocked = service.open(olderPath, true);
+    assert.equal(blocked.outcome, 'backup-blocked');
+    assert.equal(blocked.backupPath, `${olderPath}.backup-1`);
+    assert.equal(
+      // Unchanged: the refusal happens before anything is written.
+      String(new DatabaseSync(olderPath, { readOnly: true })
+        .prepare("SELECT value FROM meta WHERE key = 'schema_version'")
+        .get().value),
+      '1',
+    );
+  } finally {
+    service.close();
+  }
+});
+
+test('creating a project over an existing file is refused in plain language', () => {
+  const takenPath = join(workDir, 'Taken.matchline');
+  writeFileSync(takenPath, 'something else lives here');
+
+  const service = newService();
+  try {
+    assert.throws(
+      () => service.create(takenPath, 'Taken'),
+      /already a file called Taken\.matchline/,
+    );
+    assert.equal(service.current(), null);
   } finally {
     service.close();
   }

@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -31,6 +32,16 @@ export function registerAppScheme(): void {
 /** Must run after `app.whenReady()`. */
 export function serveRendererFrom(rendererRoot: string): void {
   const root = path.resolve(rendererRoot);
+  // Resolved once: on macOS the bundle commonly sits under a symlinked prefix
+  // (`/var` -> `/private/var`), so comparing a real path against a non-real root
+  // would refuse every legitimate request.
+  const realRoot = ((): string => {
+    try {
+      return realpathSync(root);
+    } catch {
+      return root;
+    }
+  })();
 
   protocol.handle(APP_SCHEME, async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
@@ -39,15 +50,38 @@ export function serveRendererFrom(rendererRoot: string): void {
       return new Response('Not found', { status: 404 });
     }
 
-    const relativePath = decodeURIComponent(url.pathname).replace(/^\/+/, '');
+    // A malformed percent-escape (`app://renderer/%zz`) makes decodeURIComponent
+    // throw. Refused as a bad request rather than allowed to reject the promise
+    // the protocol handler returns.
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(url.pathname);
+    } catch {
+      return new Response('Bad request', { status: 400 });
+    }
+
+    const relativePath = decoded.replace(/^\/+/, '');
     const target = path.resolve(root, relativePath === '' ? 'index.html' : relativePath);
 
-    // Refuse anything that escapes the bundle directory (`..`, absolute paths, symlink
-    // bait). `root + path.sep` so a sibling directory sharing the prefix cannot pass.
+    // Refuse anything that escapes the bundle directory (`..`, absolute paths).
+    // `root + path.sep` so a sibling directory sharing the prefix cannot pass.
     if (target !== root && !target.startsWith(root + path.sep)) {
       return new Response('Forbidden', { status: 403 });
     }
 
-    return net.fetch(pathToFileURL(target).toString());
+    // Then the same question again after following symlinks, which the textual
+    // check above cannot see: a link inside the bundle pointing anywhere else is
+    // exactly how a path that "is" inside it turns out not to be.
+    let realTarget: string;
+    try {
+      realTarget = realpathSync(target);
+    } catch {
+      return new Response('Not found', { status: 404 });
+    }
+    if (realTarget !== realRoot && !realTarget.startsWith(realRoot + path.sep)) {
+      return new Response('Forbidden', { status: 403 });
+    }
+
+    return net.fetch(pathToFileURL(realTarget).toString());
   });
 }

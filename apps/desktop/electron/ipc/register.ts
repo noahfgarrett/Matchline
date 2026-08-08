@@ -110,17 +110,51 @@ export function registerIpc(
 }
 
 /**
+ * The scheme-and-authority of a URL, or `null` when it is not a URL at all.
+ *
+ * Not `URL.origin`: `app://` is not a scheme the URL standard knows, so its
+ * origin is the opaque string `"null"` — and comparing opaque origins would
+ * make every `app://` URL equal to every other one. `protocol` + `host` is the
+ * comparison that actually distinguishes `app://renderer` from
+ * `app://renderer-evil`, and it matches `origin` exactly for http(s), where
+ * `host` already carries the port.
+ *
+ * Exported because navigation lockdown in the main process has to answer the
+ * same question, and two implementations of "is this ours" is one too many.
+ */
+export function originOf(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  return `${parsed.protocol}//${parsed.host}`;
+}
+
+/**
  * Sender validation (PRODUCT.md §16). A frame is trusted only when it is a frame we
- * loaded ourselves: no null frame, and a URL under one of the app's own origins.
+ * loaded ourselves: no null frame, and a URL whose origin is *equal to* one of the
+ * app's own.
+ *
+ * Equality rather than a prefix test, which is what a hostname like
+ * `renderer-evil` or a port like `51730` would otherwise walk straight through.
  */
 export function createSenderCheck(allowedOrigins: readonly string[]): IpcSenderCheck {
-  const origins = allowedOrigins.filter((origin: string): boolean => origin.length > 0);
+  const origins = new Set<string>();
+  for (const candidate of allowedOrigins) {
+    const origin = originOf(candidate);
+    if (origin !== null) {
+      origins.add(origin);
+    }
+  }
 
   return (event: IpcInvokeEventLike): boolean => {
     const frame = event.senderFrame;
     if (frame === null) {
       return false;
     }
-    return origins.some((origin: string): boolean => frame.url.startsWith(origin));
+    const origin = originOf(frame.url);
+    return origin !== null && origins.has(origin);
   };
 }

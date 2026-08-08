@@ -24,6 +24,20 @@
  * property should win over an earlier one that did not. Trimming is the only
  * transform here; normalization is an explicit, provenanced resolver step
  * (PRODUCT.md §5.5).
+ *
+ * ## Except the equipment tag, which is the representative object's alone
+ *
+ * `asset-catalog` reads `canonicalTag` off the representative object and no
+ * other (`packages/asset-catalog/src/catalog.ts`, the `AssetDraft`
+ * construction): the tag names the asset, and an absorbed component is a part
+ * of the asset rather than the asset itself, so its tag never renames the
+ * whole. First-non-blank-across-all-objects would answer differently for
+ * exactly one asset shape -- an untagged representative that absorbed a tagged
+ * component -- and then the same asset would carry a tag through the seam and
+ * an empty `canonicalTag` on `ModelAsset`. A resolver rung addressing the tag
+ * property, or a Studio preview, would be reading a tag the catalog says the
+ * asset does not have. So the seam special-cases that one `PropertyRef` and
+ * reads it the way the catalog does.
  */
 import type { PropertyRef } from '@matchline/domain';
 import type { ModelAsset } from '@matchline/asset-catalog';
@@ -72,15 +86,33 @@ function meaningful(value: string | null): string | null {
  * One pass over `cache.propertiesOf` per owned object, in `asset.objectIds`
  * order. Pure with respect to the cache: nothing is written, and the same cache
  * and asset always produce the same bag.
+ *
+ * `equipmentTag` is the profile's tag mapping, and it is the one pair read off
+ * the representative object only -- see this file's header for why. It is
+ * required rather than optional: a caller that forgets it would silently get
+ * the reading that disagrees with the catalog, which is the bug this parameter
+ * exists to make impossible.
  */
-export function readAssetProperties(cache: ExtractionCache, asset: ModelAsset): AssetPropertyBag {
+export function readAssetProperties(
+  cache: ExtractionCache,
+  asset: ModelAsset,
+  equipmentTag: PropertyRef,
+): AssetPropertyBag {
   const properties = new Map<string, Map<string, string>>();
   const ownerObjectIds = new Map<string, number>();
+  const representative = asset.objectIds[0];
+  const tagKey = propertyKey(equipmentTag);
 
   for (const objectId of asset.objectIds) {
     for (const property of cache.propertiesOf(objectId)) {
       const value = meaningful(property.valueText);
       if (value === null) {
+        continue;
+      }
+      const key = propertyKey({ category: property.category, name: property.name });
+      // An absorbed component's tag is a part's tag; it never becomes the
+      // whole's, exactly as `asset-catalog` reads it.
+      if (key === tagKey && objectId !== representative) {
         continue;
       }
       let byName = properties.get(property.category);
@@ -92,7 +124,7 @@ export function readAssetProperties(cache: ExtractionCache, asset: ModelAsset): 
         continue;
       }
       byName.set(property.name, value);
-      ownerObjectIds.set(propertyKey({ category: property.category, name: property.name }), objectId);
+      ownerObjectIds.set(key, objectId);
     }
   }
 
@@ -107,8 +139,12 @@ export function readAssetProperties(cache: ExtractionCache, asset: ModelAsset): 
  * the input a Site Profile Studio preview feeds to `resolveSubject` when a user
  * is trying a resolver rung out.
  */
-export function subjectPropertiesFor(cache: ExtractionCache, asset: ModelAsset): SubjectProperties {
-  return readAssetProperties(cache, asset).properties;
+export function subjectPropertiesFor(
+  cache: ExtractionCache,
+  asset: ModelAsset,
+  equipmentTag: PropertyRef,
+): SubjectProperties {
+  return readAssetProperties(cache, asset, equipmentTag).properties;
 }
 
 /** One property as the bag holds it, with the object that supplied it. */

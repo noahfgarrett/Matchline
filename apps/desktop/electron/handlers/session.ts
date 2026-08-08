@@ -1,5 +1,9 @@
+import path from 'node:path';
+
 import { IpcHandlerError } from '../ipc/register.js';
+import type { PathGrants } from '../security/path-grants.js';
 import type { ProjectService } from '../services/project-session.js';
+import { screenDroppedPaths } from '../services/sources.js';
 
 import type { IpcChannelName, IpcRequest, IpcResponse } from '../../shared/ipc.js';
 
@@ -22,6 +26,7 @@ export type SessionChannel = Extract<
   | 'project:current'
   | 'project:recent'
   | 'source:add'
+  | 'source:add-dropped'
   | 'source:list'
   | 'source:remove'
   | 'model:scan'
@@ -77,11 +82,19 @@ export type SessionHandlers = {
  * The service throws plain `Error`s whose messages are already written for a
  * person; wrapping them in `IpcHandlerError` keeps that message intact instead
  * of letting `registerIpc` prefix it with handler machinery.
+ *
+ * An `IpcHandlerError` is passed through untouched. A handler that raised one
+ * had already decided which code the renderer should see — `path-not-granted`
+ * is not a service failure, and relabelling it `handler-failed` would throw
+ * away the only thing that distinguishes it.
  */
 function guard<T>(work: () => T): T {
   try {
     return work();
   } catch (error: unknown) {
+    if (error instanceof IpcHandlerError) {
+      throw error;
+    }
     throw new IpcHandlerError(
       'handler-failed',
       error instanceof Error ? error.message : String(error),
@@ -89,34 +102,107 @@ function guard<T>(work: () => T): T {
   }
 }
 
-export function createSessionHandlers(service: ProjectService): SessionHandlers {
+/**
+ * The session handlers.
+ *
+ * @param grants the paths a dialog (or main's own recents list) has handed the
+ * renderer. Required rather than optional: a permissive default is exactly the
+ * hole this closes, and it should not be reachable by forgetting an argument.
+ */
+export function createSessionHandlers(
+  service: ProjectService,
+  grants: PathGrants,
+): SessionHandlers {
+  /**
+   * Refuses a path the renderer was never given.
+   *
+   * The message names the file and says what to do, because the one way an
+   * honest renderer hits this is a path that has gone stale — a recents entry
+   * from before a project close, for instance.
+   */
+  function requireGranted(candidate: string): string {
+    if (!grants.isGranted(candidate)) {
+      throw new IpcHandlerError(
+        'path-not-granted',
+        `Matchline will only read or write files you have chosen yourself, and ` +
+          `${path.basename(candidate)} was not one of them. Use the Browse or Save button ` +
+          'to pick it.',
+      );
+    }
+    return candidate;
+  }
+
   return {
     async 'project:create'(
       request: IpcRequest<'project:create'>,
     ): Promise<IpcResponse<'project:create'>> {
-      return { project: guard(() => service.create(request.path, request.name)) };
+      return {
+        project: guard(() => service.create(requireGranted(request.path), request.name)),
+      };
     },
 
     async 'project:open'(
       request: IpcRequest<'project:open'>,
     ): Promise<IpcResponse<'project:open'>> {
-      return guard(() => service.open(request.path));
+      return guard(() =>
+        service.open(requireGranted(request.path), request.acceptMigration === true),
+      );
     },
 
+    /** Closing drops the paths this project's dialogs granted, along with it. */
     async 'project:close'(): Promise<IpcResponse<'project:close'>> {
-      return { closed: service.close() };
+      const closed = service.close();
+      grants.clear();
+      return { closed };
     },
 
     async 'project:current'(): Promise<IpcResponse<'project:current'>> {
       return { project: service.current() };
     },
 
+    /**
+     * The recents list is main's own record of files this installation opened,
+     * so handing it to the renderer is also granting it: the paths came from
+     * here, not from there.
+     */
     async 'project:recent'(): Promise<IpcResponse<'project:recent'>> {
-      return { projects: [...service.recentProjects()] };
+      const projects = [...service.recentProjects()];
+      grants.grant(...projects.map((entry) => entry.path));
+      return { projects };
     },
 
     async 'source:add'(request: IpcRequest<'source:add'>): Promise<IpcResponse<'source:add'>> {
-      return { results: [...guard(() => service.addSources(request.paths))] };
+      const paths = request.paths.map(requireGranted);
+      return { results: [...guard(() => service.addSources(paths))] };
+    },
+
+    /**
+     * Drag-and-drop intake.
+     *
+     * No `requireGranted`, because there is nothing to check against: the path
+     * came off the drag payload rather than out of a dialog. `screenDroppedPaths`
+     * is the substitute — main decides from the filesystem what it will open, and
+     * mints no grant, so a drop can register a source and do nothing else. The
+     * reasoning is written out in full in services/sources.ts.
+     *
+     * `addSources` is called even when nothing survived screening, so that "no
+     * project is open" still reaches the user ahead of a list of file complaints.
+     */
+    async 'source:add-dropped'(
+      request: IpcRequest<'source:add-dropped'>,
+    ): Promise<IpcResponse<'source:add-dropped'>> {
+      const screening = screenDroppedPaths(request.paths);
+      const added = guard(() => service.addSources(screening.accepted));
+      return {
+        results: [
+          ...added,
+          ...screening.rejected.map((entry) => ({
+            outcome: 'rejected' as const,
+            fileName: entry.fileName,
+            reason: entry.reason,
+          })),
+        ],
+      };
     },
 
     async 'source:list'(): Promise<IpcResponse<'source:list'>> {
@@ -200,7 +286,11 @@ export function createSessionHandlers(service: ProjectService): SessionHandlers 
     async 'learned:train'(
       request: IpcRequest<'learned:train'>,
     ): Promise<IpcResponse<'learned:train'>> {
-      return { summary: guard(() => service.trainLearnedRules(request.kind, request.path)) };
+      return {
+        summary: guard(() =>
+          service.trainLearnedRules(request.kind, requireGranted(request.path)),
+        ),
+      };
     },
 
     async 'learned:list'(): Promise<IpcResponse<'learned:list'>> {
@@ -304,36 +394,42 @@ export function createSessionHandlers(service: ProjectService): SessionHandlers 
     async 'export:generated-mel'(
       request: IpcRequest<'export:generated-mel'>,
     ): Promise<IpcResponse<'export:generated-mel'>> {
-      return { result: guard(() => service.exportGeneratedMel(request.path)) };
+      return { result: guard(() => service.exportGeneratedMel(requireGranted(request.path))) };
     },
 
     async 'export:template-analyze'(
       request: IpcRequest<'export:template-analyze'>,
     ): Promise<IpcResponse<'export:template-analyze'>> {
-      return { analysis: guard(() => service.analyzeTemplate(request.path)) };
+      return { analysis: guard(() => service.analyzeTemplate(requireGranted(request.path))) };
     },
 
     async 'export:template-mel'(
       request: IpcRequest<'export:template-mel'>,
     ): Promise<IpcResponse<'export:template-mel'>> {
-      return { result: guard(() => service.exportTemplateMel(request.path, request.bindings)) };
+      return {
+        result: guard(() =>
+          service.exportTemplateMel(requireGranted(request.path), request.bindings),
+        ),
+      };
     },
 
     async 'export:exto'(request: IpcRequest<'export:exto'>): Promise<IpcResponse<'export:exto'>> {
-      return { result: guard(() => service.exportExto(request.path)) };
+      return { result: guard(() => service.exportExto(requireGranted(request.path))) };
     },
 
     async 'export:predecessors'(
       request: IpcRequest<'export:predecessors'>,
     ): Promise<IpcResponse<'export:predecessors'>> {
-      return { result: guard(() => service.exportPredecessors(request.path)) };
+      return { result: guard(() => service.exportPredecessors(requireGranted(request.path))) };
     },
 
     async 'export:revision-diff'(
       request: IpcRequest<'export:revision-diff'>,
     ): Promise<IpcResponse<'export:revision-diff'>> {
       return {
-        result: guard(() => service.exportRevisionDiff(request.path, request.previousCompileId)),
+        result: guard(() =>
+          service.exportRevisionDiff(requireGranted(request.path), request.previousCompileId),
+        ),
       };
     },
 
@@ -344,13 +440,13 @@ export function createSessionHandlers(service: ProjectService): SessionHandlers 
     async 'profile:export'(
       request: IpcRequest<'profile:export'>,
     ): Promise<IpcResponse<'profile:export'>> {
-      return { result: guard(() => service.exportProfilePackage(request.path)) };
+      return { result: guard(() => service.exportProfilePackage(requireGranted(request.path))) };
     },
 
     async 'profile:import'(
       request: IpcRequest<'profile:import'>,
     ): Promise<IpcResponse<'profile:import'>> {
-      return guard(() => service.importProfilePackage(request.path));
+      return guard(() => service.importProfilePackage(requireGranted(request.path)));
     },
   };
 }

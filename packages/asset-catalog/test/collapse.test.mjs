@@ -177,3 +177,73 @@ test('collapse of tagged equipment alone is a no-op on Dragon', () => {
   assert.deepEqual(collapsed.assets, flat.assets);
   assert.equal(collapsed.impact.collapsedCount, 0);
 });
+
+test('an absorbed component that carries its own tag is a review item, not a silence', () => {
+  const { assets, reviewItems } = buildAssetCatalog(chain, TAG_ONLY_MAPPINGS, COLLAPSING);
+  // B, C and D each carry a tag that no longer names an asset. Evidence spelled
+  // with one of them would otherwise suffix-match ASSY-01 with nothing said.
+  assert.deepEqual(reviewItems, [
+    {
+      kind: 'absorbed-tagged-component',
+      absorbedTag: 'ASSY-01-B',
+      absorbingAssetId: 'tag:ASSY-01',
+      objectId: 3,
+    },
+    {
+      kind: 'absorbed-tagged-component',
+      absorbedTag: 'ASSY-01-C',
+      absorbingAssetId: 'tag:ASSY-01',
+      objectId: 4,
+    },
+    {
+      kind: 'absorbed-tagged-component',
+      absorbedTag: 'ASSY-01-D',
+      absorbingAssetId: 'tag:ASSY-01',
+      objectId: 7,
+    },
+  ]);
+  assert.deepEqual(assets[0].absorbedTags, ['ASSY-01-B', 'ASSY-01-C', 'ASSY-01-D']);
+});
+
+test('a class that escapes collapse raises nothing for the components it keeps', () => {
+  const { assets, reviewItems } = buildAssetCatalog(chain, TAG_ONLY_MAPPINGS, {
+    ...COLLAPSING,
+    separatelyCommissionableClasses: ['Assembly'],
+  });
+  // B escaped, so only C (into B) and D (into A) are absorbed tagged components.
+  assert.deepEqual(
+    reviewItems.map((item) => [item.absorbedTag, item.absorbingAssetId]),
+    [
+      ['ASSY-01-C', 'tag:ASSY-01-B'],
+      ['ASSY-01-D', 'tag:ASSY-01'],
+    ],
+  );
+  assert.deepEqual(
+    assets.map((asset) => [asset.canonicalTag, asset.absorbedTags]),
+    [
+      ['ASSY-01', ['ASSY-01-D']],
+      ['ASSY-01-B', ['ASSY-01-C']],
+    ],
+  );
+});
+
+test('an untagged component is absorbed with nothing to review', () => {
+  const { assets, reviewItems } = buildAssetCatalog(dragon, DRAGON_MAPPINGS, {
+    requireTagProperty: false,
+    collapseComponents: true,
+    includedClasses: ['Equipment', 'Solid'],
+  });
+  // Dragon's Solids carry no tag of their own, so absorbing them says nothing
+  // a person has to settle.
+  assert.deepEqual(reviewItems, []);
+  assert.ok(assets.every((asset) => asset.absorbedTags.length === 0));
+});
+
+test('collapse turned off absorbs nothing and reviews nothing', () => {
+  const { assets, reviewItems } = buildAssetCatalog(chain, TAG_ONLY_MAPPINGS, {
+    ...COLLAPSING,
+    collapseComponents: false,
+  });
+  assert.deepEqual(reviewItems, []);
+  assert.ok(assets.every((asset) => asset.absorbedTags.length === 0));
+});

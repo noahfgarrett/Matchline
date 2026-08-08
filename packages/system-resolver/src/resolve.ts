@@ -25,6 +25,7 @@ import type {
 import { applyAnatomy, type AnatomyResult } from '@matchline/tag-anatomy';
 
 import { evaluateComponent, ruleIdOf, sourceKindOf, type RungContext } from './chain.js';
+import { buildSystemJoinIndex, type SystemJoinIndex } from './join.js';
 import { buildLabel } from './label.js';
 import { normalizeSystemValue } from './normalize.js';
 import type {
@@ -78,6 +79,7 @@ function runChain(
   context: ResolveContext,
   manual: ManualAssignment | undefined,
   seedJoinKey: string | null,
+  joinIndex: SystemJoinIndex,
 ): ChainRun {
   const claims: SystemClaim[] = [];
   const skipped: SkippedRung[] = [];
@@ -97,6 +99,7 @@ function runChain(
       melRows: context.melRows,
       manual,
       joinKey,
+      joinIndex,
     };
     const outcome = evaluateComponent(component, chain, rungIndex, rungContext);
     if (!outcome.ok) {
@@ -192,11 +195,31 @@ function firstManual(claims: ReadonlyArray<SystemClaim>): SystemClaim | null {
   return claims.find((claim) => claim.component === 'manual') ?? null;
 }
 
-/** Resolves one subject. Exported for callers that stream assets one at a time. */
+/**
+ * Resolves one subject. Exported for callers that stream assets one at a time.
+ *
+ * The join index is rebuilt per call here; `resolveSystems` builds it once and
+ * shares it, which is what keeps a whole-model compile off an O(subjects x MEL
+ * keys) path.
+ */
 export function resolveSubject(
   subject: ResolverSubject,
   config: SystemResolverConfig,
   context: ResolveContext,
+): SubjectResolution {
+  return resolveSubjectWith(
+    subject,
+    config,
+    context,
+    buildSystemJoinIndex(context.catalog, context.melRows, config.normalization),
+  );
+}
+
+function resolveSubjectWith(
+  subject: ResolverSubject,
+  config: SystemResolverConfig,
+  context: ResolveContext,
+  joinIndex: SystemJoinIndex,
 ): SubjectResolution {
   const anatomy: AnatomyResult | null =
     context.anatomy === undefined ? null : applyAnatomy(context.anatomy, subject.canonicalTag);
@@ -212,6 +235,7 @@ export function resolveSubject(
     context,
     manual,
     null,
+    joinIndex,
   );
 
   const manualKeyClaim = firstManual(keyRun.claims);
@@ -230,6 +254,7 @@ export function resolveSubject(
     context,
     manual,
     keyClaim === null ? null : keyClaim.proposedValue,
+    joinIndex,
   );
 
   const descriptionClaim =
@@ -290,9 +315,10 @@ export function resolveSystems(
 ): ResolveSystemsResult {
   const bySubject = new Map<string, SubjectResolution>();
   const reviewItems: ReviewItem[] = [];
+  const joinIndex = buildSystemJoinIndex(context.catalog, context.melRows, config.normalization);
 
   for (const subject of subjects) {
-    const resolved = resolveSubject(subject, config, context);
+    const resolved = resolveSubjectWith(subject, config, context, joinIndex);
     bySubject.set(subject.assetId, resolved);
     reviewItems.push(...resolved.reviewItems);
   }

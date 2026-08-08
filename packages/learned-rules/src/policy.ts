@@ -17,7 +17,7 @@ import {
   CONTAINMENT_MIN_PARENT_BODY,
   MIN_AFFINITY_OBSERVATIONS,
 } from './thresholds.js';
-import { sharedRun, tagBody, tagKey } from './text.js';
+import { compareText, sharedRun, tagBody, tagKey } from './text.js';
 import type { NestingRule } from './types.js';
 
 /** One candidate in a partition -- a training row or an asset, both reduced to this. */
@@ -71,7 +71,7 @@ function containerFor(item: PolicyItem, peers: ReadonlyArray<PolicyItem>): Polic
     })
     .sort((a, b) => {
       const byLength = tagBody(b.tag).length - tagBody(a.tag).length;
-      return byLength !== 0 ? byLength : tagKey(a.tag).localeCompare(tagKey(b.tag));
+      return byLength !== 0 ? byLength : compareText(tagKey(a.tag), tagKey(b.tag));
     });
 
   return containers[0] ?? null;

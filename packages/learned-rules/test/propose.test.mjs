@@ -127,3 +127,16 @@ test('proposals are deterministic and ordered by child asset', () => {
     [...first.map((proposal) => proposal.childAssetId)].sort(),
   );
 });
+
+test('proposals are ordered by code unit, never by a locale', () => {
+  const assets = DRAGON_ASSETS.map((asset) => ({
+    ...asset,
+    // Two sites' worth of asset ids, one upper-cased: a locale collator
+    // interleaves them by letter, UTF-16 keeps every "B" before every "a".
+    assetId: (asset.tag.startsWith('TIT') ? 'B:' : 'a:') + asset.assetId,
+  }));
+  const ordered = propose(assets).map((proposal) => proposal.childAssetId);
+  assert.deepEqual(ordered, [...ordered].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)));
+  assert.ok(ordered.length > 1);
+  assert.ok(ordered[0].startsWith('B:'));
+});

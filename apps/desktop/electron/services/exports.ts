@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import type { CompiledProject } from '@matchline/compiler';
@@ -47,9 +47,24 @@ function count(value: number, singular: string, plural: string): string {
   return `${String(value)} ${value === 1 ? singular : plural}`;
 }
 
-/** Writes bytes and describes what landed. The one place a file is created. */
+/**
+ * Writes bytes and describes what landed. The one place a file is created.
+ *
+ * Temp file then rename, the same way app-store.ts writes its state: an export
+ * commonly lands *on top of* last week's copy of itself, and a crash or a full
+ * disk halfway through a direct write would leave a half-written workbook
+ * wearing the name of a good one. Rename within a directory is atomic, so the
+ * path either still holds the old file or holds the whole new one.
+ */
 function write(absolutePath: string, bytes: Uint8Array, note: string): WireExportResult {
-  writeFileSync(absolutePath, bytes);
+  const temporaryPath = `${absolutePath}.tmp`;
+  try {
+    writeFileSync(temporaryPath, bytes);
+    renameSync(temporaryPath, absolutePath);
+  } catch (error: unknown) {
+    rmSync(temporaryPath, { force: true });
+    throw error;
+  }
   return { written: true, path: absolutePath, byteSize: bytes.byteLength, note };
 }
 

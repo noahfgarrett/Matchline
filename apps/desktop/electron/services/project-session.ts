@@ -19,6 +19,7 @@ import {
   type SourceModelNode,
 } from '@matchline/model-schema';
 import {
+  ProjectStoreError,
   createProject,
   openProject,
   serializeSnapshot,
@@ -50,10 +51,10 @@ import type {
   WireLearnedRuleKind,
   WireLearnedSummary,
   WireModelScan,
-  WireOpenNotice,
   WireOverrideRow,
   WireProfileSection,
   WireProjectConfig,
+  WireProjectOpenResult,
   WirePropertyCatalogRow,
   WireProjectSummary,
   WireRecentProject,
@@ -165,21 +166,26 @@ export interface SaveProfileResult {
 }
 
 /**
- * The project, plus whatever opening it had to do to the file first.
+ * The project, or the question opening it has to ask first.
  *
- * The notice is returned rather than logged because both things it reports are
- * facts the user is entitled to: their file was rewritten (and here is the
- * backup), or their screens 6-7 answers just moved out of this machine's state
- * file and into the project.
+ * `opened` carries a notice as well as the project because what opening had to
+ * do is a fact the user is entitled to: their file was rewritten (and here is
+ * the backup), or their screens 6-7 answers just moved out of this machine's
+ * state file and into the project.
+ *
+ * `migration-needed` and `backup-blocked` are results, not throws, because both
+ * are answerable: the first by confirming, the second by moving one file.
  */
-export interface OpenProjectResult {
-  readonly project: WireProjectSummary;
-  readonly notice: WireOpenNotice;
-}
+export type OpenProjectResult = WireProjectOpenResult;
 
 export interface ProjectService {
   create(projectPath: string, name: string): WireProjectSummary;
-  open(projectPath: string): OpenProjectResult;
+  /**
+   * @param acceptMigration answers a previous `migration-needed` result. The
+   * file is upgraded in place (after an automatic backup) only when this is
+   * `true` — docs/APP.md, "migration runs only with explicit opt-in".
+   */
+  open(projectPath: string, acceptMigration: boolean): OpenProjectResult;
   close(): boolean;
   current(): WireProjectSummary | null;
   recentProjects(): readonly WireRecentProject[];
@@ -289,6 +295,15 @@ interface Session {
   draft: WireDraftProfile;
   /** The screens 6-7 sections, mirroring the project's own `config` table. */
   config: WireProjectConfig;
+  /**
+   * The newest stored profile revision, or `null` when the draft in memory is
+   * not the one that revision holds.
+   *
+   * Nulled by every draft mutation, which is what makes it usable as "this
+   * compile may point at this revision" rather than merely "something was saved
+   * once". A compile that reused a stale number would label its results with a
+   * profile that is not what produced them.
+   */
   savedRevision: number | null;
   readonly details: Map<string, SourceDetail>;
   model: ModelState | null;
@@ -353,6 +368,46 @@ function detailKey(role: SourceRole, fileName: string): string {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Whether the file at `absolutePath` still hashes to what the project recorded.
+ *
+ * A file that cannot be read at all counts as not matching: the caller has
+ * already established the path exists, so a read failure here means the bytes
+ * are not available to prove anything with.
+ */
+function bytesStillMatch(absolutePath: string, expectedSha256: string): boolean {
+  try {
+    return digestFile(absolutePath).sha256 === expectedSha256;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The two ways opening a project stops that are questions rather than errors.
+ *
+ * `migration-required` is the file asking permission to be upgraded, and
+ * `backup-exists` is an earlier upgrade attempt's backup still sitting where
+ * the next one would go. Both are returned as results the UI can act on;
+ * everything else is `null` and becomes a message.
+ */
+function openRefusal(error: unknown): WireProjectOpenResult | null {
+  if (!(error instanceof ProjectStoreError)) {
+    return null;
+  }
+  const reason = error.reason;
+  if (reason.kind === 'migration-required') {
+    return {
+      outcome: 'migration-needed',
+      migrationNeeded: { fromVersion: reason.found, toVersion: reason.supported },
+    };
+  }
+  if (reason.kind === 'backup-exists') {
+    return { outcome: 'backup-blocked', backupPath: reason.path };
+  }
+  return null;
 }
 
 export function createProjectService(options: ProjectServiceOptions): ProjectService {
@@ -454,12 +509,20 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
   }
 
   /**
-   * Re-finds the files a reopened project refers to.
+   * Re-finds the files a reopened project refers to, and re-proves they are the
+   * same files.
    *
    * A project stores names and hashes, never directories (PRODUCT.md §13.3), so
-   * the installation's sha256 index is the only way back to the bytes. A row
-   * whose file cannot be found is not an error: it is shown as `file-missing`
-   * and the user re-adds it.
+   * the installation's sha256 index is the only way back to the bytes. That
+   * index is a convenience and never authority (app-store.ts): the path it
+   * hands back is re-digested here, and a file whose bytes no longer match the
+   * hash the project recorded is `file-changed` — the same file name holding
+   * different content is exactly the case where reading it anyway would compile
+   * numbers nobody approved.
+   *
+   * A row whose file cannot be found at all is not an error either: it is shown
+   * as `file-missing` and the user re-adds it. Re-adding is also the fix for
+   * `file-changed`, because `source:add` re-digests and updates the hash.
    */
   function rehydrateSources(active: Session): void {
     for (const source of active.store.listSources()) {
@@ -471,6 +534,18 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           note:
             `Matchline recorded ${source.fileName} but cannot find it on this machine. ` +
             'Add the file again to work with it.',
+          sheets: [],
+        });
+        continue;
+      }
+
+      if (!bytesStillMatch(knownPath, source.sha256)) {
+        active.details.set(detailKey(source.role, source.fileName), {
+          absolutePath: '',
+          status: 'file-changed',
+          note:
+            `The file at ${knownPath} has changed since it was added to this project. ` +
+            'Add it again to use the new version.',
           sheets: [],
         });
         continue;
@@ -640,7 +715,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     const subjects: ResolverSubject[] = catalog.assets.map((asset) => ({
       assetId: asset.assetId,
       canonicalTag: asset.canonicalTag,
-      properties: subjectPropertiesFor(model.cache, asset),
+      properties: subjectPropertiesFor(model.cache, asset, mappings.equipmentTag),
       sourceFile: model.scan.fileName,
       objectId: String(asset.objectIds[0] ?? 0),
     }));
@@ -677,10 +752,6 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
   }
 
   /* ------------------------------------------------- screens 6-7: the config */
-
-  function persistConfig(active: Session): void {
-    writeProjectConfig(active.store, active.config);
-  }
 
   /** Distinct values of one compile-subject attribute, for the level menu. */
   function distinctAttributeValues(active: Session): ReadonlyMap<string, number> | null {
@@ -824,6 +895,24 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     return view.reviewRows().filter((row) => !decided.has(row.reviewKey)).length;
   }
 
+  /**
+   * The file names of every source whose bytes no longer match the project.
+   *
+   * A compile is refused while any of these exist. Silently skipping them would
+   * produce a register with a third of the edges missing; reading them anyway
+   * would put content the project never recorded behind an approved compile id.
+   */
+  function changedSourceNames(active: Session): readonly string[] {
+    const names: string[] = [];
+    for (const source of active.store.listSources()) {
+      const detail = active.details.get(detailKey(source.role, source.fileName));
+      if (detail?.status === 'file-changed') {
+        names.push(source.fileName);
+      }
+    }
+    return [...new Set(names)];
+  }
+
   function requireView(active: Session): CompileView {
     if (active.view === null) {
       throw new Error('Nothing has been compiled yet. Run Compile on screen 8 first.');
@@ -849,8 +938,23 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
    * needs a saved revision to point at. Rather than refuse, an unsaved draft is
    * saved first with a note that says why — the alternative is a modal telling
    * the user to press a different button before the one they pressed.
+   *
+   * "Unsaved" here means `savedRevision === null`, which every draft mutation
+   * sets. That is the whole point of the nulling: the recorded revision is the
+   * one that produced this compile, never the one that happened to be saved
+   * before the user changed something.
    */
   function compileNow(active: Session): WireCompileStatus {
+    const changed = changedSourceNames(active);
+    if (changed.length > 0) {
+      return {
+        state: 'failed',
+        reason:
+          `${changed.join(', ')} ${changed.length === 1 ? 'has' : 'have'} changed on disk since ` +
+          'being added to this project, so compiling would use content this project has not ' +
+          'recorded. Add the file again on screen 1, or remove the source.',
+      };
+    }
     if (active.model === null) {
       return {
         state: 'failed',
@@ -943,6 +1047,16 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
   return {
     create(projectPath: string, name: string): WireProjectSummary {
       closeSession();
+      // Checked here rather than left to the save dialog's overwrite prompt:
+      // creating a project never overwrites, so a prompt offering to would
+      // promise something that does not happen (dialog.ts).
+      if (existsSync(projectPath)) {
+        throw new Error(
+          `There is already a file called ${path.basename(projectPath)} in that folder, and ` +
+            'Matchline never writes over an existing file. Choose a different name or folder.',
+        );
+      }
+
       let store: ProjectStore;
       try {
         store = createProject(projectPath, { name, appVersion: options.appVersion });
@@ -955,14 +1069,18 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       return summarize(active);
     },
 
-    open(projectPath: string): OpenProjectResult {
+    open(projectPath: string, acceptMigration: boolean): OpenProjectResult {
       closeSession();
       let store: ProjectStore;
       try {
-        // Migrate rather than refuse: the store backs the file up first, and
-        // the backup path comes back in the notice so the user is told.
-        store = openProject(projectPath, { migrate: true });
+        // Only migrate when the user has said so. An unanswered older file
+        // comes back as `migration-needed` below, untouched.
+        store = openProject(projectPath, { migrate: acceptMigration });
       } catch (error: unknown) {
+        const refusal = openRefusal(error);
+        if (refusal !== null) {
+          return refusal;
+        }
         throw new Error(`Matchline could not open that project: ${messageOf(error)}`);
       }
       const { config, adopted } = adoptConfig(store, projectPath);
@@ -971,6 +1089,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       rehydrateSources(active);
       rememberOpened(active);
       return {
+        outcome: 'opened',
         project: summarize(active),
         notice: { migration: store.migration, adoptedAppStateConfig: adopted },
       };
@@ -1090,9 +1209,17 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       return { draft: session.draft, savedRevision: session.savedRevision };
     },
 
+    /**
+     * Writes one or more sections and marks the draft unsaved.
+     *
+     * The revision is dropped even when the patch happens to be a no-op: the
+     * cheap comparison would be a deep one over five sections, and a spare
+     * revision costs a row, while a missed one mislabels a compile.
+     */
     updateDraft(patch: WireDraftPatch): WireDraftProfile {
       const active = requireSession();
       active.draft = applyPatch(active.draft, patch);
+      active.savedRevision = null;
       return active.draft;
     },
 
@@ -1189,10 +1316,22 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       return requireSession().config;
     },
 
+    /**
+     * Writes the screens 6-7 sections to the project file, then to memory.
+     *
+     * That order matters: a write that fails leaves the session showing what
+     * the file actually holds, rather than an in-memory configuration the next
+     * compile would use and the file would not have.
+     *
+     * The profile revision is untouched — the config is not part of the Site
+     * Profile, is stored in its own table, and is passed to every compile
+     * live from memory, so it cannot go stale the way the revision could.
+     */
     updateConfig(patch: WireConfigPatch): WireProjectConfig {
       const active = requireSession();
-      active.config = applyConfigPatch(active.config, patch);
-      persistConfig(active);
+      const updated = applyConfigPatch(active.config, patch);
+      writeProjectConfig(active.store, updated);
+      active.config = updated;
       return active.config;
     },
 
@@ -1481,12 +1620,16 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       const imported = readPackage(filePath);
       // The project keeps its own identity: a package is a set of rules, not a
       // rename. Everything else is adopted whole.
-      active.draft = { ...imported.draft, profileId: active.draft.profileId, name: active.draft.name };
+      const draft = { ...imported.draft, profileId: active.draft.profileId, name: active.draft.name };
+      writeProjectConfig(active.store, imported.config);
+      active.draft = draft;
       active.config = imported.config;
+      // A wholesale replacement of the draft, so the stored revision is no
+      // longer what is in memory (see Session.savedRevision).
+      active.savedRevision = null;
       active.derived = null;
       active.view = null;
       active.compile = { state: 'never-run' };
-      persistConfig(active);
       return { draft: active.draft, config: active.config };
     },
 

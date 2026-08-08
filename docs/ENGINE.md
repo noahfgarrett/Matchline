@@ -32,8 +32,9 @@ MEL workbook ─▶ spreadsheet-import ─▶ system-resolver ─▶ SystemResol
 - **`@matchline/asset-catalog`** — extraction cache + profile filters → the canonical asset
   universe. Filters (PRODUCT.md §6.6): included/excluded classes, required tag property
   (profile property mapping), accepted tag patterns, selection-set membership, source-model
-  includes, component collapse (a matched asset absorbs its descendants unless a descendant
-  independently matches — "separately commissionable subcomponents"). Duplicate model tags
+  includes, component collapse (a candidate absorbs its candidate descendants unless a
+  descendant's class is listed separately commissionable; an absorbed component that carried
+  a tag of its own raises a review item). Duplicate model tags
   → both objects kept, status `DUPLICATE_MODEL_TAG`, never merged. Output includes an
   inclusion-impact report (counts in/out per filter) for the wizard.
 - **`@matchline/system-resolver`** — ordered chain of components per PRODUCT.md §5:

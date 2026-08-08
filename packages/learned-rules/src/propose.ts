@@ -11,7 +11,7 @@
 import { classifyDescription } from './classify.js';
 import { affinityKey } from './keys.js';
 import { pickParent, type PolicyItem, type PolicyModel } from './policy.js';
-import { clean, normalizeText, numberRunsOf } from './text.js';
+import { clean, compareText, normalizeText, numberRunsOf } from './text.js';
 import type {
   ClassGradeEntry,
   LearnedRuleSet,
@@ -120,5 +120,5 @@ export function proposeNestings(
     });
   }
 
-  return proposals.sort((a, b) => a.childAssetId.localeCompare(b.childAssetId));
+  return proposals.sort((a, b) => compareText(a.childAssetId, b.childAssetId));
 }

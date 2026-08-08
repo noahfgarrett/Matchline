@@ -117,6 +117,15 @@ export const ALIAS_CONFIG: IdentityConfig = {
 
 export const ANATOMY_CONFIG: IdentityConfig = { anatomy: DRAGON_ANATOMY };
 
+/**
+ * An alias pointing at a tag no asset carries, on a spelling the suffix tier
+ * would otherwise attach to `asset-0001` -- exactly the asset the alias was
+ * overriding.
+ */
+export const ALIAS_TO_MISSING_CONFIG: IdentityConfig = {
+  aliases: new Map([['MAH001-10-01-SPARE', 'NOT-IN-THE-MODEL']]),
+};
+
 /** An alias that deliberately contradicts what the suffix tier would say. */
 export const ALIAS_BEATS_SUFFIX_CONFIG: IdentityConfig = {
   aliases: new Map([['MAH001-10-01-SPARE', 'PLC001-10-01']]),

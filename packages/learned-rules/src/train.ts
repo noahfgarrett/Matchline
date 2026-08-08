@@ -29,6 +29,7 @@ import {
 } from './thresholds.js';
 import {
   clean,
+  compareText,
   descriptionPattern,
   normalizeText,
   numberRunsOf,
@@ -148,6 +149,9 @@ export function trainLearnedRules(
   for (const entry of indexed) {
     const parentKey = tagKey(entry.row.parentTag);
     if (parentKey === '' || parentKey === entry.key) continue;
+    // No system is no partition, and application refuses to place an asset
+    // without one (propose.ts). Two blank keys are not "the same system".
+    if (entry.system === '') continue;
     const parent = byTag.get(parentKey);
     if (parent === undefined) continue;
     if (parent.system !== entry.system) continue;
@@ -199,6 +203,9 @@ export function trainLearnedRules(
         rack or a power supply. */
   const bySystem = new Map<string, PolicyItem[]>();
   for (const entry of indexed) {
+    // Same rule as the link pass: a blank key is the absence of a partition,
+    // not a partition every unpartitioned row belongs to.
+    if (entry.system === '') continue;
     let partition = bySystem.get(entry.system);
     if (partition === undefined) {
       partition = [];
@@ -237,7 +244,7 @@ export function trainLearnedRules(
     });
   }
   classification.sort(
-    (a, b) => a.discipline.localeCompare(b.discipline) || a.pattern.localeCompare(b.pattern),
+    (a, b) => compareText(a.discipline, b.discipline) || compareText(a.pattern, b.pattern),
   );
 
   const roleGates: RoleGateEntry[] = [...new Set([...asParent.keys(), ...asChild.keys()])]
@@ -249,7 +256,7 @@ export function trainLearnedRules(
       isChildOnly: isChildClass(cls),
       isParentCapable: isParentCapable(cls),
     }))
-    .sort((a, b) => a.class.localeCompare(b.class));
+    .sort((a, b) => compareText(a.class, b.class));
 
   const affinities: AffinityEntry[] = [...affinityBuckets.values()]
     .filter((bucket) => bucket.observations >= MIN_AFFINITY_OBSERVATIONS)
@@ -259,8 +266,7 @@ export function trainLearnedRules(
       observations: bucket.observations,
     }))
     .sort(
-      (a, b) =>
-        a.childClass.localeCompare(b.childClass) || a.parentClass.localeCompare(b.parentClass),
+      (a, b) => compareText(a.childClass, b.childClass) || compareText(a.parentClass, b.parentClass),
     );
 
   const grades: ClassGradeEntry[] = [...scores.entries()]
@@ -276,7 +282,7 @@ export function trainLearnedRules(
         grade: earnsClaim ? ('claim' as const) : ('proposal' as const),
       };
     })
-    .sort((a, b) => a.class.localeCompare(b.class));
+    .sort((a, b) => compareText(a.class, b.class));
 
   return {
     version: 1,

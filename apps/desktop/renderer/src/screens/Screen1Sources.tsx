@@ -42,6 +42,7 @@ const STATUS_LABELS: Readonly<Record<WireSourceStatus, string>> = {
   'requires-windows-extraction': 'Needs Windows extraction',
   'needs-attention': 'Needs attention',
   'file-missing': 'File not found',
+  'file-changed': 'File has changed',
 };
 
 export function Screen1Sources({
@@ -56,15 +57,30 @@ export function Screen1Sources({
   const [rejected, setRejected] = useState<readonly WireAddSourceResult[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * Registers paths, on the channel that matches where they came from.
+   *
+   * The two are not interchangeable. `source:add` only accepts a path a dialog
+   * handed out, because main recorded that dialog's answer and checks against
+   * the record (electron/security/path-grants.ts). A dropped path was never in
+   * that record — the renderer read it off the drag payload — so it goes to
+   * `source:add-dropped`, which screens it in main instead. Sending a dropped
+   * path to `source:add` would be refused, every time.
+   */
   const addPaths = useCallback(
-    async (paths: readonly string[]): Promise<void> => {
+    async (paths: readonly string[], from: 'dialog' | 'drop'): Promise<void> => {
       if (paths.length === 0) {
         return;
       }
       setBusy(true);
       setError(null);
       try {
-        const result = await call(window.matchline.source.add({ paths: [...paths] }));
+        const request = { paths: [...paths] };
+        const result = await call(
+          from === 'dialog'
+            ? window.matchline.source.add(request)
+            : window.matchline.source.addDropped(request),
+        );
         setRejected(
           result.results.filter(
             (entry: WireAddSourceResult): boolean => entry.outcome === 'rejected',
@@ -88,7 +104,7 @@ export function Screen1Sources({
       if (chosen.cancelled) {
         return;
       }
-      await addPaths(chosen.paths);
+      await addPaths(chosen.paths, 'dialog');
     } catch (caught: unknown) {
       setError(messageOf(caught));
     }
@@ -98,13 +114,15 @@ export function Screen1Sources({
     (event: DragEvent<HTMLDivElement>): void => {
       event.preventDefault();
       setDragging(false);
-      // `File.path` is an Electron addition; the sandboxed renderer gets the
-      // path string and nothing else — no handle, no read access.
+      // A `File` has carried no `path` since Electron 43; the preload's
+      // `webUtils.getPathForFile` is what is left, and it answers '' for
+      // anything with no file behind it — a dragged selection of text, say.
+      // Those are dropped here rather than sent for main to complain about.
       const paths = [...event.dataTransfer.files].flatMap((file: File): string[] => {
-        const candidate = (file as File & { readonly path?: string }).path;
-        return typeof candidate === 'string' && candidate.length > 0 ? [candidate] : [];
+        const candidate = window.matchline.files.pathOf(file);
+        return candidate === '' ? [] : [candidate];
       });
-      void addPaths(paths);
+      void addPaths(paths, 'drop');
     },
     [addPaths],
   );

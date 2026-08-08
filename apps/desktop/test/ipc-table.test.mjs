@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { reviewKey } from '@matchline/ssm-compiler';
+
 import { IPC_CHANNELS, IPC_CHANNEL_NAMES } from '../dist/shared/ipc.js';
 
 const CHANNEL_NAME_PATTERN = /^[a-z][a-z0-9]*:[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
@@ -175,6 +177,28 @@ test('a null parent is expressible wherever "make this a root" is a real answer'
       `"${channel}" cannot express a make-root instruction`,
     );
   }
+});
+
+/**
+ * The `review:decide` example is a key the compiler could actually have
+ * produced, not a hand-written sketch of one.
+ *
+ * It has been the second thing already: the example outlived a change of
+ * separator and went on describing a `|`-joined key nothing emits. Asserting it
+ * against `reviewKey` means the next change to the flattening breaks here
+ * instead.
+ */
+test('the review:decide example is a key reviewKey really produces', () => {
+  const conflict = {
+    kind: 'system-conflict',
+    assetId: 'tag:MAH001-10-01',
+    claims: [
+      { rule: 'tag-segment', proposedValue: '001' },
+      { rule: 'mel-lookup', proposedValue: '002' },
+    ],
+  };
+
+  assert.equal(IPC_CHANNELS['review:decide'].example.request.reviewKey, reviewKey(conflict));
 });
 
 test('examples survive the structured clone that IPC actually performs', () => {

@@ -32,7 +32,13 @@ import type {
   SelfLoopAnomaly,
 } from './types.js';
 
-/** Marks a node id as a spelling rather than an asset id. Never a valid asset id. */
+/**
+ * Marks a node id as a spelling rather than an asset id.
+ *
+ * Not a namespace guarantee: `@matchline/asset-catalog` names assets `tag:<tag>`
+ * too, so an unplaced spelling can land on a node a matched tag also claims.
+ * `buildNodeDrafts` handles that collision rather than assuming it away.
+ */
 export const SOURCE_ONLY_NODE_PREFIX = 'tag:';
 
 function lookupOutcome(lookup: IdentityLookup, evidenceTag: string): IdentityOutcome | undefined {
@@ -54,7 +60,8 @@ interface TagAppearance {
 interface NodeDraft {
   readonly nodeId: string;
   readonly evidenceTags: Set<string>;
-  readonly matchStatus: FlowMatchStatus;
+  /** Mutable: an unplaced spelling may create the node a matched tag then joins. */
+  matchStatus: FlowMatchStatus;
   /** The spelling shown, and the ladder rank that earned it the position. */
   displayTag: string;
   displayRank: number;
@@ -137,6 +144,13 @@ function buildNodeDrafts(
         (existing.identityTier === undefined || rank < tierRank(existing.identityTier))
       ) {
         existing.identityTier = outcome.tier;
+      }
+      // A node an unplaced spelling created can still turn out to be an asset:
+      // `tag:<spelling>` and an asset id share a shape, so which observation
+      // arrived first must not decide whether the node is model-authoritative.
+      if (matched && existing.assetId === undefined) {
+        existing.assetId = outcome.assetId;
+        existing.matchStatus = 'model-confirmed';
       }
       const closer = rank - existing.displayRank;
       if (closer < 0 || (closer === 0 && compareText(tag, existing.displayTag) < 0)) {

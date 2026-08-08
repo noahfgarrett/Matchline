@@ -80,7 +80,11 @@ export interface HierarchyAssetNode {
 /** One configured level's value, and everything filed under it. */
 export interface HierarchyLevelNode {
   readonly levelId: string;
-  /** The level value, or the `(unassigned)` sentinel. */
+  /**
+   * The level value, or a sentinel: `(unassigned)` where the site asked for a
+   * grouping, `(no value)` where a `review` / `provisional-root` policy refused
+   * to state one. Never the empty string.
+   */
   readonly value: string;
   /** The next configured level down. Empty at the innermost level. */
   readonly levels: ReadonlyArray<HierarchyLevelNode>;

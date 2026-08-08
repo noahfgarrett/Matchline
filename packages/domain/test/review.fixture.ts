@@ -42,7 +42,7 @@ const TAG_SEGMENT_CLAIM: AttributeClaim = {
 };
 
 /** Every item kind, in union declaration order. */
-export const DRAGON_REVIEW_ITEMS: ReadonlyArray<ReviewItem> = [
+export const DRAGON_REVIEW_ITEMS = [
   {
     kind: 'system-conflict',
     assetId: 'asset-0001',
@@ -93,4 +93,37 @@ export const DRAGON_REVIEW_ITEMS: ReadonlyArray<ReviewItem> = [
     ruleDetail: 'VFD parents TIT (7/8 sightings)',
     confidence: 0.875,
   },
-];
+  {
+    kind: 'dead-claim-rule',
+    ladderSource: 'profile-lookup',
+    reason: 'unresolvable-parent-tag',
+    childRef: 'TIT603-10-01',
+    parentRef: 'MAH001-10-99',
+  },
+  {
+    kind: 'unresolvable-alias',
+    evidenceTag: 'MAH-1',
+    aliasTarget: 'MAH001-10-99',
+  },
+  {
+    kind: 'absorbed-tagged-component',
+    absorbedTag: 'VFD001-10-01',
+    absorbingAssetId: 'asset-0001',
+    objectId: 57,
+  },
+] as const satisfies ReadonlyArray<ReviewItem>;
+
+/**
+ * The invariant this fixture exists for: every `ReviewItem` member has a
+ * constructible example above.
+ *
+ * A type, not a runtime check, so adding a member to the union without adding
+ * an example here stops this file compiling rather than failing a test run.
+ */
+type UnexampledKind = Exclude<
+  ReviewItem['kind'],
+  (typeof DRAGON_REVIEW_ITEMS)[number]['kind']
+>;
+export type EveryReviewKindHasAnExample = UnexampledKind extends never ? true : never;
+const _EVERY_KIND_HAS_AN_EXAMPLE: EveryReviewKindHasAnExample = true;
+void _EVERY_KIND_HAS_AN_EXAMPLE;

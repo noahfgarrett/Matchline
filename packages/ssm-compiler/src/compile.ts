@@ -310,11 +310,21 @@ function resolveSubject(subject: CompileSubject, ctx: WalkContext): SubjectResol
           };
         }
         // The relationship remains real; it just stops nesting (§2.5).
-        dependencies.set(dependencyKey(selectedParentId, 'DEPENDENCY'), {
-          parentAssetId: selectedParentId,
-          relationshipType: 'DEPENDENCY',
-          provenance: { ...selectedClaim.provenance, rule: BOUNDARY_DEMOTION_RULE },
-        });
+        //
+        // First writer wins, the same rule `baseDependencies` follows. The walk
+        // runs strongest rung first, so when two rungs name one out-of-boundary
+        // parent the first demotion is the strongest one -- and that is the
+        // provenance `demotedFrom` already carries. Overwriting it with the
+        // weaker rung's would leave the decision and the dependency it produced
+        // pointing at two different rows.
+        const key = dependencyKey(selectedParentId, 'DEPENDENCY');
+        if (!dependencies.has(key)) {
+          dependencies.set(key, {
+            parentAssetId: selectedParentId,
+            relationshipType: 'DEPENDENCY',
+            provenance: { ...selectedClaim.provenance, rule: BOUNDARY_DEMOTION_RULE },
+          });
+        }
         continue;
       }
 

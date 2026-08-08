@@ -5,7 +5,7 @@
  * list or enrichment map the tests lean on cannot drift out of what the types
  * actually allow.
  */
-import type { ConnectivityObservation, Provenance } from '@matchline/domain';
+import type { ConnectivityObservation, IdentityOutcome, Provenance } from '@matchline/domain';
 import type { IdentityAsset, IdentityConfig } from '@matchline/identity';
 
 import type { FlowEnrichment } from '../dist/index.js';
@@ -172,3 +172,46 @@ export const FUZZY_ASSETS: ReadonlyArray<IdentityAsset> = [
 export const FUZZY_OBSERVATIONS: ReadonlyArray<ConnectivityObservation> = [
   cableFeed('PNL001-10-01', 'VFD001-10-02', 'C-4001', 2),
 ];
+
+/**
+ * A spelling that collides with an asset id.
+ *
+ * `@matchline/asset-catalog` disambiguates a duplicated model tag as
+ * `tag:<tag>#<objectId>`, and this package names a node for an unplaced
+ * spelling `tag:<spelling>`. A source that hand-disambiguates the panel as
+ * `PNL001-10-01#2` therefore lands on the very node the matched panel occupies
+ * -- one node, reached twice, once with an asset identity and once without.
+ */
+export const COLLIDING_ASSET_ID = 'tag:PNL001-10-01#2';
+
+/** The spelling nothing places, which is exactly the asset id minus the prefix. */
+const COLLIDING_SPELLING = 'PNL001-10-01#2';
+
+export const COLLIDING_OUTCOMES: ReadonlyMap<string, IdentityOutcome> = new Map([
+  [
+    'PNL001-10-01',
+    {
+      status: 'matched',
+      evidenceTag: 'PNL001-10-01',
+      assetId: COLLIDING_ASSET_ID,
+      tier: 'exact',
+      detail: 'evidence tag equals canonical tag "PNL001-10-01"',
+    },
+  ],
+  [COLLIDING_SPELLING, { status: 'unmatched', evidenceTag: COLLIDING_SPELLING, candidates: [] }],
+]);
+
+export const COLLIDING_ENRICHMENT: ReadonlyMap<string, FlowEnrichment> = new Map([
+  [COLLIDING_ASSET_ID, { description: 'Dragon 480V distribution panel' }],
+]);
+
+/** The unplaced spelling is seen FIRST, so it is the one that creates the node. */
+export const COLLIDING_OBSERVATIONS: ReadonlyArray<ConnectivityObservation> = [
+  easyPowerFeed('SWG001-10-01', COLLIDING_SPELLING, 90),
+  easyPowerFeed('PNL001-10-01', 'VFD001-10-01', 91),
+];
+
+/** The same two statements, the matched spelling first. */
+export const COLLIDING_OBSERVATIONS_REVERSED: ReadonlyArray<ConnectivityObservation> = [
+  ...COLLIDING_OBSERVATIONS,
+].reverse();

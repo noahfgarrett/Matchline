@@ -233,6 +233,39 @@ export const openNoticeSchema = z.object({
 });
 export type WireOpenNotice = z.infer<typeof openNoticeSchema>;
 
+/**
+ * What opening a project produced: the project, or a question first.
+ *
+ * A file written by an older build is **not** upgraded on sight. Upgrading
+ * rewrites the only copy of a site's decisions, so it is an answered question
+ * rather than a side effect of double-clicking (docs/APP.md: "v1→v2 migration
+ * runs only with explicit opt-in"). `migration-needed` carries the two version
+ * numbers the confirm card states; the second call sends `acceptMigration`.
+ *
+ * `backup-blocked` is the one thing the user has to fix outside Matchline: an
+ * earlier upgrade attempt left a backup at that exact path, and overwriting it
+ * would destroy the evidence it was taken for.
+ */
+export const projectOpenResultSchema = z.discriminatedUnion('outcome', [
+  z.object({
+    outcome: z.literal('opened'),
+    project: projectSummarySchema,
+    notice: openNoticeSchema,
+  }),
+  z.object({
+    outcome: z.literal('migration-needed'),
+    migrationNeeded: z.object({
+      fromVersion: z.number().int().positive(),
+      toVersion: z.number().int().positive(),
+    }),
+  }),
+  z.object({
+    outcome: z.literal('backup-blocked'),
+    backupPath: z.string().min(1),
+  }),
+]);
+export type WireProjectOpenResult = z.infer<typeof projectOpenResultSchema>;
+
 export const recentProjectSchema = z.object({
   path: z.string().min(1),
   name: z.string().min(1),
@@ -250,12 +283,18 @@ export type WireRecentProject = z.infer<typeof recentProjectSchema>;
  * `requires-windows-extraction` is not an error: a raw `.nwd` has to go through
  * the Navisworks extractor on Windows (docs/WINDOWS-RUNBOOK.md) before Matchline
  * can read it, and Mac development works from the produced cache files directly.
+ *
+ * `file-changed` is deliberately distinct from `file-missing`. The file is right
+ * where it was, but its bytes no longer hash to what the project recorded, so it
+ * is a *different* file wearing the same name — the one case where reading it
+ * would quietly compile numbers nobody approved.
  */
 export const sourceStatusSchema = z.enum([
   'ready',
   'requires-windows-extraction',
   'needs-attention',
   'file-missing',
+  'file-changed',
 ]);
 export type WireSourceStatus = z.infer<typeof sourceStatusSchema>;
 
