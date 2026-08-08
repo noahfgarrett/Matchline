@@ -58,4 +58,17 @@ export const DRAGON_REVIEW_ITEMS: ReadonlyArray<ReviewItem> = [
     systemKey: '001',
     descriptions: ['Mechanical Dry Air Handling', 'Dry Air Handling'],
   },
+  {
+    kind: 'fuzzy-identity',
+    evidenceTag: 'MAH001-10-1',
+    candidates: [
+      { assetId: 'asset-0001', distance: 1 },
+      { assetId: 'asset-0002', distance: 2 },
+    ],
+  },
+  {
+    kind: 'ambiguous-suffix',
+    evidenceTag: '10-01',
+    candidateAssetIds: ['asset-0001', 'asset-0009'],
+  },
 ];

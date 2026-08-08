@@ -5,7 +5,7 @@ import { reviewItemSummary } from '../dist/index.js';
 import { DRAGON_REVIEW_ITEMS } from './dist/review.fixture.js';
 
 test('every review item kind summarizes to a non-empty line', () => {
-  assert.equal(DRAGON_REVIEW_ITEMS.length, 3);
+  assert.equal(DRAGON_REVIEW_ITEMS.length, 5);
   const kinds = new Set();
   for (const item of DRAGON_REVIEW_ITEMS) {
     kinds.add(item.kind);
@@ -39,6 +39,25 @@ test('one system key with several descriptions is a review item, not a pick', ()
     reviewItemSummary(catalog),
     'system 001: 2 conflicting descriptions',
   );
+});
+
+test('a fuzzy identity arrives as ranked candidates for a person to pick from', () => {
+  const fuzzy = DRAGON_REVIEW_ITEMS[3];
+  assert.equal(fuzzy.kind, 'fuzzy-identity');
+  assert.deepEqual(
+    fuzzy.candidates.map((candidate) => candidate.distance),
+    [1, 2],
+  );
+  assert.equal(
+    reviewItemSummary(fuzzy),
+    'tag MAH001-10-1: 2 fuzzy candidates need review',
+  );
+});
+
+test('an ambiguous suffix names every asset that could claim the tag', () => {
+  const ambiguous = DRAGON_REVIEW_ITEMS[4];
+  assert.deepEqual(ambiguous.candidateAssetIds, ['asset-0001', 'asset-0009']);
+  assert.equal(reviewItemSummary(ambiguous), 'tag 10-01: 2 assets could claim it');
 });
 
 test('an unknown review item kind is rejected rather than silently summarized', () => {

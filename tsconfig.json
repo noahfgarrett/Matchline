@@ -2,12 +2,35 @@
   "//": "Solution root: no sources of its own, only project references. packages/legacy-parity is deliberately absent -- it is plain JavaScript with its own build.",
   "files": [],
   "references": [
-    { "path": "./packages/domain" },
-    { "path": "./packages/model-schema" },
-    { "path": "./packages/tag-anatomy" },
-    { "path": "./packages/spreadsheet-import" },
-    { "path": "./packages/asset-catalog" },
-    { "path": "./packages/system-resolver" },
-    { "path": "./packages/mel-export" }
+    {
+      "path": "./packages/domain"
+    },
+    {
+      "path": "./packages/model-schema"
+    },
+    {
+      "path": "./packages/tag-anatomy"
+    },
+    {
+      "path": "./packages/spreadsheet-import"
+    },
+    {
+      "path": "./packages/asset-catalog"
+    },
+    {
+      "path": "./packages/system-resolver"
+    },
+    {
+      "path": "./packages/mel-export"
+    },
+    {
+      "path": "./packages/connectivity-import"
+    },
+    {
+      "path": "./packages/identity"
+    },
+    {
+      "path": "./packages/electrical-flow"
+    }
   ]
 }

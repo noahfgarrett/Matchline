@@ -49,6 +49,33 @@ MEL workbook ─▶ spreadsheet-import ─▶ system-resolver ─▶ SystemResol
   from canonical assets + resolutions, then .xlsx via spreadsheet-import's vendored SheetJS.
   Deterministic row order (systemKey, then canonicalTag).
 
+## E2 — connectivity spine (PRODUCT.md Phase 3)
+
+```
+EasyPower / Cable / PMD workbooks ─▶ connectivity-import ─▶ ConnectivityObservations
+                                              │
+model asset universe ─▶ identity (tiered reconciliation) ─▶ IdentityOutcomes
+                                              │
+                                     electrical-flow ─▶ flow projection
+                                     (no SSM boundaries; source-only nodes visible)
+```
+
+- **`@matchline/connectivity-import`** — sheet-kind detection ported from the donor
+  (name-first, exact headers trusted alone, loose headers need same-family corroboration;
+  the donor's blanket EasyPower fallback replaced by an honest `unknown`). Importers emit
+  one observation per row with cell-level provenance; duplicates kept (parallel cables are
+  real); rows missing endpoints skipped with typed reasons.
+- **`@matchline/identity`** — §9.2 tiers: exact → normalized → alias → anatomy →
+  suffix-unambiguous → fuzzy-proposal. Ambiguity at any tier is terminal (review item,
+  never a guess, no fall-through). The anatomy tier compares the full token sequence, not
+  just taught segments, so -A/-B siblings never merge (DECISIONS.md). Fuzzy never matches —
+  proposals + review items only.
+- **`@matchline/electrical-flow`** — §10 projection: per-observation edges, multi/alternate
+  feeds first-class, matched nodes enriched with model metadata, unmatched tags become
+  visible flow-only/pmd-only nodes with no assetId (never model-authoritative). Self-loops
+  dropped to anomalies; cycles kept (ring feeds are real), one anomaly per SCC. No SSM
+  boundary enforcement — cross-system feeds stay visible as feeds.
+
 ### Semantics rules (binding)
 
 1. Model-first: the asset universe comes ONLY from the extraction cache. MEL rows never
