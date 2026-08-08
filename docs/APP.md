@@ -44,10 +44,13 @@ equivalent via app.getPath) — referenced by hash from `sources`, never embedde
 
 ## Install-script policy
 
-The global `~/.npmrc` sets `ignore-scripts=true` (supply-chain rule). Electron and esbuild
-legitimately need their install scripts: after any fresh `npm ci`/`npm install`, run
-`npm rebuild electron esbuild` (wired as the root `postsetup` script). Never widen this
-list without a DECISIONS.md entry.
+The global `~/.npmrc` sets `ignore-scripts=true` (supply-chain rule). After any fresh
+`npm ci`/`npm install`, run the root `postsetup` script: `npm rebuild electron esbuild &&
+node node_modules/electron/install.js`. (Electron ≥43 has no postinstall script at all —
+the explicit `install.js` invocation is what actually fetches the binary; the rebuild half
+covers any future dep that reintroduces install scripts. Vite 8 uses rolldown, so esbuild
+is not in the tree; the rebuild is a harmless no-op for it.) Never widen this list without
+a DECISIONS.md entry.
 
 ## UI surface (built across A1 rounds)
 
