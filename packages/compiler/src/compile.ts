@@ -388,6 +388,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   const generatedMel = {
     rows: buildCanonicalMelRows(generatedAssets),
     workbookBytes: writeCanonicalMelWorkbook(generatedAssets),
+    assets: generatedAssets,
   };
 
   // --- 11. one review queue -------------------------------------------------------
