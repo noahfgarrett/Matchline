@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0 — 2026-08-07 — E2: connectivity spine (PRODUCT.md Phase 3)
+
+- EasyPower / Cable Schedule / PMD imports with donor-ported sheet detection and
+  cell-level provenance; unrecognized sheets reported honestly, never guessed.
+- Identity reconciliation: six ordered tiers, terminal ambiguity, letter-suffix siblings
+  never merged, fuzzy as review-only proposals.
+- Electrical Flow projection: multiple/alternate feeds, model enrichment, visible
+  flow-only/PMD-only nodes, ring feeds kept with cycle anomalies.
+- CI: machine-dependent donor differential tests excluded on runners; integration suite added.
+- Suite: 1106 tests, 0 failures.
+
 ## 0.2.0 — 2026-08-07 — E1: model-first engine core (PRODUCT.md Phase 2)
 
 - Tag anatomy: profile-taught segmentation (role/system/family), whole-set preview.

@@ -45,6 +45,15 @@ Windows build. Extraction is exercised for real on Noah's first runbook run.
 
 ## Log
 
+### 2026-08-07 — E2 connectivity spine merged (0.3.0)
+- connectivity-import (donor detection ported, EasyPower fallback → honest unknown),
+  identity (six tiers, ambiguity terminal, -A/-B protected), electrical-flow (source-only
+  nodes visible, SCC cycle anomalies). E2 integration test proves Phase 3 exit criteria.
+- CI fixed: donor differential tests (absolute path to local SSM-Builder checkout) excluded
+  on runners via --test-skip-pattern; integration tests added to CI. Donor tree untouched.
+- Next: E3 SSM compiler (role graph, family inference, learned rules, Hierarchy Composer
+  model, boundary fold, resolved snapshots).
+
 ### 2026-08-07 — E1 engine core merged (0.2.0)
 - tag-anatomy, spreadsheet-import (vendored donor SheetJS), asset-catalog, system-resolver,
   mel-export; E1 pipeline integration test proves all Phase 2 exit criteria on Dragon.
