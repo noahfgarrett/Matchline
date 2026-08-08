@@ -16,7 +16,10 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "test": "tsc -b && node --test test/*.test.mjs"
+    "test": "tsc -b test && node --test test/*.test.mjs"
   },
-  "dependencies": { "@matchline/domain": "0.1.0", "@matchline/tag-anatomy model-schema": "0.1.0" }
+  "dependencies": {
+    "@matchline/domain": "0.1.0",
+    "@matchline/tag-anatomy": "0.1.0"
+  }
 }
