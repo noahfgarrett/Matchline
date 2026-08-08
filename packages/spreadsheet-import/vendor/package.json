@@ -1,0 +1,4 @@
+{
+  "//": "Keeps the byte-identical vendored SheetJS bundle loadable as CommonJS inside this type:module package. Do not add fields.",
+  "type": "commonjs"
+}

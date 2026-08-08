@@ -1,0 +1,10 @@
+{
+  "//": "Type-checks the fixtures the .mjs tests import. model-schema is referenced so that `tsc -b test` builds the Dragon fixture the integration test reads.",
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "./dist"
+  },
+  "include": ["*.ts"],
+  "references": [{ "path": ".." }, { "path": "../../model-schema" }]
+}
