@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.0 — 2026-08-08 — A1: desktop application
+
+- Electron shell: sandboxed renderer, app:// scheme with enforced CSP, typed Zod IPC
+  from a single channel-declaration table, envelope responses.
+- Project files (.matchline, SQLite): sources, versioned profiles, learned rules,
+  overrides, compile history, snapshots, review decisions — all transactional.
+- Site Setup wizard screens 1-9: sources with detection, Property Catalog, asset
+  definition with live inclusion impact, tag anatomy with whole-set preview, System
+  Resolver with rung usage and conflicts, Hierarchy Composer (dnd), relationship rules
+  with learned-rules training, compile preview/QA checklist, publish + portable profiles.
+- Workspace: virtualized SSM tree with drag reparenting as persistent overrides,
+  Electrical Flow view, review queue with decisions, five exports.
+- Suite: 1610 tests, 0 failures.
+
 ## 0.5.0 — 2026-08-08 — E4: commissioning outputs
 
 - P6 import (.xer and activity sheets), four-rung milestone ladder, discipline-polarity
