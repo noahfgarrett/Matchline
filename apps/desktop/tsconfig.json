@@ -1,0 +1,10 @@
+{
+  "//": "The only emitting project in apps/desktop: shared + electron -> dist/. One project rather than three so relative imports survive rootDir/outDir rewriting. preload/ and renderer/ are built by Vite and type-checked by their own noEmit configs.",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
+  },
+  "include": ["shared/**/*.ts", "electron/**/*.ts"]
+}

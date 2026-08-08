@@ -49,6 +49,13 @@
     },
     {
       "path": "./packages/exto-export"
+    },
+    {
+      "path": "./packages/project-store"
+    },
+    {
+      "//": "apps/desktop's only emitting project (shared + electron). preload/ and renderer/ are Vite-built and type-checked by their own noEmit configs, so they are deliberately absent.",
+      "path": "./apps/desktop"
     }
   ]
 }

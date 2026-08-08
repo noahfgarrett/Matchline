@@ -1,0 +1,946 @@
+/**
+ * The `.matchline` project file: create, open, read, write.
+ *
+ * Opening validates before returning: a handle in your hand is a project whose
+ * schema version this build understands and whose meta table is complete -- the
+ * same contract `openExtractionCache` offers, for the same reason. A project
+ * file is the only copy of a site's decisions, so a half-understood one is
+ * refused rather than read.
+ *
+ * Two rules run through every mutator here:
+ *
+ * - **Transactional.** Every mutator runs inside `BEGIN IMMEDIATE`/`COMMIT` and
+ *   rolls back whole on any throw. `withTransaction` composes them, so a caller
+ *   can put several mutations behind one commit and still get all-or-nothing.
+ * - **No clock inside.** Timestamps come from the injected clock or from the
+ *   caller's own argument, never from `Date.now()` in here. Two runs with the
+ *   same clock write the same rows, which is what makes a project file
+ *   diffable and a test able to assert on its contents.
+ */
+import { existsSync, unlinkSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+
+import type { ManualRelationshipOverride, SiteProfile } from '@matchline/domain';
+
+import { ProjectStoreError } from './errors.js';
+import { canonicalJson, parseStoredJson } from './json.js';
+import {
+  readOverridePayload,
+  validateRelationshipOverride,
+  validateSystemOverride,
+  type ManualSystemOverride,
+  type StoredOverride,
+} from './overrides.js';
+import { validateSiteProfile } from './profile-json.js';
+import { optionalText, requireInteger, requireText, type SqlRow } from './rows.js';
+import {
+  DECISION_VALUES,
+  DEFAULT_APP_VERSION,
+  LEARNED_RULE_KINDS,
+  OVERRIDE_KINDS,
+  PROJECT_SCHEMA_SQL,
+  PROJECT_SCHEMA_VERSION,
+  REQUIRED_META_KEYS,
+  REQUIRED_TABLES,
+  SOURCE_ROLES,
+  type DecisionValue,
+  type LearnedRuleKind,
+  type OverrideKind,
+  type SourceRole,
+} from './schema.js';
+import {
+  invalidArgument,
+  requireCountArgument,
+  requireFilledArgument,
+  requireMemberArgument,
+  requireSha256Argument,
+  requireTimestampArgument,
+} from './validate.js';
+
+/** Where time comes from. Injected so a compile can be replayed exactly. */
+export type Clock = () => Date;
+
+/** Options for `createProject`. */
+export interface CreateProjectOptions {
+  /** The project's display name, recorded in `meta.project_name`. */
+  readonly name: string;
+  /** Defaults to {@link DEFAULT_APP_VERSION}; the desktop app passes its own. */
+  readonly appVersion?: string;
+  /** Defaults to the system clock. */
+  readonly now?: Clock;
+}
+
+/** Options for `openProject`. */
+export interface OpenProjectOptions {
+  /** Defaults to the system clock. */
+  readonly now?: Clock;
+}
+
+/** The `meta` table, typed and already validated. */
+export interface ProjectMeta {
+  readonly schemaVersion: number;
+  readonly appVersion: string;
+  readonly projectName: string;
+  readonly createdAt: string;
+  readonly modifiedAt: string;
+}
+
+/** A source file registered with the project. */
+export interface ProjectSource {
+  readonly role: SourceRole;
+  /** Name only -- a project file records no directories (PRODUCT.md §13.3). */
+  readonly fileName: string;
+  readonly sha256: string;
+  readonly byteSize: number;
+  readonly addedAt: string;
+}
+
+/** What `upsertSource` needs. `addedAt` defaults to the injected clock. */
+export interface SourceInput {
+  readonly role: SourceRole;
+  readonly fileName: string;
+  readonly sha256: string;
+  readonly byteSize: number;
+  readonly addedAt?: string;
+}
+
+/** One stored profile revision. */
+export interface ProfileRevision {
+  readonly profile: SiteProfile;
+  /** Monotonic within this project; unrelated to `SiteProfile.version`. */
+  readonly revision: number;
+}
+
+/** A profile revision without its body, for a history list. */
+export interface ProfileRevisionSummary {
+  readonly revision: number;
+  readonly note?: string;
+  readonly savedAt: string;
+}
+
+/** The latest learned rule set of one kind. */
+export interface LearnedRuleRecord {
+  readonly kind: LearnedRuleKind;
+  /** Whatever the caller stored, parsed. Shape is the caller's business. */
+  readonly rules: unknown;
+  readonly savedAt: string;
+}
+
+/** What `recordCompile` needs. */
+export interface CompileInput {
+  /** Source key (role, file name, whatever the caller keys by) to sha256. */
+  readonly inputHashes: Readonly<Record<string, string>>;
+  readonly profileRevision: number;
+  /** Compile statistics, stored as canonical JSON. */
+  readonly statsJson: unknown;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+}
+
+/** One entry of the compile history. */
+export interface CompileRecord {
+  readonly compileId: number;
+  readonly inputHashes: Readonly<Record<string, string>>;
+  readonly profileRevision: number;
+  readonly stats: unknown;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+  /** When the row was written, from the injected clock. */
+  readonly recordedAt: string;
+}
+
+/** The stored snapshot and the compile it came from. */
+export interface LatestSnapshot<T> {
+  readonly compileId: number;
+  readonly snapshot: T;
+}
+
+/** What `recordDecision` needs. */
+export interface DecisionInput {
+  /** Stable identity of the review item, e.g. `system-conflict:MAH001-10-01`. */
+  readonly reviewKey: string;
+  readonly decision: DecisionValue;
+  readonly note?: string;
+  readonly decidedAt: string;
+}
+
+/** One recorded review decision. */
+export interface ReviewDecision {
+  readonly reviewKey: string;
+  readonly decision: DecisionValue;
+  readonly note?: string;
+  readonly decidedAt: string;
+}
+
+/** A validated, read-write project file. */
+export interface ProjectStore {
+  /** The file this handle was opened from. */
+  readonly path: string;
+
+  /** The `meta` table, re-read each call so `modifiedAt` is current. */
+  meta(): ProjectMeta;
+
+  /**
+   * Runs `fn` inside one transaction, committing on return and rolling back on
+   * throw. Nested calls join the outer transaction rather than starting one.
+   */
+  withTransaction<T>(fn: () => T): T;
+
+  /** Adds a source, or replaces the row with the same `(role, fileName)`. */
+  upsertSource(input: SourceInput): void;
+  /** Every source, ordered by role then file name. */
+  listSources(): readonly ProjectSource[];
+  /** Removes one source. Returns whether a row was there to remove. */
+  removeSource(role: SourceRole, fileName: string): boolean;
+
+  /** Validates and stores a profile as a new revision. Returns the revision. */
+  saveProfile(profile: SiteProfile, revisionNote?: string): number;
+  /** The newest revision, or `undefined` when none has been saved. */
+  getProfile(): ProfileRevision | undefined;
+  /** Every revision, newest first. Old revisions are never deleted. */
+  listProfileRevisions(): readonly ProfileRevisionSummary[];
+  /** One revision by number, or `undefined` if there is no such revision. */
+  getProfileRevision(revision: number): ProfileRevision | undefined;
+
+  /** Stores a learned rule set. Prior sets of the same kind are kept. */
+  saveLearnedRules(kind: LearnedRuleKind, rules: unknown): void;
+  /** The newest rule set of one kind, or `undefined`. */
+  getLearnedRules(kind: LearnedRuleKind): LearnedRuleRecord | undefined;
+
+  /** Sets the manual system override for one canonical tag. */
+  setSystemOverride(assetKey: string, override: ManualSystemOverride): void;
+  /** Sets the manual parent override for one canonical tag (the child). */
+  setRelationshipOverride(override: ManualRelationshipOverride): void;
+  /** Both kinds, ordered by kind then asset key. */
+  listOverrides(): readonly StoredOverride[];
+  /** Removes one override. Returns whether a row was there to remove. */
+  removeOverride(kind: OverrideKind, assetKey: string): boolean;
+
+  /** Appends to the compile history. Returns the new compile id. */
+  recordCompile(input: CompileInput): number;
+  /** Compile history, newest first. Omitting `limit` returns all of it. */
+  listCompiles(limit?: number): readonly CompileRecord[];
+
+  /** Stores the resolved snapshot, replacing whatever was there. */
+  saveSnapshot(compileId: number, snapshot: unknown): void;
+  /**
+   * The stored snapshot, or `undefined` when no compile has saved one.
+   *
+   * The snapshot is returned as `unknown` unless `validate` is supplied --
+   * `deserializeSnapshot` is the usual argument. The store keeps the caller's
+   * JSON verbatim and never assumes a shape for it.
+   */
+  getLatestSnapshot<T = unknown>(validate?: (value: unknown) => T): LatestSnapshot<T> | undefined;
+
+  /** Appends a review decision. Earlier decisions for the key are kept. */
+  recordDecision(input: DecisionInput): void;
+  /** Every decision ever recorded, oldest first. */
+  listDecisions(): readonly ReviewDecision[];
+  /** The newest decision for one review key, or `undefined`. */
+  decisionFor(reviewKey: string): ReviewDecision | undefined;
+
+  /** Releases the SQLite handle. Safe to call more than once. */
+  close(): void;
+}
+
+const SYSTEM_CLOCK: Clock = () => new Date();
+
+function cannotOpen(path: string, cause: unknown): ProjectStoreError {
+  return new ProjectStoreError({
+    kind: 'cannot-open',
+    path,
+    detail: cause instanceof Error ? cause.message : String(cause),
+  });
+}
+
+/** SQLite counts come back as number or bigint; the schema keeps them small. */
+function toCount(value: number | bigint): number {
+  if (typeof value === 'bigint') {
+    if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new ProjectStoreError({
+        kind: 'malformed-row',
+        table: 'sqlite',
+        column: 'rowid',
+        detail: `${value.toString()} exceeds safe integer range`,
+      });
+    }
+    return Number(value);
+  }
+  return value;
+}
+
+function readMetaEntries(db: DatabaseSync): Map<string, string> {
+  const entries = new Map<string, string>();
+  for (const row of db.prepare('SELECT key, value FROM meta').all()) {
+    entries.set(requireText(row, 'meta', 'key'), requireText(row, 'meta', 'value'));
+  }
+  return entries;
+}
+
+function requiredEntry(entries: ReadonlyMap<string, string>, key: string): string {
+  const value = entries.get(key);
+  if (value === undefined) {
+    throw new ProjectStoreError({ kind: 'missing-meta-key', key });
+  }
+  return value;
+}
+
+/** Meta numbers are decimal strings in the DDL; anything else is malformed. */
+function requiredCount(entries: ReadonlyMap<string, string>, key: string): number {
+  const raw = requiredEntry(entries, key);
+  if (!/^(0|[1-9][0-9]*)$/.test(raw)) {
+    throw new ProjectStoreError({ kind: 'malformed-meta-value', key, value: raw });
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new ProjectStoreError({ kind: 'malformed-meta-value', key, value: raw });
+  }
+  return parsed;
+}
+
+function metaFrom(entries: ReadonlyMap<string, string>): ProjectMeta {
+  return {
+    schemaVersion: requiredCount(entries, 'schema_version'),
+    appVersion: requiredEntry(entries, 'app_version'),
+    projectName: requiredEntry(entries, 'project_name'),
+    createdAt: requiredEntry(entries, 'created_at'),
+    modifiedAt: requiredEntry(entries, 'modified_at'),
+  };
+}
+
+/**
+ * Refuses anything that is not a v1 project file.
+ *
+ * Version first, like the extraction cache: a project written by a newer build
+ * is refused by version rather than by complaining about keys that version
+ * never promised.
+ */
+function validateProject(db: DatabaseSync): void {
+  const tables = new Set(
+    db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all()
+      .map((row) => requireText(row, 'sqlite_master', 'name')),
+  );
+  for (const table of REQUIRED_TABLES) {
+    if (!tables.has(table)) {
+      throw new ProjectStoreError({ kind: 'missing-table', table });
+    }
+  }
+
+  const entries = readMetaEntries(db);
+  const found = requiredCount(entries, 'schema_version');
+  if (found > PROJECT_SCHEMA_VERSION) {
+    throw new ProjectStoreError({
+      kind: 'unsupported-schema-version',
+      found,
+      supported: PROJECT_SCHEMA_VERSION,
+    });
+  }
+  if (found < PROJECT_SCHEMA_VERSION) {
+    // Where the v2 migration hook attaches: back the file up
+    // (`backupBeforeMigration`), run the migration, record it in `migrations`.
+    throw new ProjectStoreError({
+      kind: 'migration-required',
+      found,
+      supported: PROJECT_SCHEMA_VERSION,
+    });
+  }
+
+  for (const key of REQUIRED_META_KEYS) {
+    if (!entries.has(key)) {
+      throw new ProjectStoreError({ kind: 'missing-meta-key', key });
+    }
+  }
+}
+
+/**
+ * Creates a new project file.
+ *
+ * @throws ProjectStoreError `already-exists` rather than overwriting anything,
+ * `cannot-open` if the path cannot be written.
+ */
+export function createProject(path: string, options: CreateProjectOptions): ProjectStore {
+  const name = requireFilledArgument(options.name, 'name');
+  const appVersion = requireFilledArgument(
+    options.appVersion ?? DEFAULT_APP_VERSION,
+    'appVersion',
+  );
+  const clock = options.now ?? SYSTEM_CLOCK;
+
+  if (existsSync(path)) {
+    throw new ProjectStoreError({ kind: 'already-exists', path });
+  }
+
+  let db: DatabaseSync;
+  try {
+    db = new DatabaseSync(path);
+  } catch (cause) {
+    throw cannotOpen(path, cause);
+  }
+
+  try {
+    db.exec('PRAGMA foreign_keys = ON');
+    const createdAt = isoNow(clock);
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.exec(PROJECT_SCHEMA_SQL);
+      const meta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)');
+      meta.run('schema_version', String(PROJECT_SCHEMA_VERSION));
+      meta.run('app_version', appVersion);
+      meta.run('project_name', name);
+      meta.run('created_at', createdAt);
+      meta.run('modified_at', createdAt);
+      db.prepare('INSERT INTO migrations (version, applied_at) VALUES (?, ?)').run(
+        PROJECT_SCHEMA_VERSION,
+        createdAt,
+      );
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  } catch (error) {
+    db.close();
+    // The file was ours to create, so it is ours to take back: leaving an empty
+    // SQLite file behind would make the next `createProject` refuse the path.
+    try {
+      unlinkSync(path);
+    } catch {
+      // Nothing useful to do; the original failure is the one that matters.
+    }
+    throw error instanceof ProjectStoreError ? error : cannotOpen(path, error);
+  }
+
+  return new SqliteProjectStore(db, path, clock);
+}
+
+/**
+ * Opens an existing project file.
+ *
+ * @throws ProjectStoreError `not-found`, `cannot-open` (not a database),
+ * `missing-table`, `missing-meta-key`, `malformed-meta-value`,
+ * `unsupported-schema-version` (written by a newer build) or
+ * `migration-required` (written by an older one).
+ */
+export function openProject(path: string, options: OpenProjectOptions = {}): ProjectStore {
+  if (!existsSync(path)) {
+    throw new ProjectStoreError({ kind: 'not-found', path });
+  }
+
+  let db: DatabaseSync;
+  try {
+    db = new DatabaseSync(path);
+  } catch (cause) {
+    throw cannotOpen(path, cause);
+  }
+
+  try {
+    db.exec('PRAGMA foreign_keys = ON');
+    validateProject(db);
+  } catch (error) {
+    db.close();
+    if (error instanceof ProjectStoreError) {
+      throw error;
+    }
+    // SQLite defers reading the file header, so a file that is not a database
+    // at all fails here rather than at construction. Callers still get one
+    // error type, not a raw driver error.
+    throw cannotOpen(path, error);
+  }
+
+  return new SqliteProjectStore(db, path, options.now ?? SYSTEM_CLOCK);
+}
+
+function isoNow(clock: Clock): string {
+  const value = clock();
+  const time = value.getTime();
+  if (!Number.isFinite(time)) {
+    invalidArgument('now', 'clock returned an invalid Date');
+  }
+  return value.toISOString();
+}
+
+class SqliteProjectStore implements ProjectStore {
+  readonly path: string;
+
+  #db: DatabaseSync | null;
+  readonly #clock: Clock;
+  #depth = 0;
+
+  constructor(db: DatabaseSync, path: string, clock: Clock) {
+    this.#db = db;
+    this.path = path;
+    this.#clock = clock;
+  }
+
+  #open(): DatabaseSync {
+    if (this.#db === null) {
+      throw new ProjectStoreError({ kind: 'closed', path: this.path });
+    }
+    return this.#db;
+  }
+
+  #now(): string {
+    return isoNow(this.#clock);
+  }
+
+  #touch(at: string): void {
+    this.#open().prepare("UPDATE meta SET value = ? WHERE key = 'modified_at'").run(at);
+  }
+
+  /**
+   * Runs `fn` in a transaction and stamps `modified_at` on success.
+   *
+   * The clock is read once per mutation and handed to `fn`, so the row a
+   * mutator writes and the `modified_at` it stamps carry the same instant
+   * rather than two readings a few microseconds apart.
+   */
+  #mutate<T>(fn: (at: string) => T): T {
+    return this.withTransaction(() => {
+      const at = this.#now();
+      const result = fn(at);
+      this.#touch(at);
+      return result;
+    });
+  }
+
+  meta(): ProjectMeta {
+    return metaFrom(readMetaEntries(this.#open()));
+  }
+
+  withTransaction<T>(fn: () => T): T {
+    const db = this.#open();
+    if (this.#depth > 0) {
+      // Already inside a transaction: join it. SQLite has no nested BEGIN, and
+      // a savepoint here would let an inner failure commit an outer partial
+      // write -- which is exactly the guarantee this method exists to give.
+      this.#depth += 1;
+      try {
+        return fn();
+      } finally {
+        this.#depth -= 1;
+      }
+    }
+
+    db.exec('BEGIN IMMEDIATE');
+    this.#depth = 1;
+    let result: T;
+    try {
+      result = fn();
+    } catch (error) {
+      this.#depth = 0;
+      db.exec('ROLLBACK');
+      throw error;
+    }
+    this.#depth = 0;
+    db.exec('COMMIT');
+    return result;
+  }
+
+  upsertSource(input: SourceInput): void {
+    const role = requireMemberArgument(input.role, SOURCE_ROLES, 'role');
+    const fileName = requireFilledArgument(input.fileName, 'fileName');
+    const sha256 = requireSha256Argument(input.sha256, 'sha256');
+    const byteSize = requireCountArgument(input.byteSize, 'byteSize');
+    const suppliedAt =
+      input.addedAt === undefined ? undefined : requireTimestampArgument(input.addedAt, 'addedAt');
+
+    this.#mutate((at) => {
+      const addedAt = suppliedAt ?? at;
+      this.#open()
+        .prepare(
+          `INSERT INTO sources (role, file_name, sha256, byte_size, added_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (role, file_name) DO UPDATE SET
+             sha256 = excluded.sha256,
+             byte_size = excluded.byte_size,
+             added_at = excluded.added_at`,
+        )
+        .run(role, fileName, sha256, byteSize, addedAt);
+    });
+  }
+
+  listSources(): readonly ProjectSource[] {
+    return this.#open()
+      .prepare(
+        'SELECT role, file_name, sha256, byte_size, added_at FROM sources ORDER BY role, file_name',
+      )
+      .all()
+      .map((row) => this.#readSource(row));
+  }
+
+  #readSource(row: SqlRow): ProjectSource {
+    const role = requireText(row, 'sources', 'role');
+    return {
+      role: requireMemberArgument(role, SOURCE_ROLES, 'sources.role'),
+      fileName: requireText(row, 'sources', 'file_name'),
+      sha256: requireText(row, 'sources', 'sha256'),
+      byteSize: requireInteger(row, 'sources', 'byte_size'),
+      addedAt: requireText(row, 'sources', 'added_at'),
+    };
+  }
+
+  removeSource(role: SourceRole, fileName: string): boolean {
+    const checkedRole = requireMemberArgument(role, SOURCE_ROLES, 'role');
+    const checkedName = requireFilledArgument(fileName, 'fileName');
+    return this.withTransaction(() => {
+      const changes = toCount(
+        this.#open()
+          .prepare('DELETE FROM sources WHERE role = ? AND file_name = ?')
+          .run(checkedRole, checkedName).changes,
+      );
+      if (changes > 0) {
+        this.#touch(this.#now());
+      }
+      return changes > 0;
+    });
+  }
+
+  saveProfile(profile: SiteProfile, revisionNote?: string): number {
+    // §13.3: every save validates before publication. A profile that cannot be
+    // read back is never written.
+    const validated = validateSiteProfile(profile);
+    const json = canonicalJson(validated, 'profile');
+    const note =
+      revisionNote === undefined ? null : requireFilledArgument(revisionNote, 'revisionNote');
+
+    return this.#mutate((savedAt) => {
+      const db = this.#open();
+      const row = db.prepare('SELECT COALESCE(MAX(revision), 0) + 1 AS next FROM profile').get();
+      if (row === undefined) {
+        throw new ProjectStoreError({
+          kind: 'malformed-row',
+          table: 'profile',
+          column: 'next',
+          detail: 'MAX(revision) returned no row',
+        });
+      }
+      const revision = requireInteger(row, 'profile', 'next');
+      db.prepare(
+        'INSERT INTO profile (revision, profile_json, note, saved_at) VALUES (?, ?, ?, ?)',
+      ).run(revision, json, note, savedAt);
+      return revision;
+    });
+  }
+
+  getProfile(): ProfileRevision | undefined {
+    const row = this.#open()
+      .prepare('SELECT revision, profile_json FROM profile ORDER BY revision DESC LIMIT 1')
+      .get();
+    return row === undefined ? undefined : this.#readProfileRow(row);
+  }
+
+  getProfileRevision(revision: number): ProfileRevision | undefined {
+    const checked = requireCountArgument(revision, 'revision');
+    const row = this.#open()
+      .prepare('SELECT revision, profile_json FROM profile WHERE revision = ?')
+      .get(checked);
+    return row === undefined ? undefined : this.#readProfileRow(row);
+  }
+
+  #readProfileRow(row: SqlRow): ProfileRevision {
+    return {
+      profile: validateSiteProfile(
+        parseStoredJson(requireText(row, 'profile', 'profile_json'), 'profile'),
+      ),
+      revision: requireInteger(row, 'profile', 'revision'),
+    };
+  }
+
+  listProfileRevisions(): readonly ProfileRevisionSummary[] {
+    return this.#open()
+      .prepare('SELECT revision, note, saved_at FROM profile ORDER BY revision DESC')
+      .all()
+      .map((row) => {
+        const note = optionalText(row, 'profile', 'note');
+        const summary: { revision: number; savedAt: string; note?: string } = {
+          revision: requireInteger(row, 'profile', 'revision'),
+          savedAt: requireText(row, 'profile', 'saved_at'),
+        };
+        if (note !== null) {
+          summary.note = note;
+        }
+        return summary;
+      });
+  }
+
+  saveLearnedRules(kind: LearnedRuleKind, rules: unknown): void {
+    const checkedKind = requireMemberArgument(kind, LEARNED_RULE_KINDS, 'kind');
+    const json = canonicalJson(rules, `learned.${checkedKind}`);
+    this.#mutate((savedAt) => {
+      this.#open()
+        .prepare('INSERT INTO learned (kind, rules_json, saved_at) VALUES (?, ?, ?)')
+        .run(checkedKind, json, savedAt);
+    });
+  }
+
+  getLearnedRules(kind: LearnedRuleKind): LearnedRuleRecord | undefined {
+    const checkedKind = requireMemberArgument(kind, LEARNED_RULE_KINDS, 'kind');
+    const row = this.#open()
+      .prepare('SELECT rules_json, saved_at FROM learned WHERE kind = ? ORDER BY id DESC LIMIT 1')
+      .get(checkedKind);
+    if (row === undefined) {
+      return undefined;
+    }
+    return {
+      kind: checkedKind,
+      rules: parseStoredJson(requireText(row, 'learned', 'rules_json'), 'learned'),
+      savedAt: requireText(row, 'learned', 'saved_at'),
+    };
+  }
+
+  setSystemOverride(assetKey: string, override: ManualSystemOverride): void {
+    const key = requireFilledArgument(assetKey, 'assetKey');
+    this.#putOverride('system', key, validateSystemOverride(override));
+  }
+
+  setRelationshipOverride(override: ManualRelationshipOverride): void {
+    const validated = validateRelationshipOverride(override);
+    this.#putOverride('relationship', validated.childAssetId, validated);
+  }
+
+  #putOverride(kind: OverrideKind, assetKey: string, payload: unknown): void {
+    const json = canonicalJson(payload, `override.${kind}`);
+    this.#mutate((updatedAt) => {
+      this.#open()
+        .prepare(
+          `INSERT INTO overrides (kind, asset_key, payload_json, updated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT (kind, asset_key) DO UPDATE SET
+             payload_json = excluded.payload_json,
+             updated_at = excluded.updated_at`,
+        )
+        .run(kind, assetKey, json, updatedAt);
+    });
+  }
+
+  listOverrides(): readonly StoredOverride[] {
+    return this.#open()
+      .prepare(
+        'SELECT kind, asset_key, payload_json, updated_at FROM overrides ORDER BY kind, asset_key',
+      )
+      .all()
+      .map((row) =>
+        readOverridePayload(
+          requireMemberArgument(
+            requireText(row, 'overrides', 'kind'),
+            OVERRIDE_KINDS,
+            'overrides.kind',
+          ),
+          requireText(row, 'overrides', 'asset_key'),
+          parseStoredJson(requireText(row, 'overrides', 'payload_json'), 'overrides'),
+          requireText(row, 'overrides', 'updated_at'),
+        ),
+      );
+  }
+
+  removeOverride(kind: OverrideKind, assetKey: string): boolean {
+    const checkedKind = requireMemberArgument(kind, OVERRIDE_KINDS, 'kind');
+    const key = requireFilledArgument(assetKey, 'assetKey');
+    return this.withTransaction(() => {
+      const changes = toCount(
+        this.#open()
+          .prepare('DELETE FROM overrides WHERE kind = ? AND asset_key = ?')
+          .run(checkedKind, key).changes,
+      );
+      if (changes > 0) {
+        this.#touch(this.#now());
+      }
+      return changes > 0;
+    });
+  }
+
+  recordCompile(input: CompileInput): number {
+    const hashes: Record<string, string> = {};
+    for (const key of Object.keys(input.inputHashes).sort()) {
+      const value = input.inputHashes[key];
+      if (value === undefined) {
+        continue;
+      }
+      hashes[requireFilledArgument(key, 'inputHashes key')] = requireSha256Argument(
+        value,
+        `inputHashes.${key}`,
+      );
+    }
+    const profileRevision = requireCountArgument(input.profileRevision, 'profileRevision');
+    const startedAt = requireTimestampArgument(input.startedAt, 'startedAt');
+    const finishedAt = requireTimestampArgument(input.finishedAt, 'finishedAt');
+    if (Date.parse(finishedAt) < Date.parse(startedAt)) {
+      invalidArgument('finishedAt', `${finishedAt} is before startedAt ${startedAt}`);
+    }
+    const statsJson = canonicalJson(input.statsJson, 'statsJson');
+
+    return this.#mutate((recordedAt) => {
+      const db = this.#open();
+      const profileRow = db
+        .prepare('SELECT revision FROM profile WHERE revision = ?')
+        .get(profileRevision);
+      if (profileRow === undefined) {
+        throw new ProjectStoreError({
+          kind: 'unknown-profile-revision',
+          revision: profileRevision,
+        });
+      }
+      const result = db
+        .prepare(
+          `INSERT INTO compiles
+             (input_hashes_json, profile_revision, stats_json, started_at, finished_at, recorded_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          canonicalJson(hashes, 'inputHashes'),
+          profileRevision,
+          statsJson,
+          startedAt,
+          finishedAt,
+          recordedAt,
+        );
+      return toCount(result.lastInsertRowid);
+    });
+  }
+
+  listCompiles(limit?: number): readonly CompileRecord[] {
+    let bound = -1;
+    if (limit !== undefined) {
+      bound = requireCountArgument(limit, 'limit');
+      if (bound === 0) {
+        return [];
+      }
+    }
+    return this.#open()
+      .prepare(
+        `SELECT id, input_hashes_json, profile_revision, stats_json, started_at, finished_at, recorded_at
+         FROM compiles ORDER BY id DESC LIMIT ?`,
+      )
+      .all(bound)
+      .map((row) => this.#readCompile(row));
+  }
+
+  #readCompile(row: SqlRow): CompileRecord {
+    const hashes = parseStoredJson(requireText(row, 'compiles', 'input_hashes_json'), 'compiles');
+    const inputHashes: Record<string, string> = {};
+    if (typeof hashes !== 'object' || hashes === null || Array.isArray(hashes)) {
+      throw new ProjectStoreError({
+        kind: 'malformed-json',
+        table: 'compiles',
+        detail: 'input_hashes_json is not an object',
+      });
+    }
+    for (const [key, value] of Object.entries(hashes)) {
+      if (typeof value !== 'string') {
+        throw new ProjectStoreError({
+          kind: 'malformed-json',
+          table: 'compiles',
+          detail: `input hash '${key}' is not a string`,
+        });
+      }
+      inputHashes[key] = value;
+    }
+
+    return {
+      compileId: requireInteger(row, 'compiles', 'id'),
+      inputHashes,
+      profileRevision: requireInteger(row, 'compiles', 'profile_revision'),
+      stats: parseStoredJson(requireText(row, 'compiles', 'stats_json'), 'compiles'),
+      startedAt: requireText(row, 'compiles', 'started_at'),
+      finishedAt: requireText(row, 'compiles', 'finished_at'),
+      recordedAt: requireText(row, 'compiles', 'recorded_at'),
+    };
+  }
+
+  saveSnapshot(compileId: number, snapshot: unknown): void {
+    const checkedId = requireCountArgument(compileId, 'compileId');
+    const json = canonicalJson(snapshot, 'snapshot');
+    this.#mutate((savedAt) => {
+      const db = this.#open();
+      const compile = db.prepare('SELECT id FROM compiles WHERE id = ?').get(checkedId);
+      if (compile === undefined) {
+        throw new ProjectStoreError({ kind: 'unknown-compile', compileId: checkedId });
+      }
+      // One snapshot at a time: `slot` is pinned to 0 by the DDL, so replacing
+      // the latest is structural rather than a convention.
+      db.exec('DELETE FROM snapshots');
+      db.prepare(
+        'INSERT INTO snapshots (slot, compile_id, snapshot_json, saved_at) VALUES (0, ?, ?, ?)',
+      ).run(checkedId, json, savedAt);
+    });
+  }
+
+  getLatestSnapshot<T = unknown>(
+    validate?: (value: unknown) => T,
+  ): LatestSnapshot<T> | undefined {
+    const row = this.#open()
+      .prepare('SELECT compile_id, snapshot_json FROM snapshots WHERE slot = 0')
+      .get();
+    if (row === undefined) {
+      return undefined;
+    }
+    const parsed = parseStoredJson(requireText(row, 'snapshots', 'snapshot_json'), 'snapshots');
+    // Without a validate hook the caller asked for `unknown`, which is what
+    // `T` defaults to; the assertion cannot widen anything they can misuse.
+    const snapshot = validate === undefined ? (parsed as T) : validate(parsed);
+    return { compileId: requireInteger(row, 'snapshots', 'compile_id'), snapshot };
+  }
+
+  recordDecision(input: DecisionInput): void {
+    const reviewKey = requireFilledArgument(input.reviewKey, 'reviewKey');
+    const decision = requireMemberArgument(input.decision, DECISION_VALUES, 'decision');
+    const note = input.note === undefined ? null : requireFilledArgument(input.note, 'note');
+    const decidedAt = requireTimestampArgument(input.decidedAt, 'decidedAt');
+    this.#mutate(() => {
+      this.#open()
+        .prepare(
+          'INSERT INTO decisions (review_key, decision, note, decided_at) VALUES (?, ?, ?, ?)',
+        )
+        .run(reviewKey, decision, note, decidedAt);
+    });
+  }
+
+  listDecisions(): readonly ReviewDecision[] {
+    return this.#open()
+      .prepare('SELECT review_key, decision, note, decided_at FROM decisions ORDER BY id')
+      .all()
+      .map((row) => this.#readDecision(row));
+  }
+
+  decisionFor(reviewKey: string): ReviewDecision | undefined {
+    const key = requireFilledArgument(reviewKey, 'reviewKey');
+    const row = this.#open()
+      .prepare(
+        `SELECT review_key, decision, note, decided_at FROM decisions
+         WHERE review_key = ? ORDER BY id DESC LIMIT 1`,
+      )
+      .get(key);
+    return row === undefined ? undefined : this.#readDecision(row);
+  }
+
+  #readDecision(row: SqlRow): ReviewDecision {
+    const note = optionalText(row, 'decisions', 'note');
+    const decision: {
+      reviewKey: string;
+      decision: DecisionValue;
+      decidedAt: string;
+      note?: string;
+    } = {
+      reviewKey: requireText(row, 'decisions', 'review_key'),
+      decision: requireMemberArgument(
+        requireText(row, 'decisions', 'decision'),
+        DECISION_VALUES,
+        'decisions.decision',
+      ),
+      decidedAt: requireText(row, 'decisions', 'decided_at'),
+    };
+    if (note !== null) {
+      decision.note = note;
+    }
+    return decision;
+  }
+
+  close(): void {
+    if (this.#db !== null) {
+      this.#db.close();
+      this.#db = null;
+    }
+  }
+}
