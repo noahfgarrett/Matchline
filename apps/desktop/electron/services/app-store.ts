@@ -6,10 +6,10 @@ import { projectConfigSchema, type WireProjectConfig } from '../../shared/schema
 /**
  * The app's own small state file, kept in `app.getPath('userData')`.
  *
- * Three things live here:
+ * Two things live here, and they are both about this machine rather than about
+ * any one site:
  *
- * - **Recent projects.** A list of files this installation has opened. It is
- *   about the machine, not about any one site.
+ * - **Recent projects.** A list of files this installation has opened.
  * - **A sha256 → absolute path index.** A project file records source *names*
  *   and hashes and deliberately no directories (PRODUCT.md §13.3), so reopening
  *   a project cannot on its own find the workbook or extraction cache a source
@@ -17,24 +17,20 @@ import { projectConfigSchema, type WireProjectConfig } from '../../shared/schema
  *   with that hash. It is a convenience, never authority: a hash that resolves
  *   to a file whose bytes no longer match is treated as missing, and a project
  *   that opens on another machine simply asks for the files again.
- * - **The screens 6-7 sections, keyed by project path.** See the note below;
- *   this one is here under protest.
  *
- * ## Why the hierarchy config is in a machine-local file
+ * ## The screens 6-7 sections used to live here, and no longer do
  *
- * The `.matchline` schema (v1) has a table per thing it stores, and none of
- * them fits: `profile` holds a validated `SiteProfile`, which cannot carry a
- * hierarchy, a role graph, a ladder or a discipline projection (see
- * `project-config.ts`), and `saveProfile` drops any key the domain type does
- * not name. `learned`, `overrides`, `compiles` and `snapshots` all mean
- * something else. Rather than smuggle the config into a table that lies about
- * what it holds, it lives here, keyed by project path, and travels between
- * machines in the portable profile package (PRODUCT.md §13.3).
+ * Project schema v1 had no table that could hold a hierarchy, a role graph, a
+ * ladder or a discipline projection, so the app kept them here keyed by project
+ * path. The cost was that moving or copying a `.matchline` file lost them and
+ * the wizard reopened on its defaults. Schema v2 adds a `config` table and
+ * `project-config.ts` owns it now.
  *
- * The cost is real and worth stating: moving a `.matchline` file without its
- * profile package loses the screens 6-7 decisions, and the wizard reopens on
- * the defaults. The fix is a project schema v2 with a `config` table; it is a
- * migration, so it belongs to a hardening round rather than to this one.
+ * What survives here is one-way: {@link AppStateStore.takeLegacyProjectConfig}
+ * reads an entry written by an older build and removes it in the same call, so
+ * opening a project carries its configuration into the file exactly once. New
+ * entries are never written, and once the last one has been taken the key
+ * disappears from the file altogether.
  *
  * Writes are atomic (temp file + rename) so a crash mid-write cannot leave the
  * installation with an unparseable state file.
@@ -51,8 +47,13 @@ interface AppState {
   readonly recentProjects: readonly RecentProjectEntry[];
   /** Lowercase hex sha256 → the absolute path the file was last seen at. */
   readonly sourcePaths: Readonly<Record<string, string>>;
-  /** Project file path → the screens 6-7 sections last written for it. */
-  readonly projectConfigs: Readonly<Record<string, WireProjectConfig>>;
+  /**
+   * Project file path → the screens 6-7 sections an older build left here.
+   *
+   * Read-and-remove only. Persisted under the key an older build wrote,
+   * `projectConfigs`, and omitted from the file once empty.
+   */
+  readonly legacyProjectConfigs: Readonly<Record<string, WireProjectConfig>>;
 }
 
 const STATE_FILE_NAME = 'app-state.json';
@@ -63,7 +64,7 @@ const EMPTY_STATE: AppState = {
   version: 1,
   recentProjects: [],
   sourcePaths: {},
-  projectConfigs: {},
+  legacyProjectConfigs: {},
 };
 
 export interface AppStateStore {
@@ -73,9 +74,16 @@ export interface AppStateStore {
   /** Where a file with this hash was last seen, or `undefined`. */
   sourcePath(sha256: string): string | undefined;
   rememberSourcePath(sha256: string, absolutePath: string): void;
-  /** The screens 6-7 sections for one project, or `undefined` if never written. */
-  projectConfig(projectPath: string): WireProjectConfig | undefined;
-  rememberProjectConfig(projectPath: string, config: WireProjectConfig): void;
+  /**
+   * The screens 6-7 sections an older build left for this project, removing
+   * them as it hands them over. `undefined` when there are none.
+   *
+   * One-way and one-shot: the caller copies them into the project file's own
+   * `config` table, and a second call finds nothing. That asymmetry is the
+   * point — two copies of a configuration is exactly the problem schema v2
+   * exists to end.
+   */
+  takeLegacyProjectConfig(projectPath: string): WireProjectConfig | undefined;
 }
 
 /** Reads one entry, returning `null` rather than throwing on anything odd. */
@@ -138,19 +146,20 @@ function parseState(text: string): AppState {
   }
 
   // Validated by the same schema the wire uses: a config the app can no longer
-  // read is dropped back to the defaults rather than half-applied.
+  // read is dropped rather than half-applied, and the project opens on the
+  // defaults instead.
   const rawConfigs = record['projectConfigs'];
-  const projectConfigs: Record<string, WireProjectConfig> = {};
+  const legacyProjectConfigs: Record<string, WireProjectConfig> = {};
   if (typeof rawConfigs === 'object' && rawConfigs !== null) {
     for (const [projectPath, value] of Object.entries(rawConfigs as Record<string, unknown>)) {
       const parsed = projectConfigSchema.safeParse(value);
       if (projectPath.length > 0 && parsed.success) {
-        projectConfigs[projectPath] = parsed.data;
+        legacyProjectConfigs[projectPath] = parsed.data;
       }
     }
   }
 
-  return { version: 1, recentProjects, sourcePaths, projectConfigs };
+  return { version: 1, recentProjects, sourcePaths, legacyProjectConfigs };
 }
 
 /**
@@ -168,8 +177,18 @@ export function createAppStateStore(userDataDir: string): AppStateStore {
 
   const persist = (): void => {
     mkdirSync(userDataDir, { recursive: true });
+    // `projectConfigs` is written back only while entries an older build left
+    // are still waiting to be taken; once the last one is gone, so is the key.
+    const written: Record<string, unknown> = {
+      version: state.version,
+      recentProjects: state.recentProjects,
+      sourcePaths: state.sourcePaths,
+    };
+    if (Object.keys(state.legacyProjectConfigs).length > 0) {
+      written['projectConfigs'] = state.legacyProjectConfigs;
+    }
     const temporaryPath = `${filePath}.tmp`;
-    writeFileSync(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+    writeFileSync(temporaryPath, `${JSON.stringify(written, null, 2)}\n`, 'utf8');
     renameSync(temporaryPath, filePath);
   };
 
@@ -206,19 +225,16 @@ export function createAppStateStore(userDataDir: string): AppStateStore {
       persist();
     },
 
-    projectConfig(projectPath: string): WireProjectConfig | undefined {
-      return state.projectConfigs[projectPath];
-    },
-
-    rememberProjectConfig(projectPath: string, config: WireProjectConfig): void {
-      if (projectPath.length === 0) {
-        throw new Error('A project config needs the project path it belongs to.');
+    takeLegacyProjectConfig(projectPath: string): WireProjectConfig | undefined {
+      const config = state.legacyProjectConfigs[projectPath];
+      if (config === undefined) {
+        return undefined;
       }
-      state = {
-        ...state,
-        projectConfigs: { ...state.projectConfigs, [projectPath]: config },
-      };
+      const remaining = { ...state.legacyProjectConfigs };
+      delete remaining[projectPath];
+      state = { ...state, legacyProjectConfigs: remaining };
       persist();
+      return config;
     },
   };
 }

@@ -21,13 +21,17 @@ export type { ManualSystemOverride, StoredOverride } from './overrides.js';
 export { validateSiteProfile } from './profile-json.js';
 
 export {
+  CONFIG_KEYS,
+  CONFIG_TABLE_SQL,
   DECISION_VALUES,
   DEFAULT_APP_VERSION,
+  isConfigKey,
   isDecisionValue,
   isLearnedRuleKind,
   isOverrideKind,
   isSourceRole,
   LEARNED_RULE_KINDS,
+  MIGRATION_STEPS,
   OVERRIDE_KINDS,
   PROJECT_SCHEMA_SQL,
   PROJECT_SCHEMA_VERSION,
@@ -36,8 +40,10 @@ export {
   SOURCE_ROLES,
 } from './schema.js';
 export type {
+  ConfigKey,
   DecisionValue,
   LearnedRuleKind,
+  MigrationStep,
   OverrideKind,
   SourceRole,
 } from './schema.js';
@@ -50,10 +56,12 @@ export type {
   Clock,
   CompileInput,
   CompileRecord,
+  ConfigEntry,
   CreateProjectOptions,
   DecisionInput,
   LatestSnapshot,
   LearnedRuleRecord,
+  MigrationReport,
   OpenProjectOptions,
   ProfileRevision,
   ProfileRevisionSummary,

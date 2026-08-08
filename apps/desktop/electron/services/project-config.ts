@@ -8,18 +8,21 @@ import {
   type PropertyRef,
   type RoleGraphConfig,
 } from '@matchline/domain';
+import { CONFIG_KEYS, type ConfigEntry, type ProjectStore } from '@matchline/project-store';
 
-import type {
-  WireAttributeChoice,
-  WireConfigPatch,
-  WireHierarchyLevel,
-  WireLadderSource,
-  WireProjectConfig,
+import {
+  projectConfigSchema,
+  type WireAttributeChoice,
+  type WireConfigPatch,
+  type WireHierarchyLevel,
+  type WireLadderSource,
+  type WireProjectConfig,
 } from '../../shared/schemas.js';
 
 /**
- * The sections screens 6 and 7 configure, and the one conversion between their
- * wire shape and what `@matchline/compiler` takes on `CompileProjectInput`.
+ * The sections screens 6 and 7 configure: where they live in the project file,
+ * and the one conversion between their wire shape and what
+ * `@matchline/compiler` takes on `CompileProjectInput`.
  *
  * ## Why these are not part of the draft Site Profile
  *
@@ -31,9 +34,17 @@ import type {
  * as input rather than widening a shared domain type from the orchestrator.
  *
  * The desktop app keeps them together in {@link WireProjectConfig}, in the
- * shape a profile section would eventually hold, and the portable profile
- * package (PRODUCT.md §13.3) carries them alongside the draft. When the domain
- * type grows these sections, this file becomes a move rather than a redesign.
+ * shape a profile section would eventually hold. When the domain type grows
+ * these sections, this file becomes a move rather than a redesign.
+ *
+ * ## Where they persist
+ *
+ * In the project file's `config` table, one row per section (schema v2). That
+ * is the whole point of v2: before it these lived in the app's machine-local
+ * state file keyed by project path, so moving or copying a `.matchline` file
+ * silently reset the wizard to its defaults. A project file now carries its own
+ * configuration, and the portable profile package (PRODUCT.md §13.3) remains
+ * the way to carry it to a *different* project.
  */
 
 /**
@@ -96,6 +107,55 @@ export function applyConfigPatch(
     parentTagProperty:
       patch.parentTagProperty === undefined ? config.parentTagProperty : patch.parentTagProperty,
   };
+}
+
+/* ---------------------------------------------------------- the config table */
+
+/**
+ * The five sections as one object, or `null` when the project has none.
+ *
+ * `null` covers both "never configured" and "configured by something this build
+ * cannot read": the caller treats them the same way, because the honest
+ * response to either is to open the wizard on its defaults rather than to
+ * half-apply a config and let a compile run against it.
+ *
+ * The sections are written together by {@link writeProjectConfig}, so the table
+ * is either empty or complete; a partial table is corruption, and parsing the
+ * whole thing at once is what notices.
+ */
+export function readProjectConfig(store: ProjectStore): WireProjectConfig | null {
+  const entries = store.listConfig();
+  if (entries.length === 0) {
+    return null;
+  }
+
+  const byKey = new Map(entries.map((entry: ConfigEntry): [string, unknown] => [
+    entry.key,
+    entry.value,
+  ]));
+  const parsed = projectConfigSchema.safeParse({
+    hierarchy: byKey.get('hierarchy'),
+    roleGraph: byKey.get('roleGraph'),
+    ladder: byKey.get('ladder'),
+    ssmDisciplineProjection: byKey.get('ssmDisciplineProjection'),
+    parentTagProperty: byKey.get('parentTagProperty') ?? null,
+  });
+  return parsed.success ? parsed.data : null;
+}
+
+/**
+ * Writes all five sections in one transaction.
+ *
+ * All five every time, rather than only the ones a patch named: the table's
+ * meaning is "what this project is configured to", and a half-written table
+ * would let a later read pick up four current sections and one stale one.
+ */
+export function writeProjectConfig(store: ProjectStore, config: WireProjectConfig): void {
+  store.withTransaction((): void => {
+    for (const key of CONFIG_KEYS) {
+      store.saveConfig(key, config[key]);
+    }
+  });
 }
 
 /* ------------------------------------------------------------ wire -> domain */

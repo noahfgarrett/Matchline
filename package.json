@@ -1,6 +1,6 @@
 {
   "name": "matchline",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -16,12 +16,15 @@
     "postsetup": "npm rebuild electron esbuild && node node_modules/electron/install.js",
     "dev:desktop": "npm run dev --workspace @matchline/desktop",
     "build:desktop": "npm run build --workspace @matchline/desktop",
+    "package:mac": "npm run package:mac --workspace @matchline/desktop",
+    "package:win": "npm run package:win --workspace @matchline/desktop",
     "test": "npm run test:workspaces && npm run test:legacy && npm run test:integration",
     "test:workspaces": "npm test --workspace @matchline/domain && npm test --workspace @matchline/model-schema && npm test --workspace @matchline/tag-anatomy && npm test --workspace @matchline/spreadsheet-import && npm test --workspace @matchline/asset-catalog && npm test --workspace @matchline/system-resolver && npm test --workspace @matchline/mel-export && npm test --workspace @matchline/connectivity-import && npm test --workspace @matchline/identity && npm test --workspace @matchline/electrical-flow && npm test --workspace @matchline/relationship-claims && npm test --workspace @matchline/learned-rules && npm test --workspace @matchline/ssm-compiler && npm test --workspace @matchline/compiler && npm test --workspace @matchline/scheduling && npm test --workspace @matchline/exto-export && npm test --workspace @matchline/project-store && npm test --workspace @matchline/desktop",
     "test:legacy": "npm test --prefix packages/legacy-parity",
     "test:integration": "node --test tests/integration/*.test.mjs"
   },
   "devDependencies": {
+    "electron-builder": "26.15.3",
     "typescript": "7.0.2"
   }
 }

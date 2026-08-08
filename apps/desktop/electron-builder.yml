@@ -1,0 +1,81 @@
+# Matchline packaging — unsigned "try it" builds (docs/INSTALL-TRY-IT.md).
+#
+# PRODUCT.md §14 names a *signed* MSIX as the eventual Windows target. Signing needs a
+# certificate that does not exist yet (STATUS.md deferred list / DECISIONS.md open items),
+# so everything here is deliberately unsigned and every signing path is switched off
+# explicitly rather than left to default discovery.
+#
+# No `publish:` block anywhere: there is no update feed and the app must not phone home.
+
+appId: com.matchline.app
+productName: Matchline
+copyright: Copyright © 2026 Matchline
+
+# There is no update feed and no release host. `null` is the explicit form of that.
+publish: null
+
+directories:
+  # `dist/` is the app's own build output (dist/electron, dist/renderer, dist/preload.cjs),
+  # which is also electron-builder's default output dir — hence the rename.
+  output: release
+
+# The app package is exactly the built trees plus the manifest electron reads for
+# `main`/`version`. Sources, maps and type declarations stay out of the shipped bundle.
+files:
+  - package.json
+  - dist/electron/**/*
+  - dist/shared/**/*
+  - dist/preload.cjs
+  - dist/renderer/**/*
+  - node_modules/**/*
+  - '!**/*.map'
+  - '!**/*.d.ts'
+  - '!**/*.tsbuildinfo'
+  # Workspace packages are consumed as built JS; their TypeScript sources are dead weight.
+  - '!node_modules/@matchline/*/src'
+  - '!**/{.eslintrc,.editorconfig,.nvmrc,.prettierrc}'
+
+asar: true
+
+# node:sqlite is built into Node, and nothing else in the tree is native — there is no
+# rebuild step to run, and the global `ignore-scripts=true` policy (APP.md) means an
+# implicit one would be a surprise.
+npmRebuild: false
+
+mac:
+  category: public.app-category.productivity
+  # Unsigned, and not by omission: `identity: null` stops electron-builder from picking up
+  # a Developer ID out of the local keychain and silently producing a signed build.
+  identity: null
+  target:
+    - target: zip
+      arch:
+        - arm64
+
+win:
+  # Unsigned, explicitly: `signExecutable: false` skips code signing (and would ignore a
+  # stray CSC_LINK in the environment) while keeping the resedit pass that stamps the app
+  # name/version onto Matchline.exe — pure JS, so it works cross-building from macOS.
+  signExecutable: false
+  signtoolOptions: null
+  forceCodeSigning: false
+  target:
+    - target: zip
+      arch:
+        - x64
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Matchline
+  # Differential packages exist for the updater. There is no updater.
+  differentialPackage: false
+  artifactName: ${productName}-${version}-Setup-${arch}.${ext}
+
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}

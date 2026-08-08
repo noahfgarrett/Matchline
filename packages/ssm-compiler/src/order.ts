@@ -18,11 +18,58 @@ import type {
 } from '@matchline/domain';
 
 /**
- * NUL appears in no asset id, tag or level id, so a composed key stays
- * unambiguous: two items whose fields differ only in where a boundary falls can
- * never collide onto one key and silently dedupe each other away.
+ * The boundary between the fields of a review key: U+241F SYMBOL FOR UNIT
+ * SEPARATOR, written as a code point so nothing invisible sits in this file.
+ *
+ * Printable on purpose. A review key is not only sorted and deduped in memory:
+ * the desktop app stores it in `decisions.review_key` and uses it as the React
+ * key of a review row. `node:sqlite` truncates a bound string at the first NUL,
+ * so a NUL-joined `system-conflict<NUL>tag:MAH001-10-01<NUL>2` would be
+ * *stored* as `system-conflict`, and one decision would decide every system
+ * conflict in the project. A C0 control byte fails one layer up for the same
+ * kind of reason: an HTML attribute cannot carry one.
  */
-const KEY_SEPARATOR = '\u0000';
+const KEY_SEPARATOR = String.fromCodePoint(0x241f);
+
+/** The boundary between the members of a list-valued field. */
+const LIST_SEPARATOR = ',';
+
+/**
+ * One field of a key, with every structural character escaped.
+ *
+ * This is what keeps the mapping injective now that the separator is a
+ * character a spreadsheet could in principle contain. `%` is escaped first, so
+ * a literal `%1F` in a tag encodes as `%251F` and can never be read back as an
+ * escaped separator; two items whose fields differ only in where a boundary
+ * falls therefore still produce two keys, rather than colliding onto one and
+ * silently deduping each other away.
+ */
+function field(value: string): string {
+  return value
+    .replaceAll('%', '%25')
+    .replaceAll(KEY_SEPARATOR, '%1F')
+    .replaceAll(LIST_SEPARATOR, '%2C');
+}
+
+/** A list-valued field: every member escaped, then joined. */
+function fieldList(values: readonly string[]): string {
+  return values.map(field).join(LIST_SEPARATOR);
+}
+
+/** Numbers carry no structural character, so they join without escaping. */
+function numberList(values: readonly number[]): string {
+  return values.map(String).join(LIST_SEPARATOR);
+}
+
+/**
+ * Joins already-escaped fields onto the item kind.
+ *
+ * The kind is a literal from a closed set, none of which holds a structural
+ * character, so it is the one field that needs no escaping.
+ */
+function composeKey(kind: ReviewItem['kind'], ...fields: readonly string[]): string {
+  return [kind, ...fields].join(KEY_SEPARATOR);
+}
 
 /** UTF-16 code-unit order, so ordering never depends on a locale. */
 export function compareText(left: string, right: string): number {
@@ -155,7 +202,14 @@ export function compareDependencies(left: ResolvedDependency, right: ResolvedDep
 }
 
 /**
- * One review item flattened to a sortable, dedupable string.
+ * One review item flattened to a sortable, dedupable, storable string.
+ *
+ * Every field is escaped and every boundary is one of the two separators above,
+ * which is what makes the flattening reversible in principle and collision-free
+ * in practice. `fuzzy-identity` is the one shape that carries a third
+ * character: a candidate is `<assetId>:<distance>`, and since the distance is a
+ * trailing integer the last `:` is the boundary however many colons the asset
+ * id itself contains.
  *
  * No `default` branch on purpose: adding a member to `ReviewItem` without adding
  * a case here stops this function compiling, so a new review kind can never
@@ -164,25 +218,40 @@ export function compareDependencies(left: ResolvedDependency, right: ResolvedDep
 export function reviewKey(item: ReviewItem): string {
   switch (item.kind) {
     case 'system-conflict':
-      return `${item.kind}${KEY_SEPARATOR}${item.assetId}${KEY_SEPARATOR}${item.claims.length}`;
+      return composeKey(item.kind, field(item.assetId), String(item.claims.length));
     case 'duplicate-model-tag':
-      return `${item.kind}${KEY_SEPARATOR}${item.canonicalTag}${KEY_SEPARATOR}${item.objectIds.join(',')}`;
+      return composeKey(item.kind, field(item.canonicalTag), numberList(item.objectIds));
     case 'system-catalog-conflict':
-      return `${item.kind}${KEY_SEPARATOR}${item.systemKey}${KEY_SEPARATOR}${item.descriptions.join(',')}`;
+      return composeKey(item.kind, field(item.systemKey), fieldList(item.descriptions));
     case 'fuzzy-identity':
-      return `${item.kind}${KEY_SEPARATOR}${item.evidenceTag}${KEY_SEPARATOR}${item.candidates
-        .map((candidate) => `${candidate.assetId}:${String(candidate.distance)}`)
-        .join(',')}`;
+      return composeKey(
+        item.kind,
+        field(item.evidenceTag),
+        item.candidates
+          .map((candidate) => `${field(candidate.assetId)}:${String(candidate.distance)}`)
+          .join(LIST_SEPARATOR),
+      );
     case 'ambiguous-suffix':
-      return `${item.kind}${KEY_SEPARATOR}${item.evidenceTag}${KEY_SEPARATOR}${item.candidateAssetIds.join(',')}`;
+      return composeKey(item.kind, field(item.evidenceTag), fieldList(item.candidateAssetIds));
     case 'ambiguous-parent':
-      return `${item.kind}${KEY_SEPARATOR}${item.assetId}${KEY_SEPARATOR}${item.ladderSource}${KEY_SEPARATOR}${item.candidateParentIds.join(',')}`;
+      return composeKey(
+        item.kind,
+        field(item.assetId),
+        field(item.ladderSource),
+        fieldList(item.candidateParentIds),
+      );
     case 'structural-cycle':
-      return `${item.kind}${KEY_SEPARATOR}${item.assetIds.join(',')}`;
+      return composeKey(item.kind, fieldList(item.assetIds));
     case 'missing-boundary':
-      return `${item.kind}${KEY_SEPARATOR}${item.assetId}${KEY_SEPARATOR}${item.levelId}`;
+      return composeKey(item.kind, field(item.assetId), field(item.levelId));
     case 'nesting-proposal':
-      return `${item.kind}${KEY_SEPARATOR}${item.assetId}${KEY_SEPARATOR}${item.proposedParentId}${KEY_SEPARATOR}${item.ruleDetail}${KEY_SEPARATOR}${String(item.confidence)}`;
+      return composeKey(
+        item.kind,
+        field(item.assetId),
+        field(item.proposedParentId),
+        field(item.ruleDetail),
+        String(item.confidence),
+      );
   }
   return assertNever(item, 'unhandled ReviewItem');
 }

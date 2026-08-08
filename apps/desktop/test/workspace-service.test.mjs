@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -619,11 +627,18 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
 
     const keys = new Set();
     for (const row of rows) {
-      // `@matchline/ssm-compiler`'s reviewKey joins with \u0000, and node:sqlite
-      // stores such a string truncated at the first one — every item of a kind
-      // would collapse onto one row and one decision would decide them all.
-      assert.equal(row.reviewKey.includes('\u0000'), false, 'no NUL reaches storage or the DOM');
-      assert.equal(keys.has(row.reviewKey), false, 'the safe encoding stays injective');
+      // `@matchline/ssm-compiler`'s reviewKey used to join its fields with NUL,
+      // and node:sqlite stores such a string truncated at the first one — every
+      // item of a kind would collapse onto one row and one decision would
+      // decide them all. The engine joins with U+241F now; this is the assertion
+      // that the whole round trip, engine to store to wire, still holds.
+      for (const character of row.reviewKey) {
+        assert.ok(
+          character.codePointAt(0) > 0x1f,
+          `${row.reviewKey} carries a control character`,
+        );
+      }
+      assert.equal(keys.has(row.reviewKey), false, 'the keys stay injective');
       keys.add(row.reviewKey);
     }
   });
@@ -929,6 +944,169 @@ test('a compile with no model fails with something a person can act on', () => {
     assert.equal(service.compileStatus().state, 'never-run', 'a refusal is not a failed compile');
   } finally {
     service.close();
+  }
+});
+
+/* ============================== the configuration travels with the file ==== */
+
+/** All five screens 6-7 sections, each set to something not its default. */
+const FULL_CONFIG_PATCH = {
+  hierarchy: {
+    levels: [
+      {
+        levelId: 'system',
+        displayName: 'System',
+        attributeKey: 'systemKey',
+        boundary: true,
+        missingValuePolicy: 'unassigned-group',
+        sort: 'key',
+      },
+      {
+        levelId: 'building',
+        displayName: 'Building',
+        attributeKey: 'building',
+        boundary: false,
+        missingValuePolicy: 'review',
+        sort: 'label',
+      },
+    ],
+  },
+  roleGraph: { rules: [{ parentRole: 'PNL', childRole: 'RIO' }] },
+  ladder: { tiers: ['manual', 'flow-family'] },
+  ssmDisciplineProjection: [{ from: 'I&C', to: 'Electrical' }],
+  parentTagProperty: { category: 'Dragon Data', name: 'Parent Tag' },
+};
+
+/**
+ * The scenario the old design lost: schema v1 kept these five sections in the
+ * app's machine-local state file keyed by project path, so a `.matchline` that
+ * was renamed, moved to another folder, or copied to another machine reopened
+ * on the wizard defaults with no warning. Schema v2's `config` table is what
+ * makes the file self-contained, and this is the test that says so.
+ *
+ * The reader deliberately runs on a *different* userData directory, so nothing
+ * machine-local can be quietly supplying the answer.
+ */
+test('a moved project file carries its whole configuration with it', () => {
+  const originalPath = join(workDir, 'Portable.matchline');
+  const movedDir = join(workDir, 'somewhere-else');
+  const movedPath = join(movedDir, 'Renamed-By-The-User.matchline');
+
+  const writer = newService();
+  let configured;
+  try {
+    writer.create(originalPath, 'Portable');
+    configured = writer.updateConfig(FULL_CONFIG_PATCH);
+    assert.deepEqual(configured.ladder.tiers, ['manual', 'flow-family']);
+  } finally {
+    writer.close();
+  }
+
+  mkdirSync(movedDir, { recursive: true });
+  renameSync(originalPath, movedPath);
+
+  const reader = createProjectService({
+    userDataDir: join(workDir, 'other-machine'),
+    appVersion: '0.6.0',
+  });
+  try {
+    const { project, notice } = reader.open(movedPath);
+    assert.equal(project.path, movedPath);
+    assert.equal(notice.migration, null, 'the file was already current');
+    assert.equal(notice.adoptedAppStateConfig, false, 'nothing machine-local was involved');
+    assert.deepEqual(reader.config(), configured, 'every section came back off the file');
+  } finally {
+    reader.close();
+  }
+});
+
+test('an imported profile package is written into the project, not just held', () => {
+  const packagePath = join(workDir, 'portable.matchline-profile.json');
+  const targetPath = join(workDir, 'Imported.matchline');
+
+  const exporter = newService();
+  try {
+    exporter.create(join(workDir, 'Exporter.matchline'), 'Exporter');
+    exporter.updateConfig(FULL_CONFIG_PATCH);
+    exporter.updateDraft({ propertyMappings: PROPERTY_MAPPINGS, tagAnatomy: DRAGON_ANATOMY });
+    assert.equal(exporter.exportProfilePackage(packagePath).written, true);
+  } finally {
+    exporter.close();
+  }
+
+  const importer = newService();
+  try {
+    importer.create(targetPath, 'Imported');
+    const imported = importer.importProfilePackage(packagePath);
+    assert.deepEqual(imported.config.ladder.tiers, ['manual', 'flow-family']);
+  } finally {
+    importer.close();
+  }
+
+  const reopened = newService();
+  try {
+    reopened.open(targetPath);
+    assert.deepEqual(
+      reopened.config().parentTagProperty,
+      { category: 'Dragon Data', name: 'Parent Tag' },
+      'the import landed in the config table, so it survived the close',
+    );
+  } finally {
+    reopened.close();
+  }
+});
+
+/**
+ * The one-way move out of the app-state file, for projects configured by a
+ * build that had nowhere else to put it.
+ */
+test('a config left in the app-state file is copied into the project once', () => {
+  const projectPathHere = join(workDir, 'Legacy.matchline');
+  const legacyUserData = join(workDir, 'legacy-userdata');
+
+  const creator = createProjectService({ userDataDir: legacyUserData, appVersion: '0.6.0' });
+  try {
+    creator.create(projectPathHere, 'Legacy');
+  } finally {
+    creator.close();
+  }
+
+  // Exactly what an older build's state file looked like: recents, the hash
+  // index, and the screens 6-7 sections keyed by project path.
+  const statePath = join(legacyUserData, 'app-state.json');
+  const state = JSON.parse(readFileSync(statePath, 'utf8'));
+  const legacyConfig = {
+    hierarchy: FULL_CONFIG_PATCH.hierarchy,
+    roleGraph: FULL_CONFIG_PATCH.roleGraph,
+    ladder: FULL_CONFIG_PATCH.ladder,
+    ssmDisciplineProjection: FULL_CONFIG_PATCH.ssmDisciplineProjection,
+    parentTagProperty: FULL_CONFIG_PATCH.parentTagProperty,
+  };
+  state.projectConfigs = { [projectPathHere]: legacyConfig };
+  writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+
+  const first = createProjectService({ userDataDir: legacyUserData, appVersion: '0.6.0' });
+  try {
+    const { notice } = first.open(projectPathHere);
+    assert.equal(notice.adoptedAppStateConfig, true, 'the copy is reported, not silent');
+    assert.deepEqual(first.config(), legacyConfig);
+  } finally {
+    first.close();
+  }
+
+  // One-way: the state file no longer holds it, so there is only ever one copy.
+  const after = JSON.parse(readFileSync(statePath, 'utf8'));
+  assert.equal('projectConfigs' in after, false, 'the last entry took the key with it');
+  assert.ok(Array.isArray(after.recentProjects), 'recents and the hash index stay');
+  assert.ok(after.sourcePaths !== undefined);
+
+  const second = createProjectService({ userDataDir: legacyUserData, appVersion: '0.6.0' });
+  try {
+    const { notice } = second.open(projectPathHere);
+    assert.equal(notice.adoptedAppStateConfig, false, 'there is nothing left to adopt');
+    assert.deepEqual(second.config(), legacyConfig, 'and the project answers on its own now');
+  } finally {
+    second.close();
   }
 });
 

@@ -243,25 +243,26 @@ function assetIdsOf(item: ReviewItem): readonly string[] {
 }
 
 /**
- * `reviewKey`, made safe to store and to put in the DOM.
+ * The engine's `reviewKey`, as the app stores and displays it.
  *
- * `@matchline/ssm-compiler`'s `reviewKey` joins its parts with `\u0000`, which
- * is fine for sorting and deduping in memory and is not fine anywhere else:
- * `node:sqlite` truncates a bound string at the first NUL, so every
- * `system-conflict` item would be stored under the key `system-conflict` and a
- * decision recorded against one would appear against all of them. It is also
- * not a character an HTML attribute can carry.
+ * A pass-through, and deliberately still a function. `@matchline/ssm-compiler`
+ * used to join a key's fields with NUL, which is fine for sorting and deduping
+ * in memory and is fine nowhere else: `node:sqlite` truncates a bound string at
+ * the first NUL, so every `system-conflict` item would be stored under the key
+ * `system-conflict` and a decision recorded against one would appear against
+ * all of them. An HTML attribute cannot carry a NUL either. The app escaped its
+ * way around both; the engine now joins with U+241F and escapes its own fields,
+ * so there is nothing left here to undo.
  *
- * The mapping is injective, which is the whole point — `%` and `|` are escaped
- * before `\u0000` becomes `|`, so two different engine keys cannot collide on
- * one stored key. The desktop app uses this form everywhere: on the wire, in
- * `decisions.review_key`, and as the React key of a review row.
+ * This stays as the one named seam between an engine key and a stored key. The
+ * app uses it on the wire, in `decisions.review_key` and as the React key of a
+ * review row, so if the engine ever picks a character storage cannot hold
+ * again, this is the single place that has to learn about it.
+ * `review-key.test.mjs` in `@matchline/ssm-compiler` is what holds the engine
+ * to its side of that bargain.
  */
 export function storableReviewKey(item: ReviewItem): string {
-  return reviewKey(item)
-    .replaceAll('%', '%25')
-    .replaceAll('|', '%7C')
-    .replaceAll('\u0000', '|');
+  return reviewKey(item);
 }
 
 /** A tree row's children, already built. `''` keys the top of the tree. */

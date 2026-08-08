@@ -206,6 +206,33 @@ export const projectSummarySchema = z.object({
 });
 export type WireProjectSummary = z.infer<typeof projectSummarySchema>;
 
+/** What a migration did to a project file on the way in (schema v2). */
+export const projectMigrationSchema = z.object({
+  fromVersion: z.number().int().positive(),
+  toVersion: z.number().int().positive(),
+  /** Where the untouched original was copied to. Shown, never cleaned up. */
+  backupPath: z.string().min(1),
+});
+export type WireProjectMigration = z.infer<typeof projectMigrationSchema>;
+
+/**
+ * Everything opening a project had to do to it, as facts the UI can state.
+ *
+ * Separate from the summary because it is about this one open, not about the
+ * project: reopening the same file a second time reports nothing here, and
+ * `project:current` has nothing to report at all.
+ */
+export const openNoticeSchema = z.object({
+  /** Set when the file was upgraded from an older schema version. */
+  migration: projectMigrationSchema.nullable(),
+  /**
+   * True when the screens 6-7 sections were copied out of this installation's
+   * app-state file and into the project, which happens at most once per project.
+   */
+  adoptedAppStateConfig: z.boolean(),
+});
+export type WireOpenNotice = z.infer<typeof openNoticeSchema>;
+
 export const recentProjectSchema = z.object({
   path: z.string().min(1),
   name: z.string().min(1),

@@ -1,7 +1,9 @@
 {
   "name": "@matchline/desktop",
-  "version": "0.1.0",
+  "version": "0.6.0",
   "private": true,
+  "description": "Matchline — model-first commissioning hierarchy and MEL compiler",
+  "author": "Matchline",
   "type": "module",
   "main": "./dist/electron/main.js",
   "scripts": {
@@ -11,6 +13,8 @@
     "build": "npm run typecheck && npm run build:preload && npm run build:renderer",
     "dev": "node scripts/dev.mjs",
     "start": "electron .",
+    "package:mac": "electron-builder --mac",
+    "package:win": "electron-builder --win",
     "test": "tsc -b && node --test test/*.test.mjs"
   },
   "dependencies": {
@@ -21,9 +25,15 @@
     "@matchline/compiler": "0.1.0",
     "@matchline/connectivity-import": "0.1.0",
     "@matchline/domain": "0.1.0",
+    "@matchline/electrical-flow": "0.1.0",
+    "@matchline/exto-export": "0.1.0",
+    "@matchline/learned-rules": "0.1.0",
+    "@matchline/mel-export": "0.1.0",
     "@matchline/model-schema": "0.1.0",
     "@matchline/project-store": "0.1.0",
+    "@matchline/scheduling": "0.1.0",
     "@matchline/spreadsheet-import": "0.1.0",
+    "@matchline/ssm-compiler": "0.1.0",
     "@matchline/system-resolver": "0.1.0",
     "@matchline/tag-anatomy": "0.1.0",
     "@tanstack/react-virtual": "3.14.9",

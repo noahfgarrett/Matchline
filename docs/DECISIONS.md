@@ -43,6 +43,17 @@ Newest last. "Locked" means: do not relitigate without Noah.
 - Dev environment: Noah has Navisworks Manage and a Windows machine for extraction work;
   Mac is primary for UI/compiler development against captured extraction fixtures.
 
+## 2026-08-08 — build-out calls (coordinator, within delegated authority)
+
+- electron-builder 26 adopted for packaging (devDependency, exact pin); unsigned builds
+  until the code-signing certificate lands. No publish/updater config — the app never
+  phones home.
+- The desktop package version tracks the product version (0.6.0+) so installer names,
+  app.getVersion(), and project-file stamps agree.
+- Feed-chain-era note: parent's differential tests and wall-clock budget tests run
+  locally only; CI excludes them by name pattern (machine-dependent path / shared-runner
+  timing).
+
 ## Open items (not yet decided)
 
 - Code-signing certificate (MSIX): long-lead item, start before Phase 6.

@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState, type JSX } from 'react';
 
-import type { WireProjectSummary, WireRecentProject } from '../../../shared/schemas';
+import type {
+  WireOpenNotice,
+  WireProjectSummary,
+  WireRecentProject,
+} from '../../../shared/schemas';
 import { call, messageOf } from '../api';
 
 /**
@@ -15,10 +19,45 @@ const PROJECT_FILTERS = [{ name: 'Matchline project', extensions: ['matchline'] 
 
 type Busy = 'idle' | 'creating' | 'opening';
 
+/**
+ * What opening the project did to it, in a sentence — or `null` when it did
+ * nothing worth saying.
+ *
+ * Both facts are the user's business. A migration rewrote the only copy of
+ * their site's decisions, and the backup path is what they would need if it
+ * went wrong; an adopted config moved settings out of this machine's state file
+ * and into the project, which is what makes the file portable from now on.
+ */
+function describeNotice(notice: WireOpenNotice): string | null {
+  const sentences: string[] = [];
+  if (notice.migration !== null) {
+    sentences.push(
+      `This project was written by an earlier version of Matchline (file format ` +
+        `${String(notice.migration.fromVersion)}) and has been upgraded to ` +
+        `${String(notice.migration.toVersion)}. The original was copied to ` +
+        `${notice.migration.backupPath} first.`,
+    );
+  }
+  if (notice.adoptedAppStateConfig) {
+    sentences.push(
+      'Your hierarchy and relationship settings for this project have moved into the ' +
+        'project file itself, so they now travel with it.',
+    );
+  }
+  return sentences.length === 0 ? null : sentences.join(' ');
+}
+
 export function Landing({
   onOpened,
 }: {
-  readonly onOpened: (project: WireProjectSummary) => void;
+  /**
+   * Hands the project to the shell, with anything opening it had to do first.
+   *
+   * The notice goes up rather than being shown here because this screen is
+   * gone the instant the project opens — a migration message rendered on it
+   * would be mounted and unmounted in the same tick.
+   */
+  readonly onOpened: (project: WireProjectSummary, notice: string | null) => void;
 }): JSX.Element {
   const [name, setName] = useState<string>('');
   const [recents, setRecents] = useState<readonly WireRecentProject[]>([]);
@@ -65,7 +104,7 @@ export function Landing({
       const created = await call(
         window.matchline.project.create({ path: chosen.path, name: trimmed }),
       );
-      onOpened(created.project);
+      onOpened(created.project, null);
     } catch (caught: unknown) {
       setError(messageOf(caught));
     } finally {
@@ -89,7 +128,7 @@ export function Landing({
           target = chosen.path;
         }
         const opened = await call(window.matchline.project.open({ path: target }));
-        onOpened(opened.project);
+        onOpened(opened.project, describeNotice(opened.notice));
       } catch (caught: unknown) {
         setError(messageOf(caught));
       } finally {

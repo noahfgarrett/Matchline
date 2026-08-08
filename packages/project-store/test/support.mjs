@@ -194,6 +194,7 @@ const DUMPED_TABLES = [
   'snapshots',
   'decisions',
   'migrations',
+  'config',
 ];
 
 /**
@@ -202,12 +203,15 @@ const DUMPED_TABLES = [
  * Two SQLite files with the same history are not byte-identical -- page
  * layout, freelists and the rowid counter all differ -- so determinism is
  * asserted on contents instead.
+ *
+ * `tables` narrows the dump, which the migration test needs: a v1 file has no
+ * `config` table to select from.
  */
-export function dumpTables(path) {
+export function dumpTables(path, tables = DUMPED_TABLES) {
   const db = new DatabaseSync(path, { readOnly: true });
   try {
     const dump = {};
-    for (const table of DUMPED_TABLES) {
+    for (const table of tables) {
       dump[table] = db
         .prepare(`SELECT * FROM ${table}`)
         .all()

@@ -50,6 +50,7 @@ import type {
   WireLearnedRuleKind,
   WireLearnedSummary,
   WireModelScan,
+  WireOpenNotice,
   WireOverrideRow,
   WireProfileSection,
   WireProjectConfig,
@@ -108,6 +109,8 @@ import {
   applyConfigPatch,
   attributeChoices,
   defaultProjectConfig,
+  readProjectConfig,
+  writeProjectConfig,
 } from './project-config.js';
 import { describeSections, readPackage, writePackage } from './profile-package.js';
 import { catalogPage, type PropertyPageRequest } from './property-page.js';
@@ -161,9 +164,22 @@ export interface SaveProfileResult {
   readonly savedAt: string;
 }
 
+/**
+ * The project, plus whatever opening it had to do to the file first.
+ *
+ * The notice is returned rather than logged because both things it reports are
+ * facts the user is entitled to: their file was rewritten (and here is the
+ * backup), or their screens 6-7 answers just moved out of this machine's state
+ * file and into the project.
+ */
+export interface OpenProjectResult {
+  readonly project: WireProjectSummary;
+  readonly notice: WireOpenNotice;
+}
+
 export interface ProjectService {
   create(projectPath: string, name: string): WireProjectSummary;
-  open(projectPath: string): WireProjectSummary;
+  open(projectPath: string): OpenProjectResult;
   close(): boolean;
   current(): WireProjectSummary | null;
   recentProjects(): readonly WireRecentProject[];
@@ -271,7 +287,7 @@ interface Session {
   readonly store: ProjectStore;
   readonly projectPath: string;
   draft: WireDraftProfile;
-  /** The screens 6-7 sections. See `app-store.ts` for where these persist. */
+  /** The screens 6-7 sections, mirroring the project's own `config` table. */
   config: WireProjectConfig;
   savedRevision: number | null;
   readonly details: Map<string, SourceDetail>;
@@ -382,7 +398,41 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     });
   }
 
-  function adopt(store: ProjectStore, projectPath: string): Session {
+  /**
+   * The screens 6-7 sections for a project that is being opened.
+   *
+   * Three cases, in order: the project file says what it is configured to; an
+   * older build left the answer in this installation's state file, in which
+   * case it is copied into the project once and taken out of the state file;
+   * or nothing has been configured and the wizard opens on its defaults.
+   *
+   * The copy is deliberately not attempted for a project being *created*: a new
+   * file at a path some deleted project once used would silently inherit its
+   * configuration, which is a surprise nobody asked for.
+   */
+  function adoptConfig(
+    store: ProjectStore,
+    projectPath: string,
+  ): { config: WireProjectConfig; adopted: boolean } {
+    const stored = readProjectConfig(store);
+    if (stored !== null) {
+      return { config: stored, adopted: false };
+    }
+    if (store.listConfig().length > 0) {
+      // Rows this build cannot read. Left exactly where they are rather than
+      // overwritten from a machine-local file that is probably older still.
+      return { config: defaultProjectConfig(), adopted: false };
+    }
+
+    const legacy = appState.takeLegacyProjectConfig(projectPath);
+    if (legacy === undefined) {
+      return { config: defaultProjectConfig(), adopted: false };
+    }
+    writeProjectConfig(store, legacy);
+    return { config: legacy, adopted: true };
+  }
+
+  function adopt(store: ProjectStore, projectPath: string, config: WireProjectConfig): Session {
     const stored = store.getProfile();
     const active: Session = {
       store,
@@ -391,7 +441,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         stored === undefined
           ? emptyDraft(store.meta().projectName)
           : fromSiteProfile(stored.profile),
-      config: appState.projectConfig(projectPath) ?? defaultProjectConfig(),
+      config,
       savedRevision: stored?.revision ?? null,
       details: new Map<string, SourceDetail>(),
       model: null,
@@ -629,7 +679,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
   /* ------------------------------------------------- screens 6-7: the config */
 
   function persistConfig(active: Session): void {
-    appState.rememberProjectConfig(active.projectPath, active.config);
+    writeProjectConfig(active.store, active.config);
   }
 
   /** Distinct values of one compile-subject attribute, for the level menu. */
@@ -899,25 +949,31 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       } catch (error: unknown) {
         throw new Error(`Matchline could not create that project: ${messageOf(error)}`);
       }
-      const active = adopt(store, projectPath);
+      const active = adopt(store, projectPath, defaultProjectConfig());
       session = active;
       rememberOpened(active);
       return summarize(active);
     },
 
-    open(projectPath: string): WireProjectSummary {
+    open(projectPath: string): OpenProjectResult {
       closeSession();
       let store: ProjectStore;
       try {
-        store = openProject(projectPath);
+        // Migrate rather than refuse: the store backs the file up first, and
+        // the backup path comes back in the notice so the user is told.
+        store = openProject(projectPath, { migrate: true });
       } catch (error: unknown) {
         throw new Error(`Matchline could not open that project: ${messageOf(error)}`);
       }
-      const active = adopt(store, projectPath);
+      const { config, adopted } = adoptConfig(store, projectPath);
+      const active = adopt(store, projectPath, config);
       session = active;
       rehydrateSources(active);
       rememberOpened(active);
-      return summarize(active);
+      return {
+        project: summarize(active),
+        notice: { migration: store.migration, adoptedAppStateConfig: adopted },
+      };
     },
 
     close(): boolean {

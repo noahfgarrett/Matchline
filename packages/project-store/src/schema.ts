@@ -1,5 +1,5 @@
 /**
- * The `.matchline` project file schema, version 1 (APP.md "Project file",
+ * The `.matchline` project file schema, version 2 (APP.md "Project file",
  * PRODUCT.md §15).
  *
  * This file is the single source of truth for the DDL: `createProject` executes
@@ -8,13 +8,23 @@
  * C# worker writes it too; nothing outside this package writes a project file,
  * so the DDL lives next to the only code that owns it.
  *
- * Bump `PROJECT_SCHEMA_VERSION` on ANY change and add a migration; readers
- * refuse versions they do not know.
+ * Bump `PROJECT_SCHEMA_VERSION` on ANY change and add a {@link MigrationStep};
+ * readers refuse versions they do not know, and refuse to guess at versions
+ * they have no step for.
+ *
+ * ## History
+ *
+ * - **v1** — the original tables.
+ * - **v2** — adds `config`, so a project file carries the Hierarchy Composer,
+ *   the role graph, the parent ladder, the discipline projection and the
+ *   parent-tag property. Before v2 those lived in the desktop app's machine-
+ *   local state file keyed by project path, and moving a `.matchline` file lost
+ *   them.
  */
 import type { SourceKind } from '@matchline/domain';
 
 /** The schema version this build writes and reads. */
-export const PROJECT_SCHEMA_VERSION = 1;
+export const PROJECT_SCHEMA_VERSION = 2;
 
 /**
  * The `app_version` written into a new project when the caller does not supply
@@ -33,7 +43,7 @@ export const REQUIRED_META_KEYS = [
   'modified_at',
 ] as const;
 
-/** Tables v1 creates. All must exist before a file counts as a project. */
+/** Tables v2 creates. All must exist before a file counts as a project. */
 export const REQUIRED_TABLES = [
   'meta',
   'sources',
@@ -44,6 +54,7 @@ export const REQUIRED_TABLES = [
   'snapshots',
   'decisions',
   'migrations',
+  'config',
 ] as const;
 
 /** What a registered input file is to the compile (PRODUCT.md §6, §12). */
@@ -99,6 +110,30 @@ export function isDecisionValue(value: string): value is DecisionValue {
 }
 
 /**
+ * The five configuration sections a project carries (v2).
+ *
+ * A closed list rather than free-form keys, and enforced by a CHECK constraint
+ * as well as by this array: `config` is not a scratchpad, it is the five things
+ * `CompileProjectInput` takes that a `SiteProfile` cannot yet hold. A sixth
+ * section is a schema change, which is the point — it should be.
+ */
+export const CONFIG_KEYS = [
+  'hierarchy',
+  'roleGraph',
+  'ladder',
+  'ssmDisciplineProjection',
+  'parentTagProperty',
+] as const;
+
+/** Which configuration section a `config` row holds. */
+export type ConfigKey = (typeof CONFIG_KEYS)[number];
+
+/** Narrows arbitrary text to a configuration key. */
+export function isConfigKey(value: string): value is ConfigKey {
+  return (CONFIG_KEYS as ReadonlyArray<string>).includes(value);
+}
+
+/**
  * Every `SourceKind`, for validating claims read back out of a snapshot.
  *
  * `@matchline/domain` publishes the type but no runtime array; `satisfies` ties
@@ -113,7 +148,25 @@ export const SOURCE_KINDS = [
 ] as const satisfies ReadonlyArray<SourceKind>;
 
 /**
- * The v1 DDL.
+ * The `config` table, as v2 creates it.
+ *
+ * Its own constant because two places need exactly these bytes: the full DDL a
+ * new project is created from, and the migration that adds the table to a v1
+ * file. A migration that re-typed the DDL by hand would be a second, drifting
+ * definition of the same table.
+ */
+export const CONFIG_TABLE_SQL = `
+CREATE TABLE config (
+  key         TEXT PRIMARY KEY CHECK (key IN (
+                'hierarchy', 'roleGraph', 'ladder', 'ssmDisciplineProjection',
+                'parentTagProperty')),
+  config_json TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+) WITHOUT ROWID;
+`;
+
+/**
+ * The v2 DDL.
  *
  * Notes on the shapes that are not obvious:
  * - `sources` is keyed by `(role, file_name)`, not by hash: re-picking an edited
@@ -126,6 +179,8 @@ export const SOURCE_KINDS = [
  *   canonical tag. Tags are the human identity that survives a recompile.
  * - `snapshots.slot` is pinned to 0, so "latest snapshot" is structural rather
  *   than a convention a future writer could break.
+ * - `config` is keyed by section, one row each, so writing the hierarchy cannot
+ *   disturb the ladder and a section nobody has set is simply absent.
  */
 export const PROJECT_SCHEMA_SQL = `
 CREATE TABLE meta (
@@ -196,4 +251,28 @@ CREATE TABLE migrations (
   version    INTEGER PRIMARY KEY,
   applied_at TEXT NOT NULL
 );
-`;
+${CONFIG_TABLE_SQL}`;
+
+/**
+ * One step of the schema history: the version it produces, and the SQL that
+ * gets a file there from the version before it.
+ *
+ * A step is data rather than a function because that is all a step has needed
+ * to be so far. When one needs to move rows as well as add a table, this
+ * becomes a discriminated union and `migrateProjectFile` grows a switch — not
+ * before.
+ */
+export interface MigrationStep {
+  /** The schema version a file declares once this step has run. */
+  readonly to: number;
+  readonly sql: string;
+}
+
+/**
+ * Every migration this build can run, in order, each one version apart.
+ *
+ * `openProject` walks from the version a file declares to
+ * {@link PROJECT_SCHEMA_VERSION}. A gap here is not a slow migration, it is a
+ * refusal: a file this list cannot reach is left exactly as it was found.
+ */
+export const MIGRATION_STEPS: readonly MigrationStep[] = [{ to: 2, sql: CONFIG_TABLE_SQL }];

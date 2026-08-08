@@ -29,6 +29,11 @@ export type ProjectStoreReason =
       readonly supported: number;
     }
   | {
+      readonly kind: 'no-migration-path';
+      readonly found: number;
+      readonly supported: number;
+    }
+  | {
       readonly kind: 'malformed-row';
       readonly table: string;
       readonly column: string;
@@ -74,7 +79,9 @@ export function describeProjectStoreReason(reason: ProjectStoreReason): string {
     case 'unsupported-schema-version':
       return `project file schema_version ${reason.found} is newer than this build understands (${reason.supported}); upgrade Matchline to open it`;
     case 'migration-required':
-      return `project file schema_version ${reason.found} predates this build (${reason.supported}) and no migration to ${reason.supported} exists`;
+      return `project file schema_version ${reason.found} predates this build (${reason.supported}); reopen it with migrate: true to upgrade it`;
+    case 'no-migration-path':
+      return `project file schema_version ${reason.found} predates this build (${reason.supported}) and no migration from ${reason.found} exists; the file was left as it was found`;
     case 'malformed-row':
       return `project file table '${reason.table}' column '${reason.column}' is malformed: ${reason.detail}`;
     case 'invalid-argument':
