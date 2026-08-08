@@ -31,8 +31,15 @@ jobs:
       - name: Test typed packages
         run: npm run test:workspaces
 
+      - name: Integration tests
+        run: npm run test:integration
+
       # The donor suite is plain JavaScript with its own scripts and is not part
       # of the TypeScript build. It runs by path so it is never run twice.
+      # The differential tests compare against the frozen SSM Builder checkout at
+      # an absolute path that exists only on Noah's Mac (see legacy-differential.mjs);
+      # they run locally with every `npm test` and are excluded here rather than
+      # editing the frozen donor tree (13 tests: data-output, edge-contract, corpus).
       - name: Test legacy parity suite
         working-directory: packages/legacy-parity
-        run: npm test
+        run: node --test --test-skip-pattern "frozen SSM Builder|preserves a frozen edge contract" tests/*.test.mjs
