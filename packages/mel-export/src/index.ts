@@ -18,6 +18,15 @@
  * The input, {@link GeneratedMelAsset}, is this package's own flattened shape
  * rather than another package's output type, so the exporter stays independent
  * of how the catalog and the resolver evolve.
+ *
+ * Three further outputs read the same asset shape:
+ *
+ * - {@link analyzeTemplate} / {@link writeTemplateMel} — the site's own MEL
+ *   layout, filled (§12.2).
+ * - {@link compareWithExistingMel} — where Matchline and a supplied MEL
+ *   disagree, as plain data. No review items are created here (§12.3).
+ * - {@link diffMelRevisions} / {@link writeDiffWorkbook} — what a new model
+ *   revision changed (§12.4).
  */
 
 export {
@@ -32,3 +41,50 @@ export type { GeneratedMelAsset } from './rows.js';
 
 export { DEFAULT_MEL_SHEET_NAME, writeCanonicalMelWorkbook } from './workbook.js';
 export type { WriteCanonicalMelOptions } from './workbook.js';
+
+export {
+  CANONICAL_MEL_FIELDS,
+  MelExportError,
+  describeMelExportReason,
+  isCanonicalMelField,
+} from './errors.js';
+export type { MelExportReason } from './errors.js';
+
+export { TEMPLATE_HEADER_SYNONYMS, analyzeTemplate, writeTemplateMel } from './template.js';
+export type {
+  AnalyzeTemplateOptions,
+  TemplateAnalysis,
+  TemplateColumn,
+  TemplateColumnMapping,
+  TemplateColumnSuggestion,
+  TemplateColumnSource,
+  TemplateHeaderMatch,
+  TemplateMelMapping,
+  WriteTemplateMelOptions,
+} from './template.js';
+
+export { compareWithExistingMel } from './compare.js';
+export type {
+  CompareWithExistingMelOptions,
+  ExistingMelColumn,
+  ExistingMelMapping,
+  MelComparison,
+  MelComparisonSummary,
+  MelFieldComparison,
+  MelTagComparison,
+} from './compare.js';
+
+export { diffMelRevisions } from './diff.js';
+export type {
+  DiffMelRevisionsOptions,
+  MelAssetChange,
+  MelDependencyChange,
+  MelDependencyChanges,
+  MelFieldChange,
+  MelHierarchyLevel,
+  MelHierarchyLevelChange,
+  MelRevisionDiff,
+  MelRevisionDiffSummary,
+} from './diff.js';
+
+export { DIFF_SUMMARY_SHEET_NAME, writeDiffWorkbook } from './diffWorkbook.js';

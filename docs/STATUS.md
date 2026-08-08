@@ -45,6 +45,16 @@ Windows build. Extraction is exercised for real on Noah's first runbook run.
 
 ## Log
 
+### 2026-08-08 — E4 commissioning outputs merged (0.5.0)
+- scheduling (P6 xer+xlsx, milestone ladder, polarity sequencing, predecessor matrix),
+  exto-export (Rev21 positional map — donor code beat its own comment, AN not AM; item
+  masters at 0.9 gate), mel-export extended (template fill, §12.3 comparison, §12.4 diff).
+- CompiledProject now publishes generatedMel.assets so template/compare/diff need no
+  reimplemented adapter. E4 integration test green.
+- ENGINE COMPLETE. All engine-side phases (2, 3, 4, 4.5) proven on Dragon fixtures.
+- Next: A1 app (Electron shell, typed IPC, ProjectStore on node:sqlite, React wizard
+  screens 1–9, Hierarchy Composer, Studio, review panels, tree/flow views, exports).
+
 ### 2026-08-07 — E3 SSM compiler merged (0.4.0)
 - relationship-claims (8-source assembly, make-root directives), learned-rules (donor §7
   port: shared pickParent policy, thresholds table in its report/tests), ssm-compiler

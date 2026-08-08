@@ -149,6 +149,152 @@ export const DRAGON_EXPORT_TAG_ORDER: ReadonlyArray<string> = [
 ];
 
 /**
+ * The Dragon site's existing MEL, as a reader would hand it over: records under
+ * the site's own column names, not §12.1's.
+ *
+ * Every case §12.3 has to survive is in here — an exact agreement, a
+ * description the MEL words differently, a tag the site spells without its
+ * leading zeros (accepted alias), a leading-zero mismatch on the UPN, an MEL
+ * row for equipment Matchline never saw, a row with no tag at all, and a row
+ * that simply has no UPN column value.
+ */
+export const DRAGON_EXISTING_MEL_ROWS: ReadonlyArray<Readonly<Record<string, string>>> = [
+  {
+    tag: 'MAH001-10-01',
+    description: 'Primary air handler',
+    upn: '001',
+    system: 'Dragon Air Handling',
+  },
+  {
+    /* Padded, because a real MEL cell is. Trimmed on both sides before matching. */
+    tag: '  MAH001-10-02  ',
+    description: 'Secondary air handling unit',
+    upn: '001',
+    system: 'Dragon Air Handling',
+  },
+  {
+    /* The site's own spelling; only an accepted alias joins it. */
+    tag: 'EPB002-1-1',
+    description: 'Annex panelboard',
+    upn: '2',
+    system: 'Dragon Power Distribution',
+  },
+  {
+    /* MEL_ONLY: discrepancy evidence, never an asset (§9.3). */
+    tag: 'BLR001-01-01',
+    description: 'Package boiler',
+    upn: '004',
+    system: 'Dragon Steam',
+  },
+  {
+    /* No tag: unmatchable, and inventing a key would manufacture a discrepancy. */
+    tag: '   ',
+    description: 'Row the site never finished',
+    upn: '001',
+    system: 'Dragon Air Handling',
+  },
+  {
+    /* No `upn` key at all: absent reads as blank, and Matchline's is blank too. */
+    tag: 'CHW001-01-01',
+    description: '',
+    system: 'Dragon Utilities (unassigned)',
+  },
+];
+
+/** The site's spelling → the canonical tag, as an accepted alias would record it. */
+export const DRAGON_MEL_ALIASES: ReadonlyMap<string, string> = new Map([
+  ['EPB002-1-1', 'EPB002-01-01'],
+]);
+
+/* ---- revision A → revision B ---- */
+
+function revisionAsset(
+  canonicalTag: string,
+  systemKey: string,
+  overrides: Partial<GeneratedMelAsset> = {},
+): GeneratedMelAsset {
+  return {
+    canonicalTag,
+    description: `Dragon ${canonicalTag}`,
+    equipmentType: 'Equipment',
+    building: 'D-100',
+    nativeDiscipline: 'MECH',
+    ssmDiscipline: 'Mechanical',
+    system: dragonSystem(systemKey, `Dragon System ${systemKey}`, `System ${systemKey}`),
+    sourceModelFile: 'Dragon-REV-A.nwd',
+    modelObjectIds: [1],
+    inclusionStatus: 'MODEL_CONFIRMED',
+    reviewStatus: 'UNREVIEWED',
+    ...overrides,
+  };
+}
+
+/**
+ * Revision A of the Dragon register.
+ *
+ * A and B differ by exactly one instance of each §12.4 category, and by nothing
+ * else — every other field of every other asset is identical, so a category
+ * that fires twice is a bug rather than a fixture accident.
+ */
+export const DRAGON_REVISION_A: ReadonlyArray<GeneratedMelAsset> = [
+  /* Description changes in B. */
+  revisionAsset('MAH001-10-01', '001', { description: 'Primary air handler' }),
+  /* Loses CHW001-01-01 and gains PMP003-01-01 as dependencies in B. */
+  revisionAsset('MAH001-10-02', '001', {
+    dependencyTags: ['CHW001-01-01', 'EPB002-01-01'],
+  }),
+  /* Parent moves in B; its System Key does not. */
+  revisionAsset('PLC001-10-01', '001', { systemParentTag: 'MAH001-10-01' }),
+  /* Renamed in B — only a hint can say so. */
+  revisionAsset('VFD001-10-01', '001', { systemParentTag: 'PLC001-10-01' }),
+  /* SSM discipline changes in B: a hierarchy level, not a native fact. */
+  revisionAsset('TIT001-10-01', '001', { systemParentTag: 'PLC001-10-01' }),
+  /* System Key changes in B; its parent does not. */
+  revisionAsset('CHW001-01-01', '001', { systemParentTag: 'MAH001-10-02' }),
+  /* Building changes in B: the other hierarchy level. */
+  revisionAsset('EPB002-01-01', '002', { building: 'D-200', ssmDiscipline: 'Electrical' }),
+  /* Single here; duplicated in B. */
+  revisionAsset('ESB002-01', '002', { ssmDiscipline: 'Electrical' }),
+  /* Gone in B. */
+  revisionAsset('FCU-SPARE-09', '001'),
+];
+
+/** Revision B: one of every §12.4 change, and nothing else. */
+export const DRAGON_REVISION_B: ReadonlyArray<GeneratedMelAsset> = [
+  revisionAsset('MAH001-10-01', '001', { description: 'Primary air handling unit' }),
+  revisionAsset('MAH001-10-02', '001', {
+    dependencyTags: ['EPB002-01-01', 'PMP003-01-01'],
+  }),
+  revisionAsset('PLC001-10-01', '001', { systemParentTag: 'MAH001-10-02' }),
+  revisionAsset('VFD001-10-01A', '001', {
+    description: 'Dragon VFD001-10-01',
+    systemParentTag: 'PLC001-10-01',
+  }),
+  revisionAsset('TIT001-10-01', '001', {
+    systemParentTag: 'PLC001-10-01',
+    ssmDiscipline: 'Instrumentation',
+  }),
+  revisionAsset('CHW001-01-01', '002', { systemParentTag: 'MAH001-10-02' }),
+  revisionAsset('EPB002-01-01', '002', { building: 'D-300', ssmDiscipline: 'Electrical' }),
+  revisionAsset('ESB002-01', '002', {
+    ssmDiscipline: 'Electrical',
+    inclusionStatus: 'DUPLICATE_MODEL_TAG',
+  }),
+  revisionAsset('ESB002-01', '002', {
+    ssmDiscipline: 'Electrical',
+    inclusionStatus: 'DUPLICATE_MODEL_TAG',
+    modelObjectIds: [2],
+  }),
+  /* New in B. */
+  revisionAsset('PMP003-01-01', '003'),
+];
+
+/** The rename B claims: without it, VFD is one removal and one addition. */
+export const DRAGON_RENAME_HINT: ReadonlyMap<string, string> = new Map([
+  ['VFD001-10-01', 'VFD001-10-01A'],
+]);
+
+/**
  * A larger synthetic set: 500 Dragon-shaped assets across ten systems, built
  * from a counter so the set is identical on every run and every machine.
  */

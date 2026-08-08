@@ -43,6 +43,12 @@
     },
     {
       "path": "./packages/compiler"
+    },
+    {
+      "path": "./packages/scheduling"
+    },
+    {
+      "path": "./packages/exto-export"
     }
   ]
 }

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0 — 2026-08-08 — E4: commissioning outputs
+
+- P6 import (.xer and activity sheets), four-rung milestone ladder, discipline-polarity
+  sequencing (top-down electrical, bottom-up mechanical), predecessor matrix + workbook.
+- EXTO Rev21 upload sheet (donor positional map pinned), item-master learning with the
+  0.9 confidence gate, CA_-to-VF_ normalization with template-spelling priority.
+- Site-template MEL fill, existing-MEL comparison (§12.3), full §12.4 revision diff
+  with multi-sheet workbook. All writers byte-stable.
+- Suite: 1475 tests, 0 failures.
+
 ## 0.4.0 — 2026-08-07 — E3: SSM compiler (PRODUCT.md Phase 4)
 
 - Relationship claims assembly: eight evidence sources, claims compete, nothing writes.

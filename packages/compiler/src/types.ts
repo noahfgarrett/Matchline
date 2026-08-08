@@ -35,7 +35,7 @@ import type {
 import type { ElectricalFlow, FlowStats } from '@matchline/electrical-flow';
 import type { IdentityConfig, IdentityIndex } from '@matchline/identity';
 import type { LearnedRuleSet, ProposedNesting } from '@matchline/learned-rules';
-import type { CanonicalMelRow } from '@matchline/mel-export';
+import type { CanonicalMelRow, GeneratedMelAsset } from '@matchline/mel-export';
 import type { ExtractionCache } from '@matchline/model-schema';
 import type {
   AssembledClaims,
@@ -143,6 +143,12 @@ export interface GeneratedMel {
   readonly rows: ReadonlyArray<CanonicalMelRow>;
   /** Byte-stable: the same compiled project always writes identical bytes. */
   readonly workbookBytes: Uint8Array;
+  /**
+   * The per-asset inputs the rows were built from — the shape mel-export's
+   * template/compare/diff layers consume, so callers never reimplement the
+   * asset→MEL adapter.
+   */
+  readonly assets: ReadonlyArray<GeneratedMelAsset>;
 }
 
 /** Counts a reviewer checks before trusting a compile, one group per stage. */
