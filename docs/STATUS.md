@@ -34,7 +34,22 @@ Windows build. Extraction is exercised for real on Noah's first runbook run.
 6. **H1 — Hardening + packaging**: backups/migrations/recovery, security defaults per
    PRODUCT.md §16, cancellable long ops, unsigned Windows build + install notes.
 
+## Architecture notes for later stages
+
+- **Property-bag seam (E3 owes this):** asset-catalog outputs mapped fields only;
+  system-resolver's model-field/direct-column rungs need the raw category→name→value bag.
+  The E1 integration test bridges via `cache.propertiesOf(objectId)` per asset; the compiler
+  orchestration layer (E3) must own that bridge as a real API.
+- Under `conflictPolicy: 'review'` a conflicted subject still resolves to the first rung's
+  value with status CONFLICTING + a review item — visibility, not nullification. Deliberate.
+
 ## Log
+
+### 2026-08-07 — E1 engine core merged (0.2.0)
+- tag-anatomy, spreadsheet-import (vendored donor SheetJS), asset-catalog, system-resolver,
+  mel-export; E1 pipeline integration test proves all Phase 2 exit criteria on Dragon.
+- Suite: 964/964. Next: E2 connectivity spine (EasyPower/Cable/PMD imports, identity
+  reconciliation tiers, Electrical Flow projection, source-only statuses).
 
 ### 2026-08-07 — Phase 1 foundation merged (`7473add`)
 - Extraction architecture + cache schema v1; `packages/model-schema` (reader, Property
