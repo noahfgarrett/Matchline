@@ -31,14 +31,39 @@
       <Plugins>\Matchline.Extraction.Navisworks2025\Matchline.Extraction.Navisworks2025.dll
     Matchline.Extraction.Common.dll must sit beside it. Which Plugins root is
     honoured (install dir vs %APPDATA%) is one of the things the proof run
-    settles -- see docs/WINDOWS-RUNBOOK.md.
+    settles; see docs/WINDOWS-RUNBOOK.md.
   -->
 
   <PropertyGroup>
     <NavisworksInstallDir Condition=" '$(NavisworksInstallDir)' == '' ">C:\Program Files\Autodesk\Navisworks Manage 2025</NavisworksInstallDir>
   </PropertyGroup>
 
-  <ItemGroup>
+  <!--
+    Compile-verification escape hatch. Off unless asked for by name:
+
+      dotnet build native/navisworks-2025/Matchline.Extraction.Navisworks2025.csproj \
+        -p:UseNavisworksStubs=true
+
+    With it on, the Autodesk reference is swapped for native/navisworks-stubs
+    (a hand-written, implementation-free Autodesk.Navisworks.Api) so this
+    project type-checks on a machine with no Navisworks. That project is NOT in
+    Matchline.Extraction.sln, so a normal solution build cannot reach it.
+
+    Output is redirected to bin\stub-verify\ and obj\stub-verify\ so a stub
+    build can never be confused with the plugin the runbook deploys, and so it
+    cannot leave stale intermediates behind for the real build.
+
+    A green stub build proves the plugin's C# is valid and internally
+    consistent. It does not validate the stubbed signatures themselves; that is
+    still the Windows proof run's job.
+  -->
+  <PropertyGroup Condition=" '$(UseNavisworksStubs)' == 'true' ">
+    <OutputPath>bin\stub-verify\$(Configuration)\</OutputPath>
+    <IntermediateOutputPath>obj\stub-verify\$(Configuration)\</IntermediateOutputPath>
+    <DefineConstants>$(DefineConstants);MATCHLINE_NAVISWORKS_STUBS</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup Condition=" '$(UseNavisworksStubs)' != 'true' ">
     <!-- Private=false: never copy Autodesk assemblies next to our plugin. The
          host process already has them loaded and a stale local copy is a classic
          source of "method not found" at runtime. -->
@@ -49,13 +74,28 @@
     </Reference>
   </ItemGroup>
 
+  <ItemGroup Condition=" '$(UseNavisworksStubs)' == 'true' ">
+    <!-- Private=false for the same reason, and one more: it keeps a DLL named
+         Autodesk.Navisworks.Api.dll with no implementation in it out of any
+         folder anyone might deploy. -->
+    <ProjectReference Include="..\navisworks-stubs\Matchline.Navisworks.ApiStubs.csproj">
+      <Private>false</Private>
+    </ProjectReference>
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\navisworks-common\Matchline.Extraction.Common.csproj" />
   </ItemGroup>
 
-  <Target Name="MatchlineCheckNavisworksReference" BeforeTargets="ResolveAssemblyReferences">
+  <Target Name="MatchlineCheckNavisworksReference"
+          BeforeTargets="ResolveAssemblyReferences"
+          Condition=" '$(UseNavisworksStubs)' != 'true' ">
     <Error Condition="!Exists('$(NavisworksInstallDir)\Autodesk.Navisworks.Api.dll')"
            Text="Autodesk.Navisworks.Api.dll was not found under '$(NavisworksInstallDir)'. Install Navisworks Manage/Simulate 2025, or pass /p:NavisworksInstallDir=&quot;...&quot; pointing at the install folder." />
+  </Target>
+
+  <Target Name="MatchlineWarnStubBuild" BeforeTargets="Build" Condition=" '$(UseNavisworksStubs)' == 'true' ">
+    <Warning Text="Building against native/navisworks-stubs. The output in $(OutputPath) is a compile check only and must never be deployed." />
   </Target>
 
 </Project>

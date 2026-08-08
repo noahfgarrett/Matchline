@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ============================ NOT SHIPPED ============================
+    Build-verification scaffolding. This project fakes just enough of
+    Autodesk.Navisworks.Api for the compiler to type-check
+    native/navisworks-2025 on a machine with no Navisworks install. It has no
+    behaviour: every stubbed member throws NotImplementedException.
+
+    It is NOT in native/Matchline.Extraction.sln, on purpose. Building the real
+    solution can never pull it in. The only way to use it is to ask for it
+    explicitly:
+
+      dotnet build native/navisworks-2025/Matchline.Extraction.Navisworks2025.csproj \
+        -p:UseNavisworksStubs=true
+
+    That property swaps the plugin's <Reference Include="Autodesk.Navisworks.Api">
+    for a ProjectReference to this project and redirects the plugin's output to
+    bin/stub-verify/, so a stub-built DLL can never be mistaken for the artifact
+    the runbook tells you to deploy.
+
+    What a green stub build proves: the plugin's C# is syntactically valid, its
+    C# 7.3 discipline holds, and every Autodesk member it names is *used*
+    consistently with the signature declared here. What it does NOT prove: that
+    those signatures match the real Autodesk assembly. Every signature below is
+    still an assumption; docs/WINDOWS-RUNBOOK.md records which VERIFY-ON-WINDOWS
+    flags this pins and which it leaves fully open.
+    =====================================================================
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <!-- Deliberately the real assembly name: the plugin then compiles against
+         the same assembly identity it will bind to on Windows. Private=false on
+         the consuming reference stops this DLL from ever being copied next to
+         the plugin. -->
+    <AssemblyName>Autodesk.Navisworks.Api</AssemblyName>
+    <RootNamespace>Autodesk.Navisworks.Api</RootNamespace>
+    <OutputType>Library</OutputType>
+    <PlatformTarget>x64</PlatformTarget>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Product>NOT SHIPPED - Matchline build-verification stub</Product>
+    <Description>Compile-only stand-in for Autodesk.Navisworks.Api. Contains no implementation. Never deploy.</Description>
+    <!-- No AssemblyInfo collision with the real product, and no signing: this
+         cannot be dropped in for the real assembly even by accident. -->
+    <SignAssembly>false</SignAssembly>
+  </PropertyGroup>
+
+</Project>

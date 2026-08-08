@@ -9,6 +9,15 @@ namespace Matchline.Extraction.Extractor
     /// self-contained executable. Any change to the canonical file must be
     /// mirrored here and must bump meta.schema_version on both sides.
     /// </para>
+    /// <para>
+    /// "Verbatim" is meant literally and is enforced: strip the one leading
+    /// newline this string starts with and the remaining bytes equal
+    /// schemas/extraction-cache.sql exactly. native/smoke asserts it. That is
+    /// why two SQL comments below carry non-ASCII characters (an em dash and a
+    /// section sign) -- they are in the canonical file, so they are here. This
+    /// source file is UTF-8 with no BOM, which Roslyn reads as UTF-8; the smoke
+    /// assertion is also the check that it survived the compiler intact.
+    /// </para>
     /// </summary>
     internal static class CacheSchema
     {
@@ -23,7 +32,7 @@ CREATE TABLE meta (
 ) WITHOUT ROWID;
 -- Required keys:
 --   schema_version      '1'
---   input_file_name     original NWD filename (name only, no directory -- privacy)
+--   input_file_name     original NWD filename (name only, no directory — privacy)
 --   input_sha256        lowercase hex digest of the NWD bytes; also the cache filename stem
 --   input_bytes         decimal string
 --   extracted_at_utc    ISO 8601
@@ -50,7 +59,7 @@ CREATE TABLE objects (
   class_name      TEXT,                       -- Navisworks item class/category display
   instance_guid   TEXT,
   authoring_id    TEXT,
-  -- bounding box optional per PRODUCT.md 6.4; all-or-none per row
+  -- bounding box optional per PRODUCT.md §6.4; all-or-none per row
   bbox_min_x REAL, bbox_min_y REAL, bbox_min_z REAL,
   bbox_max_x REAL, bbox_max_y REAL, bbox_max_z REAL
 );

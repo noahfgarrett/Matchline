@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Matchline</title>
+  <!--
+    Matchline app icon. Source of truth for build/icon.icns and build/icon.ico;
+    both are generated from this file, so edit here and re-run the icon build.
+
+    The mark is an M whose two halves meet at a single registration point and are
+    parted by a matchline: the dashed vertical rule engineering sheets carry where
+    one drawing continues onto the next. Left half in the app accent (#4C8DFF, the
+    accent token in renderer/src/styles.css), right half a lighter tint of it, so
+    at large sizes the two halves read as two sheets and at 16px as one solid M.
+
+    Geometry is on a 1024 grid, sized for the smallest target first: stroke 96
+    (1.5px at 16px) and counters 228 wide (3.6px at 16px) are what keep the M from
+    filling in. The plate is an 880px squircle on macOS icon-grid proportions.
+  -->
+
+  <defs>
+    <clipPath id="plate">
+      <rect x="72" y="72" width="880" height="880" rx="196" ry="196"/>
+    </clipPath>
+    <clipPath id="rightSheet">
+      <rect x="512" y="0" width="512" height="1024"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#plate)">
+    <rect x="72" y="72" width="880" height="880" fill="#14161A"/>
+
+    <!-- The M, drawn once as a single path so the vertex is a true miter join,
+         then repainted clipped to x>=512 for the lighter half. -->
+    <g fill="none" stroke-width="96" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="6">
+      <path d="M236 744 V296 L512 536 L788 296 V744" stroke="#4C8DFF"/>
+      <path d="M236 744 V296 L512 536 L788 296 V744" stroke="#7FADFF" clip-path="url(#rightSheet)"/>
+    </g>
+
+    <!-- The matchline. The plate-coloured cut parts the two halves and notches the
+         vertex the way a sheet edge interrupts a drawing; the dashed rule sits in
+         the cut and fades out below ~48px, which is where it would be noise. -->
+    <rect x="503" y="72" width="18" height="880" fill="#14161A"/>
+    <path d="M512 128 V896" fill="none" stroke="#3C5C96" stroke-width="10"
+          stroke-dasharray="108 54" stroke-linecap="butt"/>
+  </g>
+
+  <!-- Edge definition so the plate does not dissolve into a dark desktop. -->
+  <rect x="76" y="76" width="872" height="872" rx="192" ry="192"
+        fill="none" stroke="#2A2F38" stroke-width="8"/>
+</svg>

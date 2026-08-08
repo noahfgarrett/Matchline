@@ -1,0 +1,60 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ======================= BUILD/TEST VERIFICATION ONLY =======================
+    Runs the extraction pipeline's Autodesk-free half on a developer machine of
+    any OS, so the NDJSON protocol and the cache writer are exercised for real
+    before anyone touches Windows.
+
+    The exact command line (it needs an argument separator XML comments cannot
+    spell) is in native/README.md.
+
+    Why a separate net8.0 target instead of testing Matchline.Extractor itself:
+    the launcher is net48 (it has to be, it lives beside a Navisworks plugin)
+    and net48 cannot execute on macOS or Linux. The two honest options were to
+    split the cache-writing core out into the netstandard2.0 project, or to
+    compile the very same source files a second time under a runnable TFM. The
+    second was chosen: moving CacheWriter into navisworks-common would put
+    SQLite in the dependency closure of the assembly that gets loaded inside the
+    Navisworks process, which is the one thing docs/EXTRACTION.md design call 1
+    forbids. So the sources below are <Compile Include>d by path, not copied.
+    There is exactly one copy of CacheWriter.cs in the repo; this project and
+    the launcher compile the same bytes.
+
+    What that does NOT cover: the net48 build of these files (verified
+    separately by building Matchline.Extractor), and anything Autodesk.
+
+    NOT in native/Matchline.Extraction.sln, so a solution build never picks it
+    up and the Windows box never has to restore a net8.0 target.
+    ===========================================================================
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>Matchline.Extraction.Smoke</AssemblyName>
+    <RootNamespace>Matchline.Extraction.Smoke</RootNamespace>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Product>NOT SHIPPED - Matchline extraction smoke harness</Product>
+    <!-- LangVersion 7.3 is inherited from native/Directory.Build.props and kept
+         on purpose: the harness must not use anything the launcher could not. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The launcher's cache-writing core, compiled from its real location. -->
+    <Compile Include="..\extractor\CacheSchema.cs" Link="from-extractor\CacheSchema.cs" />
+    <Compile Include="..\extractor\CacheWriter.cs" Link="from-extractor\CacheWriter.cs" />
+    <Compile Include="..\extractor\CacheInspector.cs" Link="from-extractor\CacheInspector.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Same exact pins as the launcher: testing a different SQLite than the one
+         that ships would prove nothing. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="[8.0.10]" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="[2.1.6]" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\navisworks-common\Matchline.Extraction.Common.csproj" />
+  </ItemGroup>
+
+</Project>

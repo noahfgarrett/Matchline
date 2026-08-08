@@ -44,6 +44,11 @@ npmRebuild: false
 
 mac:
   category: public.app-category.productivity
+  # build/icon.icns and build/icon.ico are generated from build/icon.svg by
+  # `npm run icons`; they are named here rather than left to electron-builder's
+  # implicit build/ lookup so a rename fails loudly instead of silently shipping
+  # the stock Electron icon.
+  icon: build/icon.icns
   # Unsigned, and not by omission: `identity: null` stops electron-builder from picking up
   # a Developer ID out of the local keychain and silently producing a signed build.
   identity: null
@@ -53,6 +58,7 @@ mac:
         - arm64
 
 win:
+  icon: build/icon.ico
   # Unsigned, explicitly: `signExecutable: false` skips code signing (and would ignore a
   # stray CSC_LINK in the environment) while keeping the resedit pass that stamps the app
   # name/version onto Matchline.exe — pure JS, so it works cross-building from macOS.

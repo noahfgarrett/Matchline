@@ -4,11 +4,78 @@ This is the step-by-step for running the Phase 1 proof on your Windows machine
 with Navisworks Manage 2025. Follow it in order. It assumes nothing beyond a
 working Windows install and Navisworks.
 
-**Read this first — the code has never been compiled.** All of `native/` was
-written on the Mac, which has no .NET SDK and no Navisworks. The first build on
-your machine is *part of the proof*, not a formality. Build errors are an
-expected outcome, not a sign something went badly wrong. What matters is that
-you capture them verbatim so they can be fixed precisely.
+**Read this first — everything except the Autodesk API is now compiled and
+run.** All of `native/` was written on a Mac. It has since been built there with
+the .NET SDK, and the half that does not touch Autodesk has been *executed*. The
+plugin compiles too, but only against a hand-written stand-in for
+`Autodesk.Navisworks.Api`. Your build is still the first one against the real
+assembly, and it is still *part of the proof*. Build errors in the plugin remain
+an expected outcome; capture them verbatim.
+
+### Status of Mac-side verification (2026-08-08)
+
+Toolchain: **.NET SDK 8.0.423** on macOS (arm64), `dotnet build` /`dotnet run`.
+Reference assemblies for `net48` come from the pinned
+`Microsoft.NETFramework.ReferenceAssemblies` package, which is why a .NET
+Framework target compiles on a machine that has no .NET Framework.
+
+**Compiles clean, zero warnings:**
+
+| Project                                        | Target         | Notes                                    |
+| ---------------------------------------------- | -------------- | ---------------------------------------- |
+| `Matchline.Extraction.Common`                  | netstandard2.0 | No changes were needed.                  |
+| `Matchline.Extractor`                          | net48          | No C# changes were needed. NuGet restored the pinned `Microsoft.Data.Sqlite 8.0.10` / `SQLitePCLRaw.bundle_e_sqlite3 2.1.6`. |
+| `Matchline.Extraction.Navisworks2025`          | net48          | Only with `-p:UseNavisworksStubs=true`. One real bug fixed first, below. |
+
+**One real build-blocking bug was found and fixed.**
+`native/navisworks-2025/Matchline.Extraction.Navisworks2025.csproj` contained a
+`--` inside an XML comment, which is illegal. MSBuild refused to *load* the
+project file at all: `error MSB4025`. That is not a C# error and no amount of
+reading the C# would have found it — `msbuild native\Matchline.Extraction.sln`
+would have failed on your machine before compiling a single line. Fixed.
+
+**Ran for real (not just compiled):**
+
+- **NDJSON round trip — PASSED.** `native/smoke` builds a synthetic stream
+  covering embedded quotes, backslashes, tabs, newlines, a control character,
+  non-ASCII, empty vs null strings, extreme doubles, and a NaN bounding box;
+  writes it with `NdjsonWriter`; reads it back with `NdjsonReader`; and compares
+  every field. It also asserts the file is UTF-8 with no BOM, LF-only, and one
+  line per record.
+- **`CacheWriter` produced a real cache file — PASSED.** The parsed stream was
+  replayed through the actual `CacheWriter`, committed (integrity check,
+  `.partial` rename and all) and re-opened with the actual `CacheInspector`.
+  `PRAGMA foreign_key_check` and `PRAGMA integrity_check` are both clean on the
+  committed file. 251 assertions.
+- **C# ↔ TypeScript cross-check, against the C#-produced file — PASSED.** Not a
+  reconstruction this time: `@matchline/model-schema`'s `openExtractionCache`
+  was pointed at the `.sqlite` the C# writer had just produced. 19 assertion
+  groups: all nine meta keys, row counts, depth-first `walk()` order, roots and
+  children by `path_index`, exact bounding-box values, bbox all-or-none for the
+  NaN row, property encounter order, byte-exact hostile property values,
+  null-vs-empty `value_text`, the selection-set folder tree with members
+  (including a duplicate member collapsing to one row), and warning order and
+  severities.
+- **C# 7.3 language discipline — clean**, now enforced by the compiler rather
+  than by reading: `LangVersion 7.3` in `native/Directory.Build.props` applies to
+  every project including the stubs and the smoke harness.
+
+**Two latent issues fixed while in there:**
+
+- `CacheSchema.Ddl` claimed to be a verbatim copy of
+  `schemas/extraction-cache.sql` but two SQL comment lines differed (`—`→`--`,
+  `§6.4`→`6.4`). It is now byte-identical, and the smoke harness asserts that
+  byte-for-byte, so the claim can no longer quietly rot. (Side benefit: it also
+  proves the compiler read the repo's UTF-8 sources correctly.)
+- `DocumentWalker.EmitObject` emitted its warnings *before* the object record
+  they reference, so the stream inserted a `warnings` row pointing at an
+  `objects` row that did not exist yet. Harmless today because the cache is
+  written with `PRAGMA foreign_keys` at its default of OFF, but it made the
+  stream unreplayable against an enforcing database. Warnings raised while
+  building an object are now queued and flushed immediately after it.
+
+**What is still unproven.** Everything Autodesk. See §9 for the flag-by-flag
+split between "the stub build pinned its shape" and "fully open".
 
 **Confidentiality.** The real NWD and everything derived from it are client
 data. Never copy the NWD into the repo folder, never commit a cache file, never
@@ -49,12 +116,28 @@ prompt does not.
 cd %USERPROFILE%\source
 git clone https://github.com/noahfgarrett/Matchline.git
 cd Matchline
-git checkout feat/phase-1-extraction-foundation
+git checkout main
 ```
 
 ---
 
 ## 3. Build
+
+`Matchline.Extraction.Common` (netstandard2.0) and `Matchline.Extractor`
+(net48) both build clean on the Mac with zero warnings — see the status note at
+the top — so a failure in either is a genuine Windows/toolchain difference and
+worth reporting in detail. The plugin has only ever been compiled against the
+stub API, so treat it as first-build-on-Windows.
+
+Build the two Autodesk-free projects first — the failures are cheaper to read in
+isolation, and if they fail, the problem is your toolchain, not the code:
+
+```
+msbuild native\navisworks-common\Matchline.Extraction.Common.csproj /t:Restore;Build /p:Configuration=Release
+msbuild native\extractor\Matchline.Extractor.csproj /t:Restore;Build /p:Configuration=Release
+```
+
+Then the whole solution:
 
 ```
 msbuild native\Matchline.Extraction.sln /t:Restore;Build /p:Configuration=Release
@@ -77,10 +160,19 @@ this runbook will work.
 - `native\extractor\bin\Release\Matchline.Extractor.exe` — the launcher
 - `native\navisworks-2025\bin\Release\Matchline.Extraction.Navisworks2025.dll` — the plugin
 
-Check one thing before moving on: **is `e_sqlite3.dll` in
-`native\extractor\bin\Release\`** (possibly inside an `x64\` subfolder)? If it
-is missing, note that — SQLite will fail at runtime with "Unable to load DLL
-'e_sqlite3'".
+Check one thing before moving on: **where did `e_sqlite3.dll` land?**
+
+```
+dir /s /b native\extractor\bin\Release\e_sqlite3.dll
+```
+
+Reading `SQLitePCLRaw.lib.e_sqlite3`'s own MSBuild targets, it should print
+three paths — `runtimes\win-x64\native\`, `runtimes\win-x86\native\` and
+`runtimes\win-arm\native\` — and *not* a copy at the output root. (The same
+build on macOS produced `runtimes\osx-x64\native\libe_sqlite3.dylib` and nothing
+at the root, which matches.) **Report what you actually see.** If the command
+prints nothing, say so: SQLite will fail at runtime with "Unable to load DLL
+'e_sqlite3'", and the fix is to copy the `win-x64` one to the output root.
 
 ---
 
@@ -343,16 +435,73 @@ own Properties panel for an item you know. They should read the same.
 
 ## 9. The VERIFY-ON-WINDOWS checklist
 
-Every Autodesk API call in `native/navisworks-2025/` is an educated guess. They
-are marked in the source with `// VERIFY-ON-WINDOWS:`. You do not need to check
-these by reading code — **the build and the run check them for you**. This list
-exists so that when something misbehaves, you know what to look at.
+Every Autodesk API call in `native/navisworks-2025/` is still an educated guess.
+They are marked in the source with `// VERIFY-ON-WINDOWS:`. You do not need to
+check these by reading code — **the build and the run check them for you**. This
+list exists so that when something misbehaves, you know what to look at.
 
-Find them all at any time with:
+**Status: 20 signature-pinned against stubs, 9 fully open.**
+
+The plugin now compiles, but against `native/navisworks-stubs` — a hand-written,
+implementation-free `Autodesk.Navisworks.Api` whose signatures were derived from
+*this code*, not from Autodesk. Read that honestly: it proves the plugin's C# is
+valid and internally consistent, and it forced every assumption to be written
+down as an explicit signature. It proves nothing about whether those signatures
+match the real assembly. A member name that is wrong is still wrong; it will
+still fail on your build.
+
+Each flag in the source now says which kind it is:
+
+- **"shape pinned by the stub build"** — the member's arity and types are fixed
+  by how the plugin uses them, so if the real API differs you get a *compile
+  error*, which is the cheap failure. 20 flags.
+- **"FULLY OPEN"** — the compiler cannot see it at all: reflection, runtime
+  string matching, process behaviour, install layout, or a semantic claim (like
+  "this collection yields document order") that has no type to check. These fail
+  *silently at runtime*, which is the expensive failure. 9 flags.
+
+The 9 fully open ones, and what each looks like when wrong:
+
+| Flag                                                        | Fails as                                            |
+| ----------------------------------------------------------- | --------------------------------------------------- |
+| `ModelItem` value equality (`DocumentWalker`)                | `selection_set_members` empty. **This one matters.** |
+| Model GUID member name, read reflectively                    | `source_models.guid` all null. Cosmetic.            |
+| `Application.Version`, read reflectively                     | `meta.navisworks_version` reads `unknown`. Cosmetic. |
+| `VariantDataType` spelling (string switch, `VariantFormatter`) | Everything lands in one `value_type`.             |
+| `AddInLocation.None` — whether it exists at all              | Plugin shows in the ribbon. Cosmetic.               |
+| Command-line id format `name.developerId`                    | Plugin never runs. §7.                              |
+| Developer id `MTCH` needing Autodesk registration            | Plugin never runs. §7.                              |
+| Navisworks install discovery / `Roamer.exe` command line     | `NW_NOT_INSTALLED` or `EXTRACT_FAILED`. §7.         |
+| Too-new-NWD message wording (`FailureClassifier`)            | `OPEN_FAILED` instead of `NW_VERSION_TOO_NEW`.      |
+
+Three more are semantic riders on otherwise-pinned flags, and are worth knowing
+because they compile either way:
+
+- `ModelItem.Children` yielding *document* order — `path_index` is meaningless
+  if it does not.
+- `SelectionSet` **not** deriving from `GroupItem` — the walker's
+  `child as GroupItem` null check depends on it, and would recurse into a
+  selection set if it is wrong.
+- Which of `DisplayName` / `Name` (on `ModelItem`, `PropertyCategory`,
+  `DataProperty`) is the display form. Both are strings, so a swap is invisible
+  to the compiler and shows up as internal names in the UI.
+
+Find every flag at any time with:
 
 ```
 findstr /S /N "VERIFY-ON-WINDOWS" native\*.cs native\*.csproj
 ```
+
+To reproduce the stub compile on any machine with the .NET SDK (this does *not*
+need Navisworks, and never runs):
+
+```
+dotnet build native\navisworks-2025\Matchline.Extraction.Navisworks2025.csproj -p:UseNavisworksStubs=true
+```
+
+The stub project is deliberately **not** in `Matchline.Extraction.sln`, so the
+normal solution build cannot reach it, and the stub build writes to
+`bin\stub-verify\` so its output can never be mistaken for the DLL §4 deploys.
 
 Grouped by what would go wrong:
 
@@ -400,9 +549,13 @@ Copy this template and fill it in.
 BUILD
   Visual Studio / Build Tools version:
   Navisworks product and version (Help > About):
-  Build result: success / failure
+  Build result, Common + Extractor (these build clean on macOS): success / failure
+  Build result, plugin against the REAL Autodesk assembly: success / failure
   If failure: full verbatim output, from the msbuild command to the last line.
-  e_sqlite3.dll present in extractor bin folder: yes / no
+    Every compile error here is a VERIFY-ON-WINDOWS flag coming due; the error
+    text names the member, which is exactly what is needed to correct both the
+    plugin and native/navisworks-stubs.
+  e_sqlite3.dll: paste the output of the `dir /s /b` from §3
 
 DEPLOY
   Plugins folder that worked: install dir / %APPDATA% / neither

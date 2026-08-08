@@ -29,10 +29,12 @@ namespace Matchline.Extraction.Navisworks2025
         /// <summary>
         /// Item -> assigned object id, used to resolve selection set membership
         /// after the tree walk.
-        /// VERIFY-ON-WINDOWS: this assumes ModelItem implements value equality
-        /// (Equals/GetHashCode over the underlying item), so that the instance
-        /// handed back by a selection set matches the one seen during the walk.
-        /// If membership counts come out at zero, this is why.
+        /// VERIFY-ON-WINDOWS (FULLY OPEN -- the stub build cannot help here):
+        /// this assumes ModelItem implements value equality (Equals/GetHashCode
+        /// over the underlying item), so that the instance handed back by a
+        /// selection set matches the one seen during the walk. The stub declares
+        /// ModelItem with plain reference equality, so a green stub build says
+        /// nothing either way. If membership counts come out at zero, this is why.
         /// </summary>
         private readonly Dictionary<ModelItem, long> _objectIds = new Dictionary<ModelItem, long>();
 
@@ -74,7 +76,9 @@ namespace Matchline.Extraction.Navisworks2025
         {
             long modelId = 0;
 
-            // VERIFY-ON-WINDOWS: Document.Models enumerates as Model.
+            // VERIFY-ON-WINDOWS (shape pinned by the stub build): Document.Models
+            // is enumerable with element type Model, and exposes .Count (used in
+            // MatchlineExtractAddIn). Still unconfirmed against the real assembly.
             foreach (Model model in document.Models)
             {
                 modelId++;
@@ -95,7 +99,8 @@ namespace Matchline.Extraction.Navisworks2025
                 ModelItem root = null;
                 try
                 {
-                    // VERIFY-ON-WINDOWS: Model.RootItem.
+                    // VERIFY-ON-WINDOWS (shape pinned by the stub build):
+                    // Model.RootItem is a property of type ModelItem.
                     root = model.RootItem;
                 }
                 catch (Exception ex)
@@ -120,7 +125,9 @@ namespace Matchline.Extraction.Navisworks2025
             // in Phase 1. The column exists for when a version adapter can fill it.
             record.ParentId = null;
 
-            // VERIFY-ON-WINDOWS: Model.FileName holds the appended file's path.
+            // VERIFY-ON-WINDOWS (shape pinned by the stub build: Model.FileName is
+            // a string property). What is NOT pinned is the meaning: that it holds
+            // the appended file's path.
             // Only the file name is recorded -- directories would leak local
             // paths into a portable cache (EXTRACTION.md, confidentiality).
             string fileName = SafeString(model.FileName);
@@ -146,8 +153,10 @@ namespace Matchline.Extraction.Navisworks2025
         /// Deliberate: the member name for this varies by release (SourceGuid /
         /// Guid / ModelGuid) and it is descriptive metadata, not control flow.
         /// Reflection keeps a wrong guess from being a compile error on a project
-        /// that cannot be compiled here. VERIFY-ON-WINDOWS: find the real member
-        /// during the proof run and replace this with the direct property.
+        /// that cannot be compiled here. VERIFY-ON-WINDOWS (FULLY OPEN): the stub
+        /// build cannot check a reflective lookup, and the stub deliberately
+        /// declares none of these three so as not to fake an answer. Find the real
+        /// member during the proof run and replace this with the direct property.
         /// </para>
         /// </summary>
         private static string ReadModelGuid(Model model)
@@ -210,8 +219,10 @@ namespace Matchline.Extraction.Navisworks2025
                 children.Clear();
                 try
                 {
-                    // VERIFY-ON-WINDOWS: ModelItem.Children enumerates child items
-                    // in document order.
+                    // VERIFY-ON-WINDOWS (shape pinned by the stub build:
+                    // ModelItem.Children is enumerable with element type ModelItem).
+                    // NOT pinned: that the order it yields is document order, which
+                    // is what makes path_index meaningful.
                     foreach (ModelItem child in frame.Item.Children)
                     {
                         children.Add(child);
@@ -231,6 +242,19 @@ namespace Matchline.Extraction.Navisworks2025
             }
         }
 
+        /// <summary>
+        /// Writes one object record, then any warnings raised while building it.
+        /// <para>
+        /// The order is deliberate. Reading an item's fields or its bounding box
+        /// can fail, and those warnings carry the item's object id; emitting them
+        /// first would put a <c>warnings</c> row referencing an <c>objects</c> row
+        /// that does not exist yet. The cache is written with
+        /// <c>PRAGMA foreign_keys</c> at its default of OFF, so today that is
+        /// only latent, but it makes the stream unreplayable against a cache with
+        /// enforcement on and it is free to avoid. Warnings raised after this
+        /// point (properties, children) are already correctly ordered.
+        /// </para>
+        /// </summary>
         private void EmitObject(Frame frame, long objectId, long sourceModelId)
         {
             ObjectRecord record = new ObjectRecord();
@@ -240,12 +264,15 @@ namespace Matchline.Extraction.Navisworks2025
             record.PathIndex = frame.PathIndex;
             record.Depth = frame.Depth;
 
+            List<WarningRecord> deferred = null;
+
             try
             {
                 record.DisplayName = SafeString(frame.Item.DisplayName);
 
-                // VERIFY-ON-WINDOWS: ModelItem.ClassDisplayName (display) and
-                // ModelItem.ClassName (internal). The schema wants the display form.
+                // VERIFY-ON-WINDOWS (shape pinned by the stub build: both are
+                // string properties on ModelItem). NOT pinned: which of the two is
+                // the display form. The schema wants the display form.
                 string className = SafeString(frame.Item.ClassDisplayName);
                 if (string.IsNullOrEmpty(className))
                 {
@@ -254,7 +281,9 @@ namespace Matchline.Extraction.Navisworks2025
 
                 record.ClassName = className;
 
-                // VERIFY-ON-WINDOWS: ModelItem.InstanceGuid is a System.Guid.
+                // VERIFY-ON-WINDOWS (pinned by the stub build, and hard-pinned by
+                // this code: ModelItem.InstanceGuid must be a System.Guid, not a
+                // string -- it is compared to Guid.Empty and formatted with "D").
                 Guid instanceGuid = frame.Item.InstanceGuid;
                 record.InstanceGuid = instanceGuid == Guid.Empty
                     ? null
@@ -262,25 +291,35 @@ namespace Matchline.Extraction.Navisworks2025
             }
             catch (Exception ex)
             {
-                Warn(WarningSeverity.Warning, WarningCodes.ItemReadFailed, Describe(ex), objectId);
+                Defer(ref deferred, WarningSeverity.Warning, WarningCodes.ItemReadFailed, Describe(ex), objectId);
             }
 
             // authoring_id stays null in Phase 1. Authoring-tool ids (Revit
             // element id and friends) arrive as ordinary properties; promoting
             // one into a column is a mapping decision, and mapping is Phase 2.
             record.AuthoringId = null;
-            record.BoundingBox = ReadBoundingBox(frame.Item, objectId);
+            record.BoundingBox = ReadBoundingBox(frame.Item, objectId, ref deferred);
 
             _writer.WriteObject(record);
+
+            if (deferred != null)
+            {
+                for (int i = 0; i < deferred.Count; i++)
+                {
+                    Emit(deferred[i]);
+                }
+            }
         }
 
-        private double[] ReadBoundingBox(ModelItem item, long objectId)
+        private double[] ReadBoundingBox(ModelItem item, long objectId, ref List<WarningRecord> deferred)
         {
             try
             {
-                // VERIFY-ON-WINDOWS: ModelItem.HasGeometry gates the cost, and
-                // ModelItem.BoundingBox() returns a BoundingBox3D with Min/Max
-                // Point3D. "Where cheap" means: only for items that own geometry.
+                // VERIFY-ON-WINDOWS (shape pinned by the stub build:
+                // ModelItem.HasGeometry is a bool property; BoundingBox() is a
+                // METHOD, not a property, returning a nullable reference type whose
+                // Min/Max are Point3D with double X/Y/Z). NOT pinned: that
+                // HasGeometry is cheap, which is the whole reason it gates the call.
                 if (!item.HasGeometry)
                 {
                     return null;
@@ -298,7 +337,7 @@ namespace Matchline.Extraction.Navisworks2025
             }
             catch (Exception ex)
             {
-                Warn(WarningSeverity.Info, WarningCodes.BoundingBoxReadFailed, Describe(ex), objectId);
+                Defer(ref deferred, WarningSeverity.Info, WarningCodes.BoundingBoxReadFailed, Describe(ex), objectId);
                 return null;
             }
         }
@@ -307,9 +346,11 @@ namespace Matchline.Extraction.Navisworks2025
         {
             try
             {
-                // VERIFY-ON-WINDOWS: ModelItem.PropertyCategories.
-                // Iterated with foreach rather than assigned to an interface, so
-                // the exact collection type does not have to be guessed.
+                // VERIFY-ON-WINDOWS (shape pinned by the stub build:
+                // ModelItem.PropertyCategories is enumerable with element type
+                // PropertyCategory). Iterated with foreach rather than assigned to
+                // an interface, so the exact collection type does not have to be
+                // guessed -- which is also why the stub's name for it is arbitrary.
                 foreach (PropertyCategory category in item.PropertyCategories)
                 {
                     EmitCategory(category, objectId);
@@ -328,8 +369,8 @@ namespace Matchline.Extraction.Navisworks2025
 
             try
             {
-                // VERIFY-ON-WINDOWS: PropertyCategory.DisplayName (display)
-                // and PropertyCategory.Name (internal).
+                // VERIFY-ON-WINDOWS (shape pinned by the stub build: both are
+                // string properties). NOT pinned: which one is the display form.
                 categoryDisplay = SafeString(category.DisplayName);
                 categoryInternal = SafeString(category.Name);
             }
@@ -341,7 +382,9 @@ namespace Matchline.Extraction.Navisworks2025
 
             try
             {
-                // VERIFY-ON-WINDOWS: PropertyCategory.Properties.
+                // VERIFY-ON-WINDOWS (shape pinned by the stub build:
+                // PropertyCategory.Properties is enumerable with element type
+                // DataProperty).
                 foreach (DataProperty property in category.Properties)
                 {
                     try
@@ -351,7 +394,9 @@ namespace Matchline.Extraction.Navisworks2025
                         record.Category = categoryDisplay ?? string.Empty;
                         record.CategoryInternal = categoryInternal;
 
-                        // VERIFY-ON-WINDOWS: DataProperty.DisplayName / .Name / .Value.
+                        // VERIFY-ON-WINDOWS (shape pinned by the stub build:
+                        // DisplayName and Name are strings, Value is a reference
+                        // type so a null value is representable).
                         record.Name = SafeString(property.DisplayName) ?? string.Empty;
                         record.NameInternal = SafeString(property.Name);
 
@@ -382,8 +427,10 @@ namespace Matchline.Extraction.Navisworks2025
             SavedItem root;
             try
             {
-                // VERIFY-ON-WINDOWS: Document.SelectionSets.RootItem is a
-                // FolderItem holding the saved-set tree.
+                // VERIFY-ON-WINDOWS (shape pinned by the stub build:
+                // Document.SelectionSets has a RootItem assignable to SavedItem).
+                // NOT pinned: that it is specifically a FolderItem, nor that it
+                // holds the whole saved-set tree.
                 root = document.SelectionSets.RootItem;
             }
             catch (Exception ex)
@@ -403,8 +450,11 @@ namespace Matchline.Extraction.Navisworks2025
 
         private void WalkSavedItemChildren(SavedItem parent, long? parentSetId, ref long nextSetId)
         {
-            // VERIFY-ON-WINDOWS: GroupItem.Children (FolderItem derives from
-            // GroupItem). A SelectionSet is not a GroupItem and has no children.
+            // VERIFY-ON-WINDOWS (shape pinned by the stub build: GroupItem.Children
+            // is enumerable with element type SavedItem, and FolderItem derives from
+            // GroupItem). NOT pinned, and load-bearing: that SelectionSet does NOT
+            // derive from GroupItem. If it does, this cast succeeds and the walk
+            // recurses into a selection set. That compiles either way.
             GroupItem group = parent as GroupItem;
             if (group == null)
             {
@@ -447,8 +497,9 @@ namespace Matchline.Extraction.Navisworks2025
                         continue;
                     }
 
-                    // VERIFY-ON-WINDOWS: SelectionSet.HasExplicitModelItems
-                    // distinguishes a fixed selection from a saved search.
+                    // VERIFY-ON-WINDOWS (shape pinned by the stub build: a bool
+                    // property on SelectionSet). NOT pinned: that it means "fixed
+                    // selection rather than saved search".
                     bool isExplicit = selectionSet.HasExplicitModelItems;
                     record.Kind = isExplicit ? SelectionSetKind.Selection : SelectionSetKind.Search;
                     _writer.WriteSelectionSet(record);
@@ -482,7 +533,9 @@ namespace Matchline.Extraction.Navisworks2025
             List<ModelItem> members = new List<ModelItem>();
             try
             {
-                // VERIFY-ON-WINDOWS: SelectionSet.ExplicitModelItems.
+                // VERIFY-ON-WINDOWS (shape pinned by the stub build:
+                // SelectionSet.ExplicitModelItems is enumerable with element type
+                // ModelItem).
                 foreach (ModelItem member in selectionSet.ExplicitModelItems)
                 {
                     members.Add(member);
@@ -525,12 +578,39 @@ namespace Matchline.Extraction.Navisworks2025
 
         private void Warn(string severity, string code, string message, long? objectId)
         {
-            _warningCount++;
+            Emit(Build(severity, code, message, objectId));
+        }
+
+        /// <summary>
+        /// Queues a warning that must not be written until the object row it
+        /// references exists. See <see cref="EmitObject"/>.
+        /// </summary>
+        private static void Defer(
+            ref List<WarningRecord> deferred, string severity, string code, string message, long? objectId)
+        {
+            if (deferred == null)
+            {
+                deferred = new List<WarningRecord>();
+            }
+
+            deferred.Add(Build(severity, code, message, objectId));
+        }
+
+        private static WarningRecord Build(string severity, string code, string message, long? objectId)
+        {
             WarningRecord record = new WarningRecord();
             record.Severity = severity;
             record.Code = code;
             record.Message = message ?? string.Empty;
             record.ObjectId = objectId;
+            return record;
+        }
+
+        private void Emit(WarningRecord record)
+        {
+            // Counted on emit, not on creation, so the count in the end record
+            // always equals the number of warning lines in the stream.
+            _warningCount++;
             _writer.WriteWarning(record);
         }
 

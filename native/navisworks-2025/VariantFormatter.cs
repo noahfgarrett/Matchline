@@ -13,14 +13,23 @@ namespace Matchline.Extraction.Navisworks2025
     /// default arm instead of failing to compile or throwing.
     /// </para>
     /// <para>
-    /// VERIFY-ON-WINDOWS: every accessor named below is a separate case, so a
-    /// wrong guess is a one-line fix. Confirm against the real API:
-    /// ToDisplayString, ToIdentifierString, ToInt32, ToDouble, ToDoubleLength,
-    /// ToDoubleAngle, ToDoubleArea, ToDoubleVolume, ToBoolean, ToDateTime,
-    /// ToNamedConstant (and NamedConstant.DisplayName). Also confirm the spelling
-    /// of the VariantDataType names in the case labels -- they are compared as
-    /// strings, so a mismatch shows up as values landing in the default arm with
-    /// a type name that no case handles.
+    /// VERIFY-ON-WINDOWS. Two halves, with very different standing:
+    /// </para>
+    /// <para>
+    /// (a) The eleven accessors are shape-pinned by the stub build, including
+    /// their return types, because this code consumes each one: ToDisplayString
+    /// and ToIdentifierString return string; ToInt32 returns int; ToDouble,
+    /// ToDoubleLength, ToDoubleAngle, ToDoubleArea and ToDoubleVolume return
+    /// double; ToBoolean returns bool; ToDateTime returns DateTime;
+    /// ToNamedConstant returns a reference type with a string DisplayName. Names
+    /// and arities are still guesses, just internally consistent ones, and each
+    /// is a separate case so a wrong guess is a one-line fix.
+    /// </para>
+    /// <para>
+    /// (b) FULLY OPEN: the spelling of the VariantDataType names in the case
+    /// labels. They are compared as strings, so the compiler never sees them and
+    /// the stub cannot pin them. A mismatch shows up at runtime as values landing
+    /// in the default arm with a type name that no case handles.
     /// </para>
     /// </summary>
     internal static class VariantFormatter

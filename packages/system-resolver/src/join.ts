@@ -14,6 +14,11 @@
  * When two raw spellings normalize onto one key the join is ambiguous. Nothing
  * is chosen: `1` and `001` may be one system written twice or two systems, and
  * only the site knows which.
+ *
+ * The MEL row index below is the same idea applied to the other half of the
+ * join. Once a rung knows which MEL key it matched it still has to name the
+ * row that said so, and scanning the rows for it is the same per-subject sweep
+ * this file exists to avoid. Both indexes are built once per compile.
  */
 import type { NormalizationStep } from '@matchline/domain';
 
@@ -65,6 +70,84 @@ export function buildSystemJoinIndex(
   } else if (melRows !== undefined) {
     for (const row of melRows) {
       add(row.systemKey?.trim() ?? '');
+    }
+  }
+
+  return index;
+}
+
+/**
+ * Both MEL-side indexes, built once for a whole compile and shared by every
+ * subject. Passed as a pair because they are always built and always consulted
+ * together, and because a rung needs both to answer one `mel-lookup`.
+ */
+export interface MelIndexes {
+  readonly join: SystemJoinIndex;
+  readonly rows: MelRowIndex;
+}
+
+/** Builds both indexes from whichever MEL side the caller supplied. */
+export function buildMelIndexes(
+  catalog: SystemCatalog | undefined,
+  melRows: ReadonlyArray<MelCatalogRow> | undefined,
+  normalization: ReadonlyArray<NormalizationStep>,
+): MelIndexes {
+  return {
+    join: buildSystemJoinIndex(catalog, melRows, normalization),
+    rows: buildMelRowIndex(melRows),
+  };
+}
+
+/** What the MEL rows state about one trimmed systemKey, in row order. */
+export interface MelRowGroup {
+  /** First row stating this key, whatever else it says. */
+  readonly firstRow: MelCatalogRow;
+  /** First nonblank trimmed description among those rows; '' when none states one. */
+  readonly firstStatedDescription: string;
+  /** Trimmed description -> first row of this key stating exactly it. */
+  readonly rowByDescription: ReadonlyMap<string, MelCatalogRow>;
+}
+
+/** Trimmed systemKey -> the rows stating it. Keys are raw, as the MEL wrote them. */
+export type MelRowIndex = ReadonlyMap<string, MelRowGroup>;
+
+/** Mutable while building; the group is handed out read-only. */
+interface MutableMelRowGroup {
+  readonly firstRow: MelCatalogRow;
+  firstStatedDescription: string;
+  readonly rowByDescription: Map<string, MelCatalogRow>;
+}
+
+/**
+ * Indexes the MEL rows by the trimmed systemKey a `mel-lookup` matches on.
+ *
+ * Every bucket keeps first-seen rows only, because that is what the scan this
+ * replaces returned: the first row stating the key, and the first row stating
+ * the key together with a given description. A blank key gets a bucket like any
+ * other -- `buildSystemJoinIndex` never yields a blank key to look up, so the
+ * bucket is unreachable, and dropping it would be a rule this file does not
+ * need to have.
+ */
+export function buildMelRowIndex(melRows: ReadonlyArray<MelCatalogRow> | undefined): MelRowIndex {
+  const index = new Map<string, MutableMelRowGroup>();
+  if (melRows === undefined) {
+    return index;
+  }
+
+  for (const row of melRows) {
+    const key = row.systemKey?.trim() ?? '';
+    const description = row.systemDescription?.trim() ?? '';
+
+    let group = index.get(key);
+    if (group === undefined) {
+      group = { firstRow: row, firstStatedDescription: '', rowByDescription: new Map() };
+      index.set(key, group);
+    }
+    if (group.firstStatedDescription.length === 0 && description.length > 0) {
+      group.firstStatedDescription = description;
+    }
+    if (!group.rowByDescription.has(description)) {
+      group.rowByDescription.set(description, row);
     }
   }
 

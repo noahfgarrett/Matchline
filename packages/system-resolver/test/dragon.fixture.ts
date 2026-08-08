@@ -118,6 +118,69 @@ export const MESSY_MEL: ReadonlyArray<MelCatalogRow> = [
 ];
 
 /**
+ * A MEL built to make the row-addressing of a key join visible.
+ *
+ * Every case that decides WHICH row a claim points at is here: a key first
+ * written with surrounding whitespace, a key several rows restate, a
+ * description two rows repeat, a rival description, a key no row describes, a
+ * blank description before a real one, a blank key and a missing key.
+ */
+export const RAGGED_MEL: ReadonlyArray<MelCatalogRow> = [
+  // Trims to `100`, so this is the first row stating that key -- but it states
+  // no description, so a description lookup must not land here.
+  { systemKey: '  100  ', sourceFile: 'Ragged-MEL.xlsx', sheet: 'MEL', row: 2 },
+  {
+    systemKey: '100',
+    systemDescription: 'Chilled Water',
+    sourceFile: 'Ragged-MEL.xlsx',
+    sheet: 'MEL',
+    row: 3,
+  },
+  {
+    systemKey: '100',
+    systemDescription: ' Chilled Water ',
+    sourceFile: 'Ragged-MEL.xlsx',
+    sheet: 'MEL',
+    row: 4,
+  },
+  {
+    systemKey: '100',
+    systemDescription: 'Chilled Water Loop',
+    sourceFile: 'Ragged-MEL.xlsx',
+    sheet: 'MEL',
+    row: 5,
+  },
+  {
+    systemKey: '   ',
+    systemDescription: 'Nothing At All',
+    sourceFile: 'Ragged-MEL.xlsx',
+    sheet: 'MEL',
+    row: 6,
+  },
+  { systemDescription: 'No Key At All', sourceFile: 'Ragged-MEL.xlsx', sheet: 'MEL', row: 7 },
+  { systemKey: '200', sourceFile: 'Ragged-MEL.xlsx', sheet: 'MEL', row: 8 },
+  { systemKey: '300', systemDescription: '   ', sourceFile: 'Ragged-MEL.xlsx', sheet: 'MEL', row: 9 },
+  {
+    systemKey: '300',
+    systemDescription: 'Instrument Air',
+    sourceFile: 'Ragged-MEL.xlsx',
+    sheet: 'MEL',
+    row: 10,
+  },
+];
+
+/** A key lookup and a description lookup in one run, so both row addresses show. */
+export const KEY_AND_DESCRIPTION_JOIN: SystemResolverConfig = {
+  keyChain: [
+    { kind: 'model-field', property: { category: 'Dragon', name: 'UPN' } },
+    { kind: 'mel-lookup', joinBy: 'systemKey', returnField: 'systemKey' },
+  ],
+  descriptionChain: [{ kind: 'mel-lookup', joinBy: 'systemKey', returnField: 'systemDescription' }],
+  normalization: [],
+  conflictPolicy: 'review',
+};
+
+/**
  * A MEL that writes the system unpadded, the way a site's Excel export does
  * when the column was ever a number.
  */
