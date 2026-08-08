@@ -76,7 +76,55 @@ model asset universe ─▶ identity (tiered reconciliation) ─▶ IdentityOutc
   dropped to anomalies; cycles kept (ring feeds are real), one anomaly per SCC. No SSM
   boundary enforcement — cross-system feeds stay visible as feeds.
 
-### Semantics rules (binding)
+## E3 — SSM compiler (PRODUCT.md Phase 4)
+
+```
+observations + identity + anatomy + role graph + learned rules
+        ─▶ relationship-claims (assembly: every source contributes claims)
+        ─▶ ssm-compiler (parent ladder → boundary fold → projection → snapshot)
+        ─▶ compiler (orchestrator: cache + workbooks + profile → CanonicalModel)
+```
+
+- **`@matchline/relationship-claims`** — claims assembly. Sources, each yielding
+  RelationshipClaims with provenance and evidence tier: explicit model parent/relationship
+  property; profile role rules over tag-anatomy roles (parent ladders, e.g. MAH→PLC→VFD→TIT);
+  flow-anchored family rules (flow-connected + same familyKey + compatible roles — strongest
+  inference); family+role without flow anchor (weaker); accepted (claim-grade) learned
+  description rules; prior-SSM examples. STRUCTURAL_PARENT_CANDIDATE claims compete for one
+  slot; DEPENDENCY claims are additive. Nothing writes the hierarchy.
+- **`@matchline/learned-rules`** — donor §7 concepts, ported: train from a finished
+  SSM/registry export → digit-masked description→classification table; per-class parent
+  role gates (a class parenting <5% of ≥10 sightings is child-only); role affinities
+  (A parents B ≥3 times → pairing rule); self-grading — a class earns claim grade only at
+  ≥85% precision over ≥10 predictions, everything else emits PROPOSALS (review queue), never
+  hierarchy writes. Training output is a plain serializable LearnedRuleSet for the profile;
+  locked profiles persist nothing (donor invariant 5).
+- **`@matchline/ssm-compiler`** — resolution + fold + projection:
+  1. **Parent ladder** (§11.1, profile-reorderable): manual override → explicit model
+     relationship → profile lookup → flow-anchored family → family+role → accepted learned
+     model → prior SSM example → model-tree suggestion → root of grouping. First tier with
+     exactly one candidate wins; a tier with >1 equal candidates = ambiguous-parent review
+     item and the ladder STOPS (no fall-through guessing — same rule as identity).
+  2. **Boundary fold** (§11.3, DECISIONS.md #1 — hard boundaries, NO feed-chain exception):
+     for the selected parent, all enabled boundary keys known and equal → structural parent;
+     any enabled boundary differs → parent removed, demoted to dependency of the child,
+     child re-resolves in its own grouping or roots; any REQUIRED boundary value missing →
+     no structural decision — review or provisional-root per profile policy. Explicit
+     attributes only: a profile fallback value never feeds a boundary comparison.
+  3. **Projection**: configured hierarchy levels (any raw/derived field, per-level
+     boundary toggle) → level tree → system grouping → one structural parent + additive
+     dependencies per asset. nativeDiscipline and ssmDiscipline are separate fields; ssm
+     discipline comes from profile projection rules / top-parent inheritance / manual, and
+     only acts as a boundary if enabled.
+  4. **Snapshot**: immutable ResolvedSnapshot — deterministic (same inputs + profile →
+     identical snapshot), cycle detection (structural cycles broken to review items, never
+     silently), every decision provenance'd, losing claims retained.
+- **`@matchline/compiler`** — the orchestrator that owns the E1 property-bag seam:
+  extraction cache + spreadsheets + SiteProfile → asset catalog → subjects (property bags)
+  → system resolution → identity → observations → claims → snapshot → outputs. The only
+  package that knows the whole pipeline order.
+
+## Binding semantics (all stages)
 
 1. Model-first: the asset universe comes ONLY from the extraction cache. MEL rows never
    create assets in E1 (MEL_ONLY discrepancy records arrive with identity work in E2).

@@ -1,0 +1,36 @@
+{
+  "name": "@matchline/compiler",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "tsc -b && node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@matchline/domain": "0.1.0",
+    "@matchline/model-schema": "0.1.0",
+    "@matchline/asset-catalog": "0.1.0",
+    "@matchline/tag-anatomy": "0.1.0",
+    "@matchline/system-resolver": "0.1.0",
+    "@matchline/identity": "0.1.0",
+    "@matchline/connectivity-import": "0.1.0",
+    "@matchline/electrical-flow": "0.1.0",
+    "@matchline/relationship-claims": "0.1.0",
+    "@matchline/ssm-compiler": "0.1.0",
+    "@matchline/learned-rules": "0.1.0",
+    "@matchline/mel-export": "0.1.0",
+    "@matchline/spreadsheet-import": "0.1.0"
+  }
+}
