@@ -30,6 +30,7 @@
 import type { SystemResolution } from '@matchline/domain';
 
 import type { CanonicalMelRow } from './columns.js';
+import { compareCodeUnits } from './order.js';
 
 /**
  * One compiled asset, flattened to what §12.1 prints.
@@ -145,16 +146,4 @@ function compareSystemKeys(a: string, b: string): number {
   if (a === '') return 1;
   if (b === '') return -1;
   return compareCodeUnits(a, b);
-}
-
-/**
- * UTF-16 code-unit comparison — `<` on strings, made explicit.
- *
- * Not `localeCompare`: its order depends on the machine's locale and ICU build,
- * and a byte-stable export cannot depend on either.
- */
-function compareCodeUnits(a: string, b: string): number {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
 }
