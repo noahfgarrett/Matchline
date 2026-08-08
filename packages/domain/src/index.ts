@@ -23,3 +23,26 @@ export type {
   ReviewStatus,
   SourceStatus,
 } from './asset.js';
+
+export type { SegmentExtractor, SegmentName, TagAnatomyConfig } from './anatomy.js';
+
+export type {
+  AssetFilterConfig,
+  PropertyMappings,
+  PropertyRef,
+  SiteProfile,
+} from './profile.js';
+
+export type {
+  NormalizationStep,
+  SystemComponentConfig,
+  SystemResolverConfig,
+} from './resolver-config.js';
+
+export { reviewItemSummary } from './review.js';
+export type {
+  DuplicateModelTagReviewItem,
+  ReviewItem,
+  SystemCatalogConflictReviewItem,
+  SystemConflictReviewItem,
+} from './review.js';
