@@ -1,0 +1,24 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../domain" },
+    { "path": "../model-schema" },
+    { "path": "../asset-catalog" },
+    { "path": "../tag-anatomy" },
+    { "path": "../system-resolver" },
+    { "path": "../identity" },
+    { "path": "../connectivity-import" },
+    { "path": "../electrical-flow" },
+    { "path": "../relationship-claims" },
+    { "path": "../ssm-compiler" },
+    { "path": "../learned-rules" },
+    { "path": "../mel-export" },
+    { "path": "../spreadsheet-import" }
+  ]
+}

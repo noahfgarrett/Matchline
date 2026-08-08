@@ -31,6 +31,18 @@
     },
     {
       "path": "./packages/electrical-flow"
+    },
+    {
+      "path": "./packages/relationship-claims"
+    },
+    {
+      "path": "./packages/learned-rules"
+    },
+    {
+      "path": "./packages/ssm-compiler"
+    },
+    {
+      "path": "./packages/compiler"
     }
   ]
 }

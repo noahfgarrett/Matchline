@@ -71,4 +71,26 @@ export const DRAGON_REVIEW_ITEMS: ReadonlyArray<ReviewItem> = [
     evidenceTag: '10-01',
     candidateAssetIds: ['asset-0001', 'asset-0009'],
   },
+  {
+    kind: 'ambiguous-parent',
+    assetId: 'asset-0004',
+    ladderSource: 'family-role',
+    candidateParentIds: ['asset-0002', 'asset-0003'],
+  },
+  {
+    kind: 'structural-cycle',
+    assetIds: ['asset-0002', 'asset-0003', 'asset-0004'],
+  },
+  {
+    kind: 'missing-boundary',
+    assetId: 'asset-0009',
+    levelId: 'building',
+  },
+  {
+    kind: 'nesting-proposal',
+    assetId: 'asset-0004',
+    proposedParentId: 'asset-0003',
+    ruleDetail: 'VFD parents TIT (7/8 sightings)',
+    confidence: 0.875,
+  },
 ];

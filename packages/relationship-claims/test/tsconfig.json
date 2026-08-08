@@ -1,0 +1,10 @@
+{
+  "//": "Type-checks the fixtures the .mjs tests import. Separate project so test code never lands in the package's published dist.",
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "./dist"
+  },
+  "include": ["*.ts"],
+  "references": [{ "path": ".." }]
+}

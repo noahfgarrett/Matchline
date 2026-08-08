@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0 — 2026-08-07 — E3: SSM compiler (PRODUCT.md Phase 4)
+
+- Relationship claims assembly: eight evidence sources, claims compete, nothing writes.
+- Learned rules ported from the donor: digit-masked classification, role gates, affinities,
+  self-grading (claim grade at >=85% precision over >=10; everything else proposals).
+- Parent ladder + hard-boundary fold: cross-boundary parents demote to dependencies
+  (RIO acceptance case verbatim), missing boundaries never guessed, manual overrides
+  bypass the fold, cycles broken deterministically to review items.
+- Compiler orchestrator: one call from extraction cache + workbooks + profile to snapshot,
+  hierarchy tree, Electrical Flow, generated MEL, and aggregated review items.
+- Suite: 1282 tests, 0 failures.
+
 ## 0.3.0 — 2026-08-07 — E2: connectivity spine (PRODUCT.md Phase 3)
 
 - EasyPower / Cable Schedule / PMD imports with donor-ported sheet detection and

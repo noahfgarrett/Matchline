@@ -52,11 +52,37 @@ export type {
 
 export { reviewItemSummary } from './review.js';
 export type {
+  AmbiguousParentReviewItem,
   AmbiguousSuffixReviewItem,
   DuplicateModelTagReviewItem,
   FuzzyIdentityCandidate,
   FuzzyIdentityReviewItem,
+  MissingBoundaryReviewItem,
+  NestingProposalReviewItem,
   ReviewItem,
+  StructuralCycleReviewItem,
   SystemCatalogConflictReviewItem,
   SystemConflictReviewItem,
 } from './review.js';
+
+export { LADDER_SOURCE_ORDER } from './hierarchy-config.js';
+export type {
+  HierarchyConfig,
+  HierarchyLevelConfig,
+  LadderSourceKind,
+  ManualRelationshipOverride,
+  ParentLadderConfig,
+  RoleGraphConfig,
+  RoleRule,
+} from './hierarchy-config.js';
+
+export type { SsmRelationshipClaim } from './ssm-claims.js';
+
+export type {
+  ParentDecision,
+  ParentDemotion,
+  ResolvedAssetNode,
+  ResolvedDependency,
+  ResolvedSnapshot,
+  SnapshotStats,
+} from './snapshot.js';
