@@ -5,7 +5,7 @@ import { reviewItemSummary } from '../dist/index.js';
 import { DRAGON_REVIEW_ITEMS } from './dist/review.fixture.js';
 
 test('every review item kind summarizes to a non-empty line', () => {
-  assert.equal(DRAGON_REVIEW_ITEMS.length, 5);
+  assert.equal(DRAGON_REVIEW_ITEMS.length, 9);
   const kinds = new Set();
   for (const item of DRAGON_REVIEW_ITEMS) {
     kinds.add(item.kind);
@@ -58,6 +58,40 @@ test('an ambiguous suffix names every asset that could claim the tag', () => {
   const ambiguous = DRAGON_REVIEW_ITEMS[4];
   assert.deepEqual(ambiguous.candidateAssetIds, ['asset-0001', 'asset-0009']);
   assert.equal(reviewItemSummary(ambiguous), 'tag 10-01: 2 assets could claim it');
+});
+
+test('a tied ladder tier names the tier it stopped at, not the assets it skipped', () => {
+  const ambiguousParent = DRAGON_REVIEW_ITEMS[5];
+  assert.equal(ambiguousParent.kind, 'ambiguous-parent');
+  assert.equal(ambiguousParent.ladderSource, 'family-role');
+  assert.equal(
+    reviewItemSummary(ambiguousParent),
+    'asset asset-0004: 2 parents tied at tier family-role',
+  );
+});
+
+test('a structural cycle is reported whole rather than snapped at an edge', () => {
+  const cycle = DRAGON_REVIEW_ITEMS[6];
+  assert.deepEqual(cycle.assetIds, ['asset-0002', 'asset-0003', 'asset-0004']);
+  assert.equal(reviewItemSummary(cycle), 'structural cycle across 3 assets');
+});
+
+test('a missing boundary value names the level that could not be compared', () => {
+  const missing = DRAGON_REVIEW_ITEMS[7];
+  assert.equal(
+    reviewItemSummary(missing),
+    'asset asset-0009: boundary level building has no value',
+  );
+});
+
+test('a proposal-grade learned rule arrives as review, carrying its confidence', () => {
+  const proposal = DRAGON_REVIEW_ITEMS[8];
+  assert.equal(proposal.kind, 'nesting-proposal');
+  assert.equal(proposal.confidence, 0.875);
+  assert.equal(
+    reviewItemSummary(proposal),
+    'asset asset-0004: proposed parent asset-0003 (VFD parents TIT (7/8 sightings))',
+  );
 });
 
 test('an unknown review item kind is rejected rather than silently summarized', () => {

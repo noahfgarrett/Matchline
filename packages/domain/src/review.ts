@@ -6,6 +6,7 @@
  * person to settle (PRODUCT.md §5.6, §5.7).
  */
 import type { AttributeClaim } from './claims.js';
+import type { LadderSourceKind } from './hierarchy-config.js';
 import { assertNever } from './relationship.js';
 
 /** Two or more resolver rungs proposed different systems for one asset. */
@@ -64,12 +65,75 @@ export interface AmbiguousSuffixReviewItem {
   readonly candidateAssetIds: ReadonlyArray<string>;
 }
 
+/**
+ * One ladder rung offered several equally good parents (PRODUCT.md §11.1).
+ *
+ * The ladder stops here rather than falling through to a weaker rung: dropping
+ * to weaker evidence to break a tie the strong evidence could not break is
+ * guessing, and it is the same rule identity follows at §9.2.
+ */
+export interface AmbiguousParentReviewItem {
+  readonly kind: 'ambiguous-parent';
+  readonly assetId: string;
+  /** The rung that tied. Rungs below it were never consulted. */
+  readonly ladderSource: LadderSourceKind;
+  /** Every candidate the rung produced, ordered for stable display. */
+  readonly candidateParentIds: ReadonlyArray<string>;
+}
+
+/**
+ * A set of assets that ended up parenting each other.
+ *
+ * A cycle is broken into a review item rather than snapped at an arbitrary
+ * edge, because which edge is wrong is a judgement about the site, not about
+ * the graph.
+ */
+export interface StructuralCycleReviewItem {
+  readonly kind: 'structural-cycle';
+  /** The cycle members, ordered for stable display. */
+  readonly assetIds: ReadonlyArray<string>;
+}
+
+/**
+ * A required boundary level had no value, so no structural decision was safe
+ * (PRODUCT.md §11.3).
+ *
+ * Explicit attributes only: a profile fallback value never feeds a boundary
+ * comparison, so "missing" here really means no source stated it.
+ */
+export interface MissingBoundaryReviewItem {
+  readonly kind: 'missing-boundary';
+  readonly assetId: string;
+  readonly levelId: string;
+}
+
+/**
+ * A learned rule that has not earned claim grade (ENGINE.md E3, DECISIONS.md #3).
+ *
+ * Proposal-grade description rules never write hierarchy and never become
+ * claims -- they arrive here, with the rule and its measured confidence, for a
+ * person to accept or reject.
+ */
+export interface NestingProposalReviewItem {
+  readonly kind: 'nesting-proposal';
+  readonly assetId: string;
+  readonly proposedParentId: string;
+  /** The rule in reviewable words, e.g. `VFD parents TIT (7/8)`. */
+  readonly ruleDetail: string;
+  /** Measured precision of the rule, 0..1. Never a threshold, always the number. */
+  readonly confidence: number;
+}
+
 export type ReviewItem =
   | SystemConflictReviewItem
   | DuplicateModelTagReviewItem
   | SystemCatalogConflictReviewItem
   | FuzzyIdentityReviewItem
-  | AmbiguousSuffixReviewItem;
+  | AmbiguousSuffixReviewItem
+  | AmbiguousParentReviewItem
+  | StructuralCycleReviewItem
+  | MissingBoundaryReviewItem
+  | NestingProposalReviewItem;
 
 /**
  * A one-line description of what needs deciding.
@@ -89,6 +153,14 @@ export function reviewItemSummary(item: ReviewItem): string {
       return `tag ${item.evidenceTag}: ${item.candidates.length} fuzzy candidates need review`;
     case 'ambiguous-suffix':
       return `tag ${item.evidenceTag}: ${item.candidateAssetIds.length} assets could claim it`;
+    case 'ambiguous-parent':
+      return `asset ${item.assetId}: ${item.candidateParentIds.length} parents tied at tier ${item.ladderSource}`;
+    case 'structural-cycle':
+      return `structural cycle across ${item.assetIds.length} assets`;
+    case 'missing-boundary':
+      return `asset ${item.assetId}: boundary level ${item.levelId} has no value`;
+    case 'nesting-proposal':
+      return `asset ${item.assetId}: proposed parent ${item.proposedParentId} (${item.ruleDetail})`;
   }
   return assertNever(item, 'unhandled ReviewItem');
 }
