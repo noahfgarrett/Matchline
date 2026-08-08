@@ -44,4 +44,4 @@ jobs:
       # perf environment (observed 12.3s vs an 8s budget); they run on real hardware.
       - name: Test legacy parity suite
         working-directory: packages/legacy-parity
-        run: node --test --test-skip-pattern "frozen SSM Builder|preserves a frozen edge contract|performance budget" tests/*.test.mjs
+        run: node --test --test-skip-pattern "frozen SSM Builder|preserves a frozen edge contract|budget" tests/*.test.mjs
