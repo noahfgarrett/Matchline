@@ -11,7 +11,7 @@ import type { SystemComponentConfig } from '@matchline/domain';
 import type { AnatomyResult } from '@matchline/tag-anatomy';
 
 import { expandComposite } from './composite.js';
-import type { SystemJoinIndex } from './join.js';
+import type { MelRowIndex, SystemJoinIndex } from './join.js';
 import { COMPONENT_EVIDENCE_TIER } from './tiers.js';
 import type {
   ChainName,
@@ -60,6 +60,15 @@ export interface RungContext {
    * or, worse, find a different system that happens to be spelled `001`.
    */
   readonly joinIndex: SystemJoinIndex;
+  /**
+   * The MEL rows addressed by the key they state.
+   *
+   * A key join has to name the row its value came from, and finding that row by
+   * scanning `melRows` is a sweep of the whole MEL per subject -- the cost of it
+   * grows with the model and the MEL together. The index answers the same
+   * question in one lookup.
+   */
+  readonly melRowIndex: MelRowIndex;
 }
 
 /** Which source vocabulary a rung's claim belongs to. */
@@ -207,34 +216,26 @@ function evaluateMelLookup(
   // A systemKey lookup returns the MEL's own spelling, not the joined key: the
   // claim then records what the MEL actually wrote and the transform trail
   // shows how it became the resolved key (§5.5).
+  const group = context.melRowIndex.get(melKey);
   let value = '';
   if (context.catalog !== undefined) {
     const entry = context.catalog.get(melKey);
     if (entry !== undefined) {
       value = field === 'systemKey' ? melKey : (entry.description ?? '');
     }
-  } else if (context.melRows !== undefined) {
-    for (const row of context.melRows) {
-      if ((row.systemKey?.trim() ?? '') !== melKey) {
-        continue;
-      }
-      const candidate = field === 'systemKey' ? melKey : (row.systemDescription?.trim() ?? '');
-      if (candidate.length > 0) {
-        value = candidate;
-        break;
-      }
-    }
+  } else if (group !== undefined) {
+    value = field === 'systemKey' ? melKey : group.firstStatedDescription;
   }
 
   if (value.length === 0) {
     return skip('no-value', `the MEL states no ${label} for system ${joinKey}`);
   }
 
-  const backingRow = context.melRows?.find(
-    (row) =>
-      (row.systemKey?.trim() ?? '') === melKey &&
-      (field === 'systemKey' || (row.systemDescription?.trim() ?? '') === value),
-  );
+  // The row that said it: for a key lookup the first row stating the key at all,
+  // for a description lookup the first row stating the key AND this description.
+  // A catalog description the rows only state with surrounding whitespace misses
+  // here, exactly as comparing it against a trimmed row always did.
+  const backingRow = field === 'systemKey' ? group?.firstRow : group?.rowByDescription.get(value);
   return yieldFrom(value, backingRow);
 }
 

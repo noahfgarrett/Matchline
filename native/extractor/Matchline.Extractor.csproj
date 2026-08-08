@@ -31,11 +31,36 @@
          native provider version is visible and pinned too. -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="[8.0.10]" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="[2.1.6]" />
-    <!-- VERIFY-ON-WINDOWS: on .NET Framework, SQLitePCLRaw relies on its own
-         MSBuild targets to copy the native e_sqlite3.dll into the output. After
-         the first build, confirm bin\Release\ contains e_sqlite3.dll (possibly
-         under x64\). A missing copy shows up at runtime as
-         "Unable to load DLL 'e_sqlite3'". -->
+    <!-- How a net48 project compiles on a machine with no .NET Framework:
+         csc never reads the installed framework, it reads *reference
+         assemblies* (metadata-only, no IL). On Windows those come from the
+         "4.8 targeting pack" that the VS installer drops into
+         C:\Program Files (x86)\Reference Assemblies\. This package carries the
+         identical set as NuGet content, so the same compile works on macOS and
+         Linux and in CI containers. It is build-time only: PrivateAssets=all
+         keeps it out of the output and out of anything that references us, and
+         nothing from it is ever loaded at runtime (on Windows the real
+         framework provides the implementation assemblies).
+
+         The .NET SDK adds this package implicitly for .NETFramework targets, so
+         the build worked before this line existed. It is written out anyway:
+         implicit means unpinned and SDK-version-dependent, and the repo rule is
+         exact pins. Keep the bracket form. -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="[1.0.3]" PrivateAssets="all" />
+    <!-- VERIFY-ON-WINDOWS (narrowed by reading the package, not guessed).
+         SQLitePCLRaw.lib.e_sqlite3's buildTransitive\net461 targets add the
+         native library as Content with a Link of runtimes\<rid>\native\... So
+         on Windows the output should contain, under bin\Release\:
+             runtimes\win-x64\native\e_sqlite3.dll
+             runtimes\win-x86\native\e_sqlite3.dll
+             runtimes\win-arm\native\e_sqlite3.dll
+         NOT a bare e_sqlite3.dll at the output root, and NOT an x64\ folder. The
+         same build on macOS produced runtimes\osx-x64\native\libe_sqlite3.dylib
+         and nothing at the root, which is the matching behaviour.
+         Still open: .NET Framework does not probe runtimes\ itself, so loading
+         depends on SQLitePCLRaw's own search doing it. A failure here shows up
+         at runtime as "Unable to load DLL 'e_sqlite3'"; the fix is to copy the
+         win-x64 DLL to the output root. -->
   </ItemGroup>
 
   <ItemGroup>

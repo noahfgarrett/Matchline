@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.0 — 2026-08-08 — verification pass and finishing touches
+
+- Adversarial verification of the whole build (clean-room clone, three review passes):
+  every finding fixed tests-first. Highlights: two-sided normalization at the MEL system
+  join, terminal unresolvable aliases, absorbed-tagged-component visibility, content-
+  complete conflict review keys, dead claim rules surfaced, source hashes re-verified
+  with a file-changed state, profile-revision dirty tracking, opt-in migration with
+  confirmation, exact-origin IPC sender checks, dialog-granted path allowlist, atomic
+  export writes, spellcheck disabled (the last residual network path).
+- Drop zone rebuilt on webUtils (Electron 43 removed File.path) with main-side screening.
+- App icon (matchline M mark), version-synced unsigned installers for Windows and Mac.
+- Scale-tested at 40k objects: compile ~1s, tree at 60fps; resolver provenance scan
+  indexed (29x at 16k assets) with a perf guard test.
+- C# worker now compiles (SDK 8 cross-targeting net48): one fatal csproj defect fixed,
+  plugin stub-compiled (20 of 30 VERIFY flags signature-pinned), cache writer executed
+  on macOS and its output validated by the TypeScript reader.
+- Suite: 1690 tests, 0 failures.
+
 ## 0.7.0 — 2026-08-08 — H1: hardening and packaging
 
 - Review keys made storage-safe end to end; project files carry their whole

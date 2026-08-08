@@ -1,6 +1,6 @@
 {
   "name": "@matchline/desktop",
-  "version": "0.6.0",
+  "version": "0.8.0",
   "private": true,
   "description": "Matchline — model-first commissioning hierarchy and MEL compiler",
   "author": "Matchline",
@@ -12,6 +12,7 @@
     "build:renderer": "vite build",
     "build": "npm run typecheck && npm run build:preload && npm run build:renderer",
     "dev": "node scripts/dev.mjs",
+    "icons": "electron scripts/build-icons.mjs",
     "start": "electron .",
     "package:mac": "electron-builder --mac",
     "package:win": "electron-builder --win",

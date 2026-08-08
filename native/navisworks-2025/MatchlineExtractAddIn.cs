@@ -21,21 +21,29 @@ namespace Matchline.Extraction.Navisworks2025
     ///
     /// ---------------------------------------------------------------------
     /// UNVERIFIED AGAINST THE REAL API. Every Autodesk call in this project was
-    /// written on a machine with no Navisworks and no .NET SDK. The first build
-    /// on Windows is part of the Phase 1 proof, not a formality. Points of real
-    /// uncertainty carry a // VERIFY-ON-WINDOWS: comment; they are collected in
-    /// docs/WINDOWS-RUNBOOK.md as a checklist.
+    /// written on a machine with no Navisworks. It now compiles, but only
+    /// against native/navisworks-stubs, a hand-written stand-in whose signatures
+    /// were derived from this code rather than from Autodesk. So the compiler
+    /// has checked that the plugin is internally consistent, not that it is
+    /// right. The first build on Windows is still part of the Phase 1 proof.
+    /// Each // VERIFY-ON-WINDOWS: comment now says whether the stub pins its
+    /// shape or leaves it fully open; docs/WINDOWS-RUNBOOK.md is the checklist.
     /// ---------------------------------------------------------------------
     /// </summary>
-    // VERIFY-ON-WINDOWS: PluginAttribute signature is (name, developerId, ...)
-    // and the command-line id is "name.developerId". Confirm the plugin is
-    // discovered at all before debugging anything else.
+    // VERIFY-ON-WINDOWS (shape pinned by the stub build: PluginAttribute takes
+    // two positional strings and has settable DisplayName and ToolTip). NOT
+    // pinned, and it is the part that actually fails silently: that the
+    // command-line id Navisworks expects is "name.developerId". Confirm the
+    // plugin is discovered at all before debugging anything else.
     [Plugin(ExtractionPlugin.Name, ExtractionPlugin.DeveloperId,
         DisplayName = "Matchline Extract",
         ToolTip = "Streams model metadata to an NDJSON file")]
-    // VERIFY-ON-WINDOWS: AddInLocation.AddIn is used because it certainly
-    // exists. If the enum has a "None" member, prefer it -- this plugin should
-    // never appear in the ribbon.
+    // VERIFY-ON-WINDOWS (shape pinned by the stub build: AddInPluginAttribute
+    // takes one positional AddInLocation, and AddInLocation.AddIn exists there
+    // because this line names it). FULLY OPEN: whether the real enum has a
+    // "None" member. It would be the better choice -- this plugin should never
+    // appear in the ribbon -- and the stub deliberately does not declare one,
+    // because inventing it would fake the answer.
     [AddInPlugin(AddInLocation.AddIn)]
     public sealed class MatchlineExtractAddIn : AddInPlugin
     {
@@ -106,9 +114,11 @@ namespace Matchline.Extraction.Navisworks2025
 
             if (document.Models.Count == 0 && !string.IsNullOrEmpty(inputPath))
             {
-                // VERIFY-ON-WINDOWS: Document.TryOpenFile(string) returning bool.
-                // If the API differs, the alternatives are OpenFile / TryOpenFile
-                // with extra arguments.
+                // VERIFY-ON-WINDOWS (shape pinned by the stub build:
+                // TryOpenFile takes one string and returns bool -- the result is
+                // assigned to a bool here, so nothing else compiles). If the real
+                // API differs, the alternatives are OpenFile / TryOpenFile with
+                // extra arguments.
                 bool opened = document.TryOpenFile(inputPath);
                 if (!opened)
                 {
@@ -139,8 +149,9 @@ namespace Matchline.Extraction.Navisworks2025
             }
             else if (!string.IsNullOrEmpty(document.FileName))
             {
-                // VERIFY-ON-WINDOWS: Document.FileName exists and holds the path
-                // of the currently open file.
+                // VERIFY-ON-WINDOWS (shape pinned by the stub build:
+                // Document.FileName is a string property). NOT pinned: that it
+                // holds the path of the currently open file.
                 fileName = Path.GetFileName(document.FileName);
             }
 
@@ -155,8 +166,9 @@ namespace Matchline.Extraction.Navisworks2025
         /// <para>
         /// Deliberate: the shape of Application.Version differs across releases
         /// and this value is descriptive metadata, not control flow. Reflection
-        /// keeps a wrong guess from being a compile error on an unbuildable-here
-        /// project. VERIFY-ON-WINDOWS: check what this actually produces and
+        /// keeps a wrong guess from being a compile error. VERIFY-ON-WINDOWS
+        /// (FULLY OPEN): a reflective lookup is invisible to the compiler, so the
+        /// stub build says nothing here. Check what this actually produces and
         /// consider replacing it with the direct property once confirmed.
         /// </para>
         /// </summary>

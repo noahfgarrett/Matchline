@@ -20,13 +20,13 @@ Two Windows artifacts are produced, both 64-bit (x64):
 
 | File | What it is | When to use it |
 |---|---|---|
-| `Matchline-0.6.0-Setup-x64.exe` | Installer, 86 MB | Normal use. Adds Start-menu and desktop shortcuts, and an entry in *Apps & features* so it can be uninstalled cleanly. |
-| `Matchline-0.6.0-win-x64.zip` | The same app, zipped, no installer, 135 MB | If you want to try it without installing anything, or run it off a USB stick. Unzip anywhere and double-click `Matchline.exe`. |
+| `Matchline-0.8.0-Setup-x64.exe` | Installer, 86 MB | Normal use. Adds Start-menu and desktop shortcuts, and an entry in *Apps & features* so it can be uninstalled cleanly. |
+| `Matchline-0.8.0-win-x64.zip` | The same app, zipped, no installer, 135 MB | If you want to try it without installing anything, or run it off a USB stick. Unzip anywhere and double-click `Matchline.exe`. |
 
 They are that size because each one carries its own copy of Chromium — that is how every
 Electron app ships. The installed app takes about 370 MB on disk.
 
-A Mac build (`Matchline-0.6.0-mac-arm64.zip`, Apple Silicon) is produced too, but it is a
+A Mac build (`Matchline-0.8.0-mac-arm64.zip`, Apple Silicon) is produced too, but it is a
 development convenience — Navisworks extraction is Windows-only. It is unsigned and
 un-notarised as well, so a Mac that *downloads* it will quarantine it; clear that with
 `xattr -dr com.apple.quarantine /path/to/Matchline.app` before opening.
@@ -38,7 +38,7 @@ the artifacts are in `apps\desktop\release\`.
 
 ## 2. Install it
 
-**Installer route.** Double-click `Matchline-0.6.0-Setup-x64.exe`. Work through the
+**Installer route.** Double-click `Matchline-0.8.0-Setup-x64.exe`. Work through the
 SmartScreen warning first (section 3), then:
 
 1. The installer asks where to put it. The default is
@@ -73,7 +73,7 @@ choose **Keep** → **Keep anyway** / **Show more** → **Keep anyway**.
 There is only a **Don't run** button visible. The one you want is hidden:
 
 1. Click the small **More info** link, in the body of the box, above the button.
-2. Two lines appear — `App: Matchline-0.6.0-Setup-x64.exe` and
+2. Two lines appear — `App: Matchline-0.8.0-Setup-x64.exe` and
    `Publisher: Unknown publisher`.
 3. A second button appears: **Run anyway**. Click it.
 
