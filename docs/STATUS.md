@@ -45,6 +45,18 @@ Windows build. Extraction is exercised for real on Noah's first runbook run.
 
 ## Log
 
+### 2026-08-07 — E3 SSM compiler merged (0.4.0)
+- relationship-claims (8-source assembly, make-root directives), learned-rules (donor §7
+  port: shared pickParent policy, thresholds table in its report/tests), ssm-compiler
+  (ladder, hard-boundary fold — RIO §2.5 verbatim acceptance test, differ-outranks-unknown,
+  manual bypasses fold), compiler orchestrator (owns the property-bag seam; all 8 ladder
+  rungs reachable; model-tree ancestry walk).
+- E3 integration test proves all Phase 4 exit criteria incl. programmatic boundary sweep.
+- Known quirk: MEL provenance can't name sheet rows (readMelTable returns records, not
+  addresses) — needs a spreadsheet-import extension someday.
+- Next: E4 commissioning outputs (P6 import, milestone ladders, sequencing polarity,
+  predecessor matrix, EXTO export, site-template MEL, revision diff), then A1 app shell.
+
 ### 2026-08-07 — E2 connectivity spine merged (0.3.0)
 - connectivity-import (donor detection ported, EasyPower fallback → honest unknown),
   identity (six tiers, ambiguity terminal, -A/-B protected), electrical-flow (source-only
