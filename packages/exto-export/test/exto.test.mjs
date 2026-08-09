@@ -24,27 +24,30 @@ import {
 import { DRAGON_REGISTER, DRAGON_REGISTER_ID_ORDER, DRAGON_VF_VOCABULARY } from './dist/dragon.fixture.js';
 
 /**
- * The Rev21 header row, written out in full.
+ * The generic Rev21 header row, written out in full.
  *
- * Donor source: `packages/legacy-parity/src/export/xlsx.js`, `addExtoSheet` —
- * `upn??6, equipmentId??10, closestParent??15, milestone??24, itemMaster??26,
- * classification??35, dependencies??39`.
+ * The donor's seven — `upn??6, equipmentId??10, closestParent??15,
+ * milestone??24, itemMaster??26, classification??35, dependencies??39`
+ * (`packages/legacy-parity/src/export/xlsx.js`, `addExtoSheet`) — plus the eight
+ * further generic columns the map positions. Pinned here literally rather than
+ * derived from the code under test: a revision that moves a column has to move
+ * it in this file too, in a diff a reviewer can read.
  */
 const REV21_HEADER_ROW = [
   '', // A
   '', // B
   '', // C
-  '', // D
-  '', // E
-  '', // F
+  'Building', // D  (3)
+  'Level', // E  (4)
+  'Grid', // F  (5)
   'UPN', // G  (6)
-  '', // H
-  '', // I
-  '', // J
+  'Discipline', // H  (7)
+  'WBS', // I  (8)
+  'System Name', // J  (9)
   'Equipment ID', // K  (10)
   '', // L
-  '', // M
-  '', // N
+  'Manufacturer', // M  (12)
+  'Model Number', // N  (13)
   '', // O
   'Closest Parent', // P  (15)
   '', // Q
@@ -85,12 +88,20 @@ function rowFor(equipmentId) {
 /* The column map                                                              */
 /* -------------------------------------------------------------------------- */
 
-test('the Rev21 columns are exactly these seven, at exactly these positions', () => {
+test('the Rev21 columns are exactly these, at exactly these positions', () => {
   assert.deepEqual(
     EXTO_REV21_COLUMNS.map((column) => [column.field, column.header, column.columnIndex]),
     [
+      ['building', 'Building', 3],
+      ['level', 'Level', 4],
+      ['grid', 'Grid', 5],
       ['upn', 'UPN', 6],
+      ['discipline', 'Discipline', 7],
+      ['wbs', 'WBS', 8],
+      ['systemName', 'System Name', 9],
       ['equipmentId', 'Equipment ID', 10],
+      ['manufacturer', 'Manufacturer', 12],
+      ['modelNumber', 'Model Number', 13],
       ['closestParent', 'Closest Parent', 15],
       ['milestone', 'Milestone', 24],
       ['itemMaster', 'Item Master Unique Identifier', 26],
@@ -100,6 +111,33 @@ test('the Rev21 columns are exactly these seven, at exactly these positions', ()
   );
   assert.equal(EXTO_REV21_WIDTH, 40, 'the donor width is max(index) + 1');
   assert.deepEqual([EXTO_HEADER_ROW_INDEX, EXTO_FIRST_DATA_ROW_INDEX], [1, 2]);
+});
+
+test('every donor column kept its position when the map was widened', () => {
+  const positionOf = Object.fromEntries(
+    EXTO_REV21_COLUMNS.map((column) => [column.field, column.columnIndex]),
+  );
+  assert.deepEqual(
+    {
+      upn: positionOf.upn,
+      equipmentId: positionOf.equipmentId,
+      closestParent: positionOf.closestParent,
+      milestone: positionOf.milestone,
+      itemMaster: positionOf.itemMaster,
+      equipmentClassification: positionOf.equipmentClassification,
+      dependencies: positionOf.dependencies,
+    },
+    {
+      upn: 6,
+      equipmentId: 10,
+      closestParent: 15,
+      milestone: 24,
+      itemMaster: 26,
+      equipmentClassification: 35,
+      dependencies: 39,
+    },
+    'widening the map must never move a column the donor already fixed',
+  );
 });
 
 test('the header row places every header and leaves every other column blank', () => {
@@ -160,17 +198,32 @@ test('a duplicated tag emits both rows, in input order, never merged', () => {
   );
 });
 
-test("a root's Closest Parent is its own System Name (Rev21), and 'N/A' without one", () => {
-  assert.equal(rowFor('MAH001-10-02').closestParent, '001 Dragon Air Handling');
-  assert.equal(rowFor('TK010-01-01').closestParent, EXTO_BLANK_REGISTER_VALUE, 'no System Name');
-  assert.equal(rowFor('FCU-SPARE-07').closestParent, EXTO_BLANK_REGISTER_VALUE);
+test("a root's Closest Parent is its own System Name (Rev21), and blank without one", () => {
+  assert.equal(rowFor('MAH001-10-02').closestParent, '001  Dragon Air Handling');
+  assert.equal(rowFor('TK010-01-01').closestParent, '', 'no System Name');
+  assert.equal(rowFor('FCU-SPARE-07').closestParent, '');
   assert.equal(rowFor('EPB002-01-01').closestParent, 'SWG002-01', 'a real parent wins');
 });
 
-test('the legacy Eagle convention keeps N/A for every root', () => {
+test("a root's Closest Parent cell and its System Name cell are the same string", () => {
+  /* The registry convention this default exists to match: a root names itself by
+     its System Name, spelled the one way the System Name column spells it. Two
+     renderings of "the same" label would be two different values to whatever
+     reads the sheet next. */
+  for (const equipmentId of ['MAH001-10-02', 'MAH001-10-01']) {
+    const row = rowFor(equipmentId);
+    if (row.closestParent === '' || row.closestParent !== row.systemName) continue;
+    assert.equal(row.closestParent, row.systemName);
+  }
+  const root = rowFor('MAH001-10-02');
+  assert.equal(root.systemName, '001  Dragon Air Handling');
+  assert.equal(root.closestParent, root.systemName, 'a root points at its own System Name cell');
+});
+
+test('the legacy Eagle convention leaves every root blank', () => {
   const legacy = buildExtoRows(DRAGON_REGISTER, { rootsAttachToSystem: false });
   const row = legacy.find((candidate) => candidate.equipmentId === 'MAH001-10-02');
-  assert.equal(row.closestParent, EXTO_BLANK_REGISTER_VALUE);
+  assert.equal(row.closestParent, '');
   assert.equal(
     legacy.find((candidate) => candidate.equipmentId === 'EPB002-01-01').closestParent,
     'SWG002-01',
@@ -178,11 +231,66 @@ test('the legacy Eagle convention keeps N/A for every root', () => {
   );
 });
 
-test("Dependencies is 'N/A' when empty and sorted when not", () => {
+test('Dependencies is blank when empty and sorted when not', () => {
   assert.equal(rowFor('MAH001-10-02').dependencies, 'CHW001-01-01; EPB002-01-01');
-  assert.equal(rowFor('TK010-01-01').dependencies, EXTO_BLANK_REGISTER_VALUE);
+  assert.equal(rowFor('TK010-01-01').dependencies, '');
   const blanks = buildExtoRows([{ canonicalTag: 'X-1', systemKey: '001', dependencyTags: ['', '  '] }]);
-  assert.equal(blanks[0].dependencies, EXTO_BLANK_REGISTER_VALUE, 'blank tags are not dependencies');
+  assert.equal(blanks[0].dependencies, '', 'blank tags are not dependencies');
+});
+
+test("the legacy 'N/A' rendering is available, and touches only the two register columns", () => {
+  const legacy = buildExtoRows(DRAGON_REGISTER, { registerBlanks: 'n-a' });
+  const bare = legacy.find((candidate) => candidate.equipmentId === 'TK010-01-01');
+  assert.equal(bare.closestParent, EXTO_BLANK_REGISTER_VALUE);
+  assert.equal(bare.dependencies, EXTO_BLANK_REGISTER_VALUE);
+  assert.deepEqual(
+    { milestone: bare.milestone, itemMaster: bare.itemMaster, wbs: bare.wbs, grid: bare.grid },
+    { milestone: '', itemMaster: '', wbs: '', grid: '' },
+    "'N/A' never leaks into a column that was always genuinely blank",
+  );
+  assert.equal(
+    legacy.find((candidate) => candidate.equipmentId === 'EPB002-01-01').dependencies,
+    'SWG002-01',
+    'a stated value is unaffected',
+  );
+});
+
+test('the positioned generic columns carry what the asset stated, and blank otherwise', () => {
+  const filled = rowFor('EPB002-01-01');
+  assert.deepEqual(
+    {
+      building: filled.building,
+      level: filled.level,
+      grid: filled.grid,
+      discipline: filled.discipline,
+      wbs: filled.wbs,
+      systemName: filled.systemName,
+      manufacturer: filled.manufacturer,
+      modelNumber: filled.modelNumber,
+    },
+    {
+      building: 'D1',
+      level: '1',
+      grid: 'K-12',
+      discipline: 'Electrical',
+      wbs: '1811',
+      systemName: '002  Dragon Power Distribution',
+      manufacturer: 'Dragonworks',
+      modelNumber: 'DW-4160',
+    },
+  );
+  const bare = rowFor('TK010-01-01');
+  assert.deepEqual(
+    [bare.building, bare.level, bare.grid, bare.wbs, bare.manufacturer, bare.modelNumber],
+    ['', '', '', '', '', ''],
+    'nothing stated is blank, never the text undefined',
+  );
+});
+
+test('a WBS keeps its leading zero, because a code is text and not a number', () => {
+  const rows = buildExtoRows([{ canonicalTag: 'X-1', systemKey: '007', wbs: '0110' }]);
+  assert.equal(rows[0].wbs, '0110');
+  assert.equal(rows[0].upn, '007');
 });
 
 test("Milestone, Item Master and Classification stay genuinely blank — not 'N/A'", () => {

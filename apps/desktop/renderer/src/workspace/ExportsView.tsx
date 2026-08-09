@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState, type JSX } from 'react';
 import type {
   WireCompileHistoryEntry,
   WireExportResult,
+  WireExtoTemplate,
   WireTemplateAnalysis,
   WireTemplateBinding,
   WireTemplateColumn,
@@ -32,6 +33,20 @@ export function ExportsView({ projectName }: { readonly projectName: string }): 
   const [bindings, setBindings] = useState<readonly WireTemplateBinding[]>([]);
   const [history, setHistory] = useState<readonly WireCompileHistoryEntry[]>([]);
   const [baseline, setBaseline] = useState<number | null>(null);
+  const [extoTemplate, setExtoTemplate] = useState<WireExtoTemplate | null>(null);
+
+  const refreshConfig = useCallback(async (): Promise<void> => {
+    try {
+      const data = await call(window.matchline.config.get());
+      setExtoTemplate(data.config.extoTemplate);
+    } catch (caught: unknown) {
+      setToast({ tone: 'error', text: messageOf(caught) });
+    }
+  }, []);
+
+  useEffect((): void => {
+    void refreshConfig();
+  }, [refreshConfig]);
 
   const refreshHistory = useCallback(async (): Promise<void> => {
     try {
@@ -78,6 +93,55 @@ export function ExportsView({ projectName }: { readonly projectName: string }): 
           : { tone: 'error', text: data.result.reason },
       );
       await refreshHistory();
+    } catch (caught: unknown) {
+      setToast({ tone: 'error', text: messageOf(caught) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /**
+   * Capture the site's own registry layout.
+   *
+   * The workbook is read for its header row and nothing else — no row of it is
+   * copied into the project — and what comes back is stored, so every later EXTO
+   * export is written on it without the file being needed again.
+   */
+  const captureExtoTemplate = async (): Promise<void> => {
+    setBusy('exto-template');
+    setToast(null);
+    try {
+      const picked = await call(window.matchline.dialog.openFile({ filters: XLSX_FILTERS }));
+      if (picked.cancelled) {
+        return;
+      }
+      const data = await call(
+        window.matchline.export.extoTemplateCapture({ path: picked.path }),
+      );
+      setExtoTemplate(data.config.extoTemplate);
+      const template = data.config.extoTemplate;
+      setToast({
+        tone: 'success',
+        text:
+          template === null
+            ? 'Nothing was captured from that workbook.'
+            : `Captured ${count(template.headers.length)} columns from ${template.capturedFrom.label}. ` +
+              `${count(template.matched.length)} of them are columns Matchline can fill; the rest stay blank.`,
+      });
+    } catch (caught: unknown) {
+      setToast({ tone: 'error', text: messageOf(caught) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const clearExtoTemplate = async (): Promise<void> => {
+    setBusy('exto-template');
+    setToast(null);
+    try {
+      const data = await call(window.matchline.export.extoTemplateClear({}));
+      setExtoTemplate(data.config.extoTemplate);
+      setToast({ tone: 'success', text: 'The EXTO export is back on Matchline’s own columns.' });
     } catch (caught: unknown) {
       setToast({ tone: 'error', text: messageOf(caught) });
     } finally {
@@ -230,7 +294,7 @@ export function ExportsView({ projectName }: { readonly projectName: string }): 
 
       <Panel
         title="EXTO upload sheet"
-        description="The Rev21 commissioning register. Item masters come from whatever registry you trained on screen 7; the milestone column needs a P6 schedule."
+        description="The Rev21 commissioning register. Item masters, WBS codes and classifications come from what the model states, or failing that from whatever registry you trained on screen 7; the milestone column needs a P6 schedule."
         actions={
           <button
             className="button button--small"
@@ -247,6 +311,51 @@ export function ExportsView({ projectName }: { readonly projectName: string }): 
           </button>
         }
       >
+        <h3 className="panel__subtitle">Which columns it comes out on</h3>
+        {extoTemplate === null ? (
+          <Callout tone="info">
+            Matchline’s own Rev21 columns. If your site keeps its register on a sheet of its
+            own, hand that workbook over once and the export will come out on it instead —
+            same headers, same width, same header row.
+          </Callout>
+        ) : (
+          <div data-testid="exto-template-summary">
+            <p className="muted">
+              Captured from <strong>{extoTemplate.capturedFrom.label}</strong> (sheet{' '}
+              {extoTemplate.sheetName}): {count(extoTemplate.headers.length)} columns, headers on
+              row {String(extoTemplate.headerRowIndex + 1)}.{' '}
+              {count(extoTemplate.matched.length)} of them are columns Matchline fills. The other{' '}
+              {count(extoTemplate.headers.length - extoTemplate.matched.length)} come out empty —
+              Matchline writes into a column only when your own header text said what it is for.
+            </p>
+          </div>
+        )}
+        <div className="button-row">
+          <button
+            className="button button--small"
+            type="button"
+            data-testid="capture-exto-template"
+            disabled={busy !== null}
+            onClick={(): void => {
+              void captureExtoTemplate();
+            }}
+          >
+            {extoTemplate === null ? 'Use my registry’s layout' : 'Capture a different layout'}
+          </button>
+          {extoTemplate === null ? null : (
+            <button
+              className="button button--small"
+              type="button"
+              data-testid="clear-exto-template"
+              disabled={busy !== null}
+              onClick={(): void => {
+                void clearExtoTemplate();
+              }}
+            >
+              Back to Matchline’s columns
+            </button>
+          )}
+        </div>
         <p className="muted">
           A cell Matchline cannot fill honestly is left blank. The note after the export says
           which ones those were.

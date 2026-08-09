@@ -91,6 +91,7 @@ import {
   toTagAnatomy,
 } from './draft-profile.js';
 import {
+  analyzeExtoTemplateFile,
   analyzeMelTemplate,
   defaultExportName,
   exportExto,
@@ -98,12 +99,16 @@ import {
   exportPredecessors,
   exportRevisionDiff,
   exportTemplateMel,
+  readExtoTemplate,
   readItemMasterTable,
+  readLearnedRules,
+  readWbsTable,
 } from './exports.js';
 import {
   summarizeStored,
   trainItemMastersFrom,
   trainNestingFrom,
+  trainWbsFrom,
 } from './learning.js';
 import { buildAnatomyPreview, buildAssetPreview, buildResolverPreview } from './previews.js';
 import {
@@ -254,6 +259,14 @@ export interface ProjectService {
   exportGeneratedMel(filePath: string): WireExportResult;
   analyzeTemplate(filePath: string): WireTemplateAnalysis;
   exportTemplateMel(filePath: string, bindings: readonly WireTemplateBinding[]): WireExportResult;
+  /**
+   * Captures a registry workbook's layout into the project's config, so every
+   * later EXTO export is written on the site's own sheet. Returns the config as
+   * it now stands, which is what the exports view renders.
+   */
+  captureExtoTemplate(filePath: string): WireProjectConfig;
+  /** Forgets the captured layout, returning the export to the generic map. */
+  clearExtoTemplate(): WireProjectConfig;
   exportExto(filePath: string): WireExportResult;
   exportPredecessors(filePath: string): WireExportResult;
   exportRevisionDiff(filePath: string, previousCompileId: number): WireExportResult;
@@ -920,6 +933,20 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     return active.view;
   }
 
+  /**
+   * Applies one config patch: to the table and to the live object, together.
+   *
+   * Both, always. `active.config` is what every compile reads, and the table is
+   * what the next session reads; writing one without the other is how a project
+   * comes back tomorrow configured differently from how it ran today.
+   */
+  function writeConfig(active: Session, patch: WireConfigPatch): WireProjectConfig {
+    const updated = applyConfigPatch(active.config, patch);
+    writeProjectConfig(active.store, updated);
+    active.config = updated;
+    return active.config;
+  }
+
   /** The generated-MEL assets a stored compile row carries, or `null`. */
   function assetsOfCompile(active: Session, compileId: number): readonly GeneratedMelAsset[] | null {
     const record = active.store
@@ -1328,11 +1355,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
      * live from memory, so it cannot go stale the way the revision could.
      */
     updateConfig(patch: WireConfigPatch): WireProjectConfig {
-      const active = requireSession();
-      const updated = applyConfigPatch(active.config, patch);
-      writeProjectConfig(active.store, updated);
-      active.config = updated;
-      return active.config;
+      return writeConfig(requireSession(), patch);
     },
 
     /**
@@ -1391,6 +1414,11 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         active.store.saveLearnedRules('nesting', trained.rules);
         return trained.summary;
       }
+      if (kind === 'wbs') {
+        const trained = trainWbsFrom(filePath, savedAt);
+        active.store.saveLearnedRules('wbs', trained.table);
+        return trained.summary;
+      }
       const trained = trainItemMastersFrom(filePath, savedAt);
       active.store.saveLearnedRules('item-master', trained.table);
       return trained.summary;
@@ -1399,7 +1427,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     learnedSummaries(): readonly WireLearnedSummary[] {
       const active = requireSession();
       const summaries: WireLearnedSummary[] = [];
-      for (const kind of ['nesting', 'item-master'] as const) {
+      for (const kind of ['nesting', 'item-master', 'wbs'] as const) {
         const record = active.store.getLearnedRules(kind);
         if (record === undefined) {
           continue;
@@ -1570,11 +1598,37 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       return exportTemplateMel(requireView(requireSession()).assets, bindings, filePath);
     },
 
+    captureExtoTemplate(filePath: string): WireProjectConfig {
+      const active = requireSession();
+      if (!existsSync(filePath)) {
+        throw new Error(`Matchline could not find ${path.basename(filePath)}.`);
+      }
+      const template = analyzeExtoTemplateFile(readFileSync(filePath), path.basename(filePath));
+      return writeConfig(active, { extoTemplate: template });
+    },
+
+    clearExtoTemplate(): WireProjectConfig {
+      return writeConfig(requireSession(), { extoTemplate: null });
+    },
+
     exportExto(filePath: string): WireExportResult {
       const active = requireSession();
       const view = requireView(active);
-      const table = readItemMasterTable(active.store.getLearnedRules('item-master')?.rules);
-      return exportExto(view.project, view.assets, table, filePath);
+      return exportExto(
+        view.project,
+        view.assets,
+        {
+          itemMasterTable: readItemMasterTable(
+            active.store.getLearnedRules('item-master')?.rules,
+          ),
+          wbsTable: readWbsTable(active.store.getLearnedRules('wbs')?.rules),
+          nestingRules: readLearnedRules(active.store.getLearnedRules('nesting')?.rules),
+          // The live config, not a re-read: `updateConfig` keeps it current and
+          // a compile already runs against this same object.
+          template: readExtoTemplate(active.config.extoTemplate),
+        },
+        filePath,
+      );
     },
 
     exportPredecessors(filePath: string): WireExportResult {

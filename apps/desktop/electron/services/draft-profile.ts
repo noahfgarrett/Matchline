@@ -61,6 +61,9 @@ export function emptyDraft(name: string): WireDraftProfile {
       equipmentType: null,
       building: null,
       nativeDiscipline: null,
+      wbs: null,
+      itemMaster: null,
+      equipmentClassification: null,
     },
     assetFilters: {
       includedClasses: [],
@@ -154,6 +157,9 @@ export function toPropertyMappings(wire: WirePropertyMappings): PropertyMappings
     equipmentType?: PropertyRef;
     building?: PropertyRef;
     nativeDiscipline?: PropertyRef;
+    wbs?: PropertyRef;
+    itemMaster?: PropertyRef;
+    equipmentClassification?: PropertyRef;
   } = { equipmentTag: toPropertyRef(wire.equipmentTag) };
 
   if (wire.description !== null) {
@@ -167,6 +173,21 @@ export function toPropertyMappings(wire: WirePropertyMappings): PropertyMappings
   }
   if (wire.nativeDiscipline !== null) {
     mappings.nativeDiscipline = toPropertyRef(wire.nativeDiscipline);
+  }
+  // `?? null` rather than `!== null`: a draft written by an older build carries
+  // no key for these three at all, and an absent key means the same thing a null
+  // does — nobody has mapped it.
+  const wbs = wire.wbs ?? null;
+  if (wbs !== null) {
+    mappings.wbs = toPropertyRef(wbs);
+  }
+  const itemMaster = wire.itemMaster ?? null;
+  if (itemMaster !== null) {
+    mappings.itemMaster = toPropertyRef(itemMaster);
+  }
+  const equipmentClassification = wire.equipmentClassification ?? null;
+  if (equipmentClassification !== null) {
+    mappings.equipmentClassification = toPropertyRef(equipmentClassification);
   }
   return mappings;
 }
@@ -318,6 +339,9 @@ export function fromSiteProfile(profile: SiteProfile): WireDraftProfile {
       equipmentType: profile.propertyMappings.equipmentType ?? null,
       building: profile.propertyMappings.building ?? null,
       nativeDiscipline: profile.propertyMappings.nativeDiscipline ?? null,
+      wbs: profile.propertyMappings.wbs ?? null,
+      itemMaster: profile.propertyMappings.itemMaster ?? null,
+      equipmentClassification: profile.propertyMappings.equipmentClassification ?? null,
     },
     assetFilters: {
       includedClasses: [...(profile.assetFilters.includedClasses ?? [])],

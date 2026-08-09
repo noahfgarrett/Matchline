@@ -59,13 +59,28 @@ export type WirePropertyRef = z.infer<typeof propertyRefSchema>;
 
 /* ------------------------------------------------------------ profile pieces */
 
-/** Mirrors `PropertyMappings`, with "not chosen yet" spelled `null`. */
+/**
+ * Mirrors `PropertyMappings`, with "not chosen yet" spelled `null`.
+ *
+ * The last three are register fields the model may already state. Mapped and
+ * non-blank, they outrank the learned tables for that field; left `null`, the
+ * learned tables answer, exactly as they did before these existed.
+ *
+ * They carry `.default(null)` because a draft or a profile package written by a
+ * build that predates them has no key at all, and an absent key means precisely
+ * what a `null` does — nobody mapped it. Without the default an older package
+ * would be refused as malformed, which would be a lie about a file that is
+ * perfectly good.
+ */
 export const propertyMappingsSchema = z.object({
   equipmentTag: propertyRefSchema.nullable(),
   description: propertyRefSchema.nullable(),
   equipmentType: propertyRefSchema.nullable(),
   building: propertyRefSchema.nullable(),
   nativeDiscipline: propertyRefSchema.nullable(),
+  wbs: propertyRefSchema.nullable().default(null),
+  itemMaster: propertyRefSchema.nullable().default(null),
+  equipmentClassification: propertyRefSchema.nullable().default(null),
 });
 export type WirePropertyMappings = z.infer<typeof propertyMappingsSchema>;
 
@@ -628,6 +643,30 @@ export type WireDisciplineRewrite = z.infer<typeof disciplineRewriteSchema>;
  * profile section would eventually hold, so widening the domain type later is a
  * move, not a redesign.
  */
+/**
+ * A registry layout captured from the site's own workbook (`ExtoTemplate`).
+ *
+ * Mirrored loosely on purpose: the engine's `validateExtoTemplate` is the real
+ * guard and it checks things a schema cannot, such as whether a binding's column
+ * index is inside the captured header list. This shape is only what has to
+ * survive IPC and the config table intact.
+ */
+export const extoTemplateSchema = z.object({
+  version: z.literal(1),
+  sheetName: z.string(),
+  headers: z.array(z.string()),
+  headerRowIndex: z.number().int().nonnegative(),
+  matched: z.array(
+    z.object({
+      field: z.string().min(1),
+      columnIndex: z.number().int().nonnegative(),
+      match: z.enum(['exact', 'trimmed-case-insensitive']),
+    }),
+  ),
+  capturedFrom: z.object({ label: z.string() }),
+});
+export type WireExtoTemplate = z.infer<typeof extoTemplateSchema>;
+
 export const projectConfigSchema = z.object({
   hierarchy: hierarchyConfigSchema,
   roleGraph: roleGraphSchema,
@@ -635,22 +674,31 @@ export const projectConfigSchema = z.object({
   ssmDisciplineProjection: z.array(disciplineRewriteSchema),
   /** The model property naming an asset's parent, or `null` when unmapped. */
   parentTagProperty: propertyRefSchema.nullable(),
+  /**
+   * The captured EXTO layout, or `null` when this project has captured none.
+   *
+   * Defaulted for the same reason the three property mappings above are: a
+   * config written before template capture existed has no key here, and it means
+   * "no template", not "unreadable".
+   */
+  extoTemplate: extoTemplateSchema.nullable().default(null),
 });
 export type WireProjectConfig = z.infer<typeof projectConfigSchema>;
 
-/** A partial write from screen 6 or 7. Absent sections are left alone. */
+/** A partial write from screen 6 or 7, or from the exports view. */
 export const configPatchSchema = z.object({
   hierarchy: hierarchyConfigSchema.optional(),
   roleGraph: roleGraphSchema.optional(),
   ladder: ladderConfigSchema.optional(),
   ssmDisciplineProjection: z.array(disciplineRewriteSchema).optional(),
   parentTagProperty: propertyRefSchema.nullable().optional(),
+  extoTemplate: extoTemplateSchema.nullable().optional(),
 });
 export type WireConfigPatch = z.infer<typeof configPatchSchema>;
 
 /* ------------------------------------------------------------ learned rules */
 
-export const learnedRuleKindSchema = z.enum(['nesting', 'item-master']);
+export const learnedRuleKindSchema = z.enum(['nesting', 'item-master', 'wbs']);
 export type WireLearnedRuleKind = z.infer<typeof learnedRuleKindSchema>;
 
 /** One trained class, as the training panel prints it. */

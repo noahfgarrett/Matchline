@@ -1,4 +1,4 @@
-import type { ExtoAsset, ItemMasterTrainingRow } from '../dist/index.js';
+import type { ExtoAsset, ItemMasterTrainingRow, WbsTrainingRow } from '../dist/index.js';
 
 /**
  * The invented Dragon site's EXTO-layer fixtures, typed here rather than written
@@ -230,16 +230,24 @@ export const DRAGON_LOOKUPS: ReadonlyArray<ExtoAsset> = [
  */
 export const DRAGON_REGISTER: ReadonlyArray<ExtoAsset> = [
   {
+    /* The one asset with every optional field stated, so the widened column map
+       can be checked in both directions against the one below it. */
     canonicalTag: 'EPB002-01-01',
     ssmDiscipline: 'Electrical',
     equipmentClass: 'EPB',
     systemKey: '002',
-    systemLabel: '002 Dragon Power Distribution',
+    systemLabel: '002  Dragon Power Distribution',
     structuralParentTag: 'SWG002-01',
     dependencyTags: ['SWG002-01'],
     itemMaster: 'CA_NB_EL_MV_GEAR',
     milestoneLabel: 'L2-M1-0602 - UPN 002 MV Energization',
     description: 'Annex panelboard',
+    building: 'D1',
+    level: '1',
+    grid: 'K-12',
+    wbs: '1811',
+    manufacturer: 'Dragonworks',
+    modelNumber: 'DW-4160',
   },
   {
     /* No system at all. Sorts to the bottom, under a blank UPN. */
@@ -254,7 +262,7 @@ export const DRAGON_REGISTER: ReadonlyArray<ExtoAsset> = [
     ssmDiscipline: 'Mechanical',
     equipmentClass: 'AHU',
     systemKey: '001',
-    systemLabel: '001 Dragon Air Handling',
+    systemLabel: '001  Dragon Air Handling',
     dependencyTags: ['EPB002-01-01', 'CHW001-01-01'],
     itemMaster: 'VF_MECH_AHU',
     description: 'Secondary air handler',
@@ -264,7 +272,7 @@ export const DRAGON_REGISTER: ReadonlyArray<ExtoAsset> = [
        merged, and the pair must always emit in this order. */
     canonicalTag: 'MAH001-10-01',
     systemKey: '001',
-    systemLabel: '001 Dragon Air Handling',
+    systemLabel: '001  Dragon Air Handling',
     itemMaster: 'VF_MECH_AHU',
     description: 'Primary air handler',
   },
@@ -273,7 +281,7 @@ export const DRAGON_REGISTER: ReadonlyArray<ExtoAsset> = [
        so every other column has to come out blank or 'N/A', never 'undefined'. */
     canonicalTag: 'MAH001-10-01',
     systemKey: '001',
-    systemLabel: '001 Dragon Air Handling',
+    systemLabel: '001  Dragon Air Handling',
   },
   {
     /* A root with no System Name to stand in for a parent: 'N/A' either way. */
@@ -319,7 +327,7 @@ export function syntheticDragonRegister(count: number): ReadonlyArray<ExtoAsset>
       ssmDiscipline: 'Mechanical',
       equipmentClass: 'AHU',
       systemKey,
-      systemLabel: `${systemKey} Dragon System ${systemKey}`,
+      systemLabel: `${systemKey}  Dragon System ${systemKey}`,
       structuralParentTag: `SWG${systemKey}-01`,
       dependencyTags: [`EPB${systemKey}-01-01`],
       itemMaster: 'VF_MECH_AHU',
@@ -329,3 +337,78 @@ export function syntheticDragonRegister(count: number): ReadonlyArray<ExtoAsset>
   }
   return assets;
 }
+
+/* -------------------------------------------------------------------------- */
+/* The WBS table                                                               */
+/* -------------------------------------------------------------------------- */
+
+function wbsRows(count: number, systemKey: string, wbs: string): ReadonlyArray<WbsTrainingRow> {
+  return Array.from({ length: count }, () => ({ systemKey, wbs }));
+}
+
+/**
+ * A prior Dragon registry, as the WBS layer reads it.
+ *
+ * Chosen so the gate can be checked on both sides and exactly on it:
+ *
+ * | UPN   | votes                  | confidence | outcome              |
+ * | ----- | ---------------------- | ---------- | -------------------- |
+ * | `001` | `1810` x10             | 1.0        | assigned             |
+ * | `002` | `1811` x9, `1899` x1   | 0.9        | assigned, on the gate|
+ * | `003` | `1812` x7, `1898` x3   | 0.7        | proposal             |
+ * | `007` | `0110` x4              | 1.0        | assigned, leading 0  |
+ *
+ * `'007'`/`'0110'` are the pair that matters most: a key and a code that both
+ * begin with a zero, so any accidental number round-trip shows up as a changed
+ * value rather than as a passing test.
+ */
+export const DRAGON_WBS_REGISTRY: ReadonlyArray<WbsTrainingRow> = [
+  ...wbsRows(10, '001', '1810'),
+  ...wbsRows(9, '002', '1811'),
+  ...wbsRows(1, '002', '1899'),
+  ...wbsRows(7, '003', '1812'),
+  ...wbsRows(3, '003', '1898'),
+  ...wbsRows(4, '007', '0110'),
+  /* Neither of these can teach anything: no key to file under, no code to file. */
+  { systemKey: '', wbs: '1813' },
+  { systemKey: '008', wbs: '' },
+];
+
+/* -------------------------------------------------------------------------- */
+/* The captured template                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * An invented site's registry header row, for capture.
+ *
+ * Deliberately unlike the generic map in every way that has to survive: a
+ * different width, headers on row 0 with no spacer above them, the recognised
+ * columns in a different order and at different positions, two spelled in a
+ * different case, and four columns Matchline has never heard of — including
+ * `'Dragon Wrangler Email'`, which stands in for the contact columns a real
+ * registry carries and must come out of every export empty.
+ */
+export const DRAGON_TEMPLATE_HEADERS: ReadonlyArray<string> = [
+  'Dragon Upload Reference', // 0  invented
+  'Building', // 1
+  'UPN', // 2
+  'wbs', // 3  case-folded match
+  'System Name', // 4
+  'Equipment ID', // 5
+  'Dragon Wrangler Email', // 6  invented — must never be written to
+  'Closest Parent', // 7
+  '  Discipline  ', // 8  space-padded match
+  'Item Master Unique Identifier', // 9
+  'Scale Count', // 10 invented
+  'Equipment Classification', // 11
+  'Dependencies', // 12
+  'Hoard Valuation', // 13 invented
+];
+
+/** The invented headers that must never receive a value. */
+export const DRAGON_TEMPLATE_UNMATCHED: ReadonlyArray<string> = [
+  'Dragon Upload Reference',
+  'Dragon Wrangler Email',
+  'Scale Count',
+  'Hoard Valuation',
+];

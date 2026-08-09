@@ -142,6 +142,9 @@ const EXAMPLE_DRAFT = {
     equipmentType: null,
     building: null,
     nativeDiscipline: null,
+    wbs: null,
+    itemMaster: null,
+    equipmentClassification: null,
   },
   assetFilters: {
     includedClasses: [],
@@ -198,6 +201,7 @@ const EXAMPLE_CONFIG = {
   },
   ssmDisciplineProjection: [{ from: 'I&C', to: 'Mechanical' }],
   parentTagProperty: null,
+  extoTemplate: null,
 } as const;
 
 const EXAMPLE_COMPILE_SUMMARY = {
@@ -1112,6 +1116,48 @@ export const IPC_CHANNELS = {
           note: '34 rows on the site template’s own 1 columns.',
         },
       },
+    },
+  },
+
+  /**
+   * Captures a registry workbook's layout into the project, so every later EXTO
+   * export comes out on the site's own columns.
+   *
+   * Returns the whole config rather than the template alone: the exports view
+   * renders what is now stored, and a partial answer would let it show a
+   * template the project does not actually hold.
+   */
+  'export:exto-template-capture': {
+    request: z.object({ path: z.string().min(1) }),
+    response: z.object({ config: projectConfigSchema }),
+    example: {
+      request: { path: '/Users/dragon/Dragon-Cx-Registry.xlsx' },
+      response: {
+        config: {
+          ...EXAMPLE_CONFIG,
+          extoTemplate: {
+            version: 1,
+            sheetName: 'data',
+            headers: ['UPN', 'Equipment ID'],
+            headerRowIndex: 0,
+            matched: [
+              { field: 'upn', columnIndex: 0, match: 'exact' },
+              { field: 'equipmentId', columnIndex: 1, match: 'exact' },
+            ],
+            capturedFrom: { label: 'Dragon-Cx-Registry.xlsx' },
+          },
+        },
+      },
+    },
+  },
+
+  /** Forgets the captured layout; the export returns to the generic Rev21 map. */
+  'export:exto-template-clear': {
+    request: z.object({}),
+    response: z.object({ config: projectConfigSchema }),
+    example: {
+      request: {},
+      response: { config: EXAMPLE_CONFIG },
     },
   },
 

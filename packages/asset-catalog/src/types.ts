@@ -52,6 +52,9 @@ export interface ModelAssetProvenance {
   readonly equipmentType?: AssetFieldProvenance;
   readonly building?: AssetFieldProvenance;
   readonly nativeDiscipline?: AssetFieldProvenance;
+  readonly wbs?: AssetFieldProvenance;
+  readonly itemMaster?: AssetFieldProvenance;
+  readonly equipmentClassification?: AssetFieldProvenance;
 }
 
 /** One asset as the model alone describes it. */
@@ -73,6 +76,16 @@ export interface ModelAsset {
   readonly equipmentType?: string;
   readonly building?: string;
   readonly nativeDiscipline?: string;
+  /**
+   * The three register fields a site may state in the model rather than leave to
+   * a learned table (`PropertyMappings`). Present exactly when the profile
+   * mapped the property *and* the model had a value for it — so present means
+   * "the model says so", and a learned table is never consulted for a field the
+   * model already answered.
+   */
+  readonly wbs?: string;
+  readonly itemMaster?: string;
+  readonly equipmentClassification?: string;
   readonly status: ModelAssetStatus;
   /**
    * The representative object first, then every component collapsed into it in

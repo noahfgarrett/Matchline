@@ -20,11 +20,17 @@
  *   parent-tag property. Before v2 those lived in the desktop app's machine-
  *   local state file keyed by project path, and moving a `.matchline` file lost
  *   them.
+ * - **v3** — widens two CHECK constraints. `config` gains an `extoTemplate`
+ *   section, so a project carries the registry layout its EXTO export is written
+ *   on; `learned.kind` gains `'wbs'`, so it can hold the learned WBS table
+ *   beside the nesting rules and the item-master table. Both are widenings —
+ *   every v2 row is still legal — but a CHECK cannot be altered in place, so the
+ *   step rebuilds both tables and copies every row across.
  */
 import type { SourceKind } from '@matchline/domain';
 
 /** The schema version this build writes and reads. */
-export const PROJECT_SCHEMA_VERSION = 2;
+export const PROJECT_SCHEMA_VERSION = 3;
 
 /**
  * The `app_version` written into a new project when the caller does not supply
@@ -32,7 +38,7 @@ export const PROJECT_SCHEMA_VERSION = 2;
  * repository version so a project written by a test or a script still records
  * something truthful.
  */
-export const DEFAULT_APP_VERSION = '0.8.0';
+export const DEFAULT_APP_VERSION = '0.8.1';
 
 /** Meta keys every v1 project file declares. */
 export const REQUIRED_META_KEYS = [
@@ -76,8 +82,15 @@ export function isSourceRole(value: string): value is SourceRole {
   return (SOURCE_ROLES as ReadonlyArray<string>).includes(value);
 }
 
-/** The two learned artefacts a project carries (PRODUCT.md §12.4, ENGINE.md E3). */
-export const LEARNED_RULE_KINDS = ['nesting', 'item-master'] as const;
+/**
+ * The learned artefacts a project carries (PRODUCT.md §12.4, ENGINE.md E3).
+ *
+ * `'wbs'` joined the list in v3. It is a third table rather than a section of
+ * the item-master one because it answers a different question on a different
+ * key — the work-breakdown code of a *system*, not the master of a piece of
+ * equipment — and because a site can honestly have one without the other.
+ */
+export const LEARNED_RULE_KINDS = ['nesting', 'item-master', 'wbs'] as const;
 
 /** Which learned rule set a `learned` row holds. */
 export type LearnedRuleKind = (typeof LEARNED_RULE_KINDS)[number];
@@ -110,12 +123,18 @@ export function isDecisionValue(value: string): value is DecisionValue {
 }
 
 /**
- * The five configuration sections a project carries (v2).
+ * The configuration sections a project carries (six, as of v3).
  *
  * A closed list rather than free-form keys, and enforced by a CHECK constraint
- * as well as by this array: `config` is not a scratchpad, it is the five things
- * `CompileProjectInput` takes that a `SiteProfile` cannot yet hold. A sixth
- * section is a schema change, which is the point — it should be.
+ * as well as by this array: `config` is not a scratchpad. Five of the six are
+ * the things `CompileProjectInput` takes that a `SiteProfile` cannot yet hold.
+ * A seventh section is a schema change, which is the point — it should be.
+ *
+ * `extoTemplate` is the sixth, added in v3: the registry layout captured from a
+ * site's own workbook, which every later EXTO export is written on. It lives
+ * here rather than in a Site Profile because it belongs to *this* project's
+ * deliverable, and it is the one place anything site-specific about the export's
+ * shape is allowed to be — the engine's own column map stays generic.
  */
 export const CONFIG_KEYS = [
   'hierarchy',
@@ -123,6 +142,7 @@ export const CONFIG_KEYS = [
   'ladder',
   'ssmDisciplineProjection',
   'parentTagProperty',
+  'extoTemplate',
 ] as const;
 
 /** Which configuration section a `config` row holds. */
@@ -148,21 +168,44 @@ export const SOURCE_KINDS = [
 ] as const satisfies ReadonlyArray<SourceKind>;
 
 /**
- * The `config` table, as v2 creates it.
+ * The `config` table, as v3 creates it.
  *
  * Its own constant because two places need exactly these bytes: the full DDL a
- * new project is created from, and the migration that adds the table to a v1
- * file. A migration that re-typed the DDL by hand would be a second, drifting
- * definition of the same table.
+ * new project is created from, and the v1 → v2 migration that adds the table to
+ * a file that has none. A migration that re-typed the DDL by hand would be a
+ * second, drifting definition of the same table.
+ *
+ * A v1 file therefore arrives at v2 with the *current* CHECK rather than the one
+ * v2 shipped, and is then rebuilt again by the v3 step below. That is harmless —
+ * both steps are widenings and the rebuild is a copy — and it is much safer than
+ * freezing a second copy of this DDL here purely to be historically exact about
+ * a constraint no v1 file has any rows under.
  */
 export const CONFIG_TABLE_SQL = `
 CREATE TABLE config (
   key         TEXT PRIMARY KEY CHECK (key IN (
                 'hierarchy', 'roleGraph', 'ladder', 'ssmDisciplineProjection',
-                'parentTagProperty')),
+                'parentTagProperty', 'extoTemplate')),
   config_json TEXT NOT NULL,
   updated_at  TEXT NOT NULL
 ) WITHOUT ROWID;
+`;
+
+/**
+ * The `learned` table and its index, as v3 creates them.
+ *
+ * Extracted for the same reason `CONFIG_TABLE_SQL` is: the v3 step rebuilds this
+ * table to widen its CHECK, and it must rebuild it into exactly the shape a
+ * freshly created project has.
+ */
+export const LEARNED_TABLE_SQL = `
+CREATE TABLE learned (
+  id         INTEGER PRIMARY KEY,
+  kind       TEXT NOT NULL CHECK (kind IN ('nesting', 'item-master', 'wbs')),
+  rules_json TEXT NOT NULL,
+  saved_at   TEXT NOT NULL
+);
+CREATE INDEX idx_learned_kind ON learned(kind, id);
 `;
 
 /**
@@ -205,14 +248,7 @@ CREATE TABLE profile (
   saved_at     TEXT NOT NULL
 );
 
-CREATE TABLE learned (
-  id         INTEGER PRIMARY KEY,
-  kind       TEXT NOT NULL CHECK (kind IN ('nesting', 'item-master')),
-  rules_json TEXT NOT NULL,
-  saved_at   TEXT NOT NULL
-);
-CREATE INDEX idx_learned_kind ON learned(kind, id);
-
+${LEARNED_TABLE_SQL}
 CREATE TABLE overrides (
   kind         TEXT NOT NULL CHECK (kind IN ('system', 'relationship')),
   asset_key    TEXT NOT NULL,
@@ -275,4 +311,50 @@ export interface MigrationStep {
  * {@link PROJECT_SCHEMA_VERSION}. A gap here is not a slow migration, it is a
  * refusal: a file this list cannot reach is left exactly as it was found.
  */
-export const MIGRATION_STEPS: readonly MigrationStep[] = [{ to: 2, sql: CONFIG_TABLE_SQL }];
+/**
+ * v2 → v3: widen two CHECK constraints.
+ *
+ * SQLite cannot alter a CHECK, so each table is rebuilt: create the new shape
+ * under a temporary name, copy every row, drop the old table, rename. Both
+ * changes are widenings — every row that was legal under v2 is legal under v3 —
+ * so the copy can never lose a row to the new constraint, and the whole step
+ * runs inside `migrateProjectFile`'s transaction.
+ *
+ * Column lists are written out rather than `SELECT *`, so a future column added
+ * to either table stops this step compiling into something that silently drops
+ * it. Dropping a table drops its indexes with it, which is why the index is
+ * recreated at the end rather than dropped at the start.
+ *
+ * Nothing references either table by foreign key, so the drop-and-rename cannot
+ * strand a reference.
+ */
+export const WIDEN_CHECKS_SQL = `
+CREATE TABLE config_v3 (
+  key         TEXT PRIMARY KEY CHECK (key IN (
+                'hierarchy', 'roleGraph', 'ladder', 'ssmDisciplineProjection',
+                'parentTagProperty', 'extoTemplate')),
+  config_json TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+) WITHOUT ROWID;
+INSERT INTO config_v3 (key, config_json, updated_at)
+  SELECT key, config_json, updated_at FROM config;
+DROP TABLE config;
+ALTER TABLE config_v3 RENAME TO config;
+
+CREATE TABLE learned_v3 (
+  id         INTEGER PRIMARY KEY,
+  kind       TEXT NOT NULL CHECK (kind IN ('nesting', 'item-master', 'wbs')),
+  rules_json TEXT NOT NULL,
+  saved_at   TEXT NOT NULL
+);
+INSERT INTO learned_v3 (id, kind, rules_json, saved_at)
+  SELECT id, kind, rules_json, saved_at FROM learned;
+DROP TABLE learned;
+ALTER TABLE learned_v3 RENAME TO learned;
+CREATE INDEX idx_learned_kind ON learned(kind, id);
+`;
+
+export const MIGRATION_STEPS: readonly MigrationStep[] = [
+  { to: 2, sql: CONFIG_TABLE_SQL },
+  { to: 3, sql: WIDEN_CHECKS_SQL },
+];

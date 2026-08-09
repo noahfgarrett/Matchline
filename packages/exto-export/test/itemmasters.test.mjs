@@ -128,6 +128,72 @@ test('placeholders and electrical gear on non-electrical equipment are suspect',
   assert.equal(suspectRowReason({ itemMaster: 'VF_I&C_VALVE', discipline: 'WASTE' }), null);
 });
 
+test('a transformer or switchgear master on non-electrical equipment always fires', () => {
+  /* These two words name apparatus that is electrical whatever else the name
+     says, so the family segment never excuses them. */
+  for (const family of ['EL', 'MW', 'PROC']) {
+    for (const token of ['XFMR', 'SWGR']) {
+      assert.equal(
+        suspectRowReason({ itemMaster: `VF_${family}_MV_${token}`, discipline: 'MECHANICAL WET' }),
+        'electrical-gear-on-non-electrical',
+        `VF_${family}_MV_${token}`,
+      );
+      assert.equal(
+        suspectRowReason({ itemMaster: `VF_${family}_MV_${token}`, discipline: 'ELECTRICAL' }),
+        null,
+        'on electrical equipment it is simply correct',
+      );
+    }
+  }
+});
+
+test('GEAR fires in an electrical-family name and not in a mechanical one', () => {
+  /* GEAR means switchgear inside an electrical name and a gearbox inside a
+     mechanical one. The family segment — segment 1 of VF_<family>_…, segment 2
+     of CA_<site>_<family>_… — is what tells the two apart. */
+  assert.equal(
+    suspectRowReason({ itemMaster: 'VF_EL_MV_GEAR', discipline: 'MECHANICAL WET' }),
+    'electrical-gear-on-non-electrical',
+    'an electrical-family GEAR on mechanical equipment is still a misfiling',
+  );
+  assert.equal(
+    suspectRowReason({ itemMaster: 'CA_NB_EL_MV_GEAR', discipline: 'MECHANICAL WET' }),
+    'electrical-gear-on-non-electrical',
+    'the legacy spelling carries its family one segment further along',
+  );
+
+  for (const mechanical of ['VF_MW_PMP_GEAR', 'VF_PROC_MIXER_GEAR', 'CA_NB_MD_FAN_GEAR']) {
+    assert.equal(
+      suspectRowReason({ itemMaster: mechanical, discipline: 'MECHANICAL WET' }),
+      null,
+      `${mechanical} is a gearbox, not switchgear`,
+    );
+  }
+});
+
+test('a token is only a token when it is a whole segment', () => {
+  /* The donor tested the four letters as a substring, which audits out a name
+     for spelling rather than for meaning. */
+  for (const name of ['VF_MW_GEARBOX_PMP', 'VF_MW_HEADGEAR_01', 'VF_MW_XFMRLESS_PMP']) {
+    assert.equal(
+      suspectRowReason({ itemMaster: name, discipline: 'MECHANICAL WET' }),
+      null,
+      `${name} merely contains the letters`,
+    );
+  }
+  assert.equal(
+    suspectRowReason({ itemMaster: 'VF_MW_GEARBOX_XFMR', discipline: 'MECHANICAL WET' }),
+    'electrical-gear-on-non-electrical',
+    'a real whole-segment token in the same name still fires',
+  );
+});
+
+test('a name of no recognised shape states no family, so GEAR alone never fires', () => {
+  for (const name of ['GEAR', 'MISC_GEAR', 'SPARE-GEAR-01']) {
+    assert.equal(suspectRowReason({ itemMaster: name, discipline: 'WASTE' }), null, name);
+  }
+});
+
 test('suspect rows are audited, not learned, and everything else is learned', () => {
   assert.deepEqual(
     TABLE.audit.map((row) => [row.equipmentId, row.reason]),

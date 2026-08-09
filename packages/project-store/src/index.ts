@@ -31,6 +31,7 @@ export {
   isOverrideKind,
   isSourceRole,
   LEARNED_RULE_KINDS,
+  LEARNED_TABLE_SQL,
   MIGRATION_STEPS,
   OVERRIDE_KINDS,
   PROJECT_SCHEMA_SQL,
@@ -38,6 +39,7 @@ export {
   REQUIRED_META_KEYS,
   REQUIRED_TABLES,
   SOURCE_ROLES,
+  WIDEN_CHECKS_SQL,
 } from './schema.js';
 export type {
   ConfigKey,

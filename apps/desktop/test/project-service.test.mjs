@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test, { after, before } from 'node:test';
 
 import { writeDragonFixture } from '@matchline/model-schema/fixtures/dragon';
+import { PROJECT_SCHEMA_VERSION } from '@matchline/project-store';
 import { writeWorkbook } from '@matchline/spreadsheet-import';
 
 import { createProjectService } from '../dist/electron/services/project-session.js';
@@ -657,16 +658,16 @@ test('an older project file is not upgraded until the user says so', () => {
     const asked = service.open(olderPath, false);
     assert.equal(asked.outcome, 'migration-needed');
     assert.equal(asked.migrationNeeded.fromVersion, 1);
-    assert.equal(asked.migrationNeeded.toVersion, 2);
+    assert.equal(asked.migrationNeeded.toVersion, PROJECT_SCHEMA_VERSION);
     assert.equal(service.current(), null, 'nothing was opened');
     assert.equal(existsSync(`${olderPath}.backup-1`), false, 'and nothing was written');
 
     const accepted = service.open(olderPath, true);
     assert.equal(accepted.outcome, 'opened');
-    assert.equal(accepted.project.schemaVersion, 2);
+    assert.equal(accepted.project.schemaVersion, PROJECT_SCHEMA_VERSION);
     assert.deepEqual(accepted.notice.migration, {
       fromVersion: 1,
-      toVersion: 2,
+      toVersion: PROJECT_SCHEMA_VERSION,
       backupPath: `${olderPath}.backup-1`,
     });
     assert.equal(existsSync(`${olderPath}.backup-1`), true, 'the original is kept');

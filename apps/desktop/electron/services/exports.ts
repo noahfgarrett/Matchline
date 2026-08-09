@@ -3,14 +3,25 @@ import path from 'node:path';
 
 import type { CompiledProject } from '@matchline/compiler';
 import {
+  analyzeExtoTemplate,
   assignItemMasters,
+  assignWbs,
   buildExtoRows,
+  validateExtoTemplate,
   validateItemMasterTable,
+  validateWbsTable,
   writeExtoWorkbook,
   type ExtoAsset,
+  type ExtoTemplate,
   type ItemMasterAsset,
   type ItemMasterTable,
+  type WbsTable,
 } from '@matchline/exto-export';
+import {
+  classifyDescription,
+  validateLearnedRuleSet,
+  type LearnedRuleSet,
+} from '@matchline/learned-rules';
 import {
   CANONICAL_MEL_FIELDS,
   analyzeTemplate,
@@ -30,6 +41,7 @@ import {
 
 import type {
   WireExportResult,
+  WireExtoTemplate,
   WireTemplateAnalysis,
   WireTemplateBinding,
 } from '../../shared/schemas.js';
@@ -172,6 +184,98 @@ export function readItemMasterTable(stored: unknown): ItemMasterTable | null {
   return validateItemMasterTable(stored) ? stored : null;
 }
 
+/** The stored WBS table, on the same terms. */
+export function readWbsTable(stored: unknown): WbsTable | null {
+  return validateWbsTable(stored) ? stored : null;
+}
+
+/** The stored nesting rules, read here only for `classifyDescription`. */
+export function readLearnedRules(stored: unknown): LearnedRuleSet | null {
+  return validateLearnedRuleSet(stored) ? stored : null;
+}
+
+/** The captured EXTO layout, on the same terms. */
+export function readExtoTemplate(stored: unknown): ExtoTemplate | null {
+  return validateExtoTemplate(stored) ? stored : null;
+}
+
+/**
+ * Capture a registry workbook's layout, so later EXTO exports are written on it.
+ *
+ * Reads bytes and returns a value; it writes no file and stores nothing. The
+ * caller decides whether to keep what comes back — which is the point of the
+ * split, because what the user reviewed is what should ship.
+ *
+ * The result is copied onto the wire shape rather than returned as the engine
+ * type: the engine's arrays are `readonly`, the stored config's are not, and a
+ * cast between them would be a lie about which one owns the value.
+ */
+export function analyzeExtoTemplateFile(bytes: Uint8Array, label: string): WireExtoTemplate {
+  const template = analyzeExtoTemplate(bytes, { label });
+  return {
+    version: template.version,
+    sheetName: template.sheetName,
+    headers: [...template.headers],
+    headerRowIndex: template.headerRowIndex,
+    matched: template.matched.map((binding) => ({
+      field: binding.field,
+      columnIndex: binding.columnIndex,
+      match: binding.match,
+    })),
+    capturedFrom: { label: template.capturedFrom.label },
+  };
+}
+
+/**
+ * The three fields a model mapping can answer and a learned table can otherwise
+ * infer, resolved per asset.
+ *
+ * One rule, applied the same way three times: **a non-blank mapped model value
+ * beats a learned assignment, and a learned assignment beats a blank cell.** A
+ * value the model states is a fact about this project; a learned value is an
+ * inference from somebody else's spreadsheet, however well it scored. When the
+ * model has said nothing, the inference is the best truthful answer available,
+ * and when neither has anything the cell stays empty rather than being filled
+ * with a guess.
+ *
+ * Classification has one extra rung in the middle: the equipment *type* mapping,
+ * which sites have been mapping since long before `equipmentClassification`
+ * existed and which the EXTO export has always written into that column. It sits
+ * below the explicit mapping and above the learned answer, so nothing a site
+ * already configured changes meaning.
+ */
+interface RegisterFields {
+  readonly wbs?: string;
+  readonly itemMaster?: string;
+  readonly equipmentClassification?: string;
+}
+
+/** What each field's value came from, counted for the export note. */
+interface PrecedenceCounts {
+  modelWbs: number;
+  learnedWbs: number;
+  modelItemMaster: number;
+  learnedItemMaster: number;
+  modelClassification: number;
+  learnedClassification: number;
+}
+
+function nonBlank(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
+/** Everything the EXTO assembly may consult, beyond the compiled assets. */
+export interface ExtoLearning {
+  readonly itemMasterTable: ItemMasterTable | null;
+  readonly wbsTable: WbsTable | null;
+  /** Consulted only for `classifyDescription`, and only below the model. */
+  readonly nestingRules: LearnedRuleSet | null;
+  /** The site's captured layout, or `null` for the generic Rev21 map. */
+  readonly template: ExtoTemplate | null;
+}
+
 /**
  * The Rev21 upload sheet.
  *
@@ -179,13 +283,20 @@ export function readItemMasterTable(stored: unknown): ItemMasterTable | null {
  * schedule, this build has no P6 import wired into the session, and a printed
  * milestone nobody scheduled is a fabricated commitment. The column comes out
  * blank and the note says why.
+ *
+ * Three columns are settled by the precedence rule described above
+ * ({@link RegisterFields}) rather than by one source: WBS, Item Master and
+ * Equipment Classification each take the model's mapped value when there is one,
+ * a learned answer when there is not, and nothing when neither has anything.
  */
 export function exportExto(
   project: CompiledProject,
   assets: readonly GeneratedMelAsset[],
-  table: ItemMasterTable | null,
+  learning: ExtoLearning,
   absolutePath: string,
 ): WireExportResult {
+  const { itemMasterTable, wbsTable, nestingRules, template } = learning;
+
   const itemMasterAssets: ItemMasterAsset[] = assets.map((asset): ItemMasterAsset => {
     const built: {
       canonicalTag: string;
@@ -197,8 +308,12 @@ export function exportExto(
     if (asset.ssmDiscipline !== undefined) {
       built.ssmDiscipline = asset.ssmDiscipline;
     }
-    if (asset.equipmentType !== undefined) {
-      built.equipmentClass = asset.equipmentType;
+    // The item-master rungs key on the classification, so they must see the same
+    // value the Classification column will print — model mapping first.
+    const equipmentClass =
+      nonBlank(asset.equipmentClassification) ?? nonBlank(asset.equipmentType);
+    if (equipmentClass !== undefined) {
+      built.equipmentClass = equipmentClass;
     }
     if (asset.system !== undefined) {
       built.systemKey = asset.system.systemKey;
@@ -209,12 +324,12 @@ export function exportExto(
     return built;
   });
 
-  const outcomes = table === null ? [] : assignItemMasters(table, itemMasterAssets);
-  const assigned = new Map<string, string>();
+  const outcomes = itemMasterTable === null ? [] : assignItemMasters(itemMasterTable, itemMasterAssets);
+  const learnedItemMasters = new Map<string, string>();
   let proposalCount = 0;
   for (const outcome of outcomes) {
     if (outcome.kind === 'assigned') {
-      assigned.set(outcome.canonicalTag, outcome.itemMaster);
+      learnedItemMasters.set(outcome.canonicalTag, outcome.itemMaster);
     } else if (outcome.kind === 'proposal') {
       // `unmatched` is deliberately not counted here: nothing was learned about
       // that asset at all, which is silence, not a proposal a reviewer owes an
@@ -222,6 +337,16 @@ export function exportExto(
       proposalCount += 1;
     }
   }
+
+  const counts: PrecedenceCounts = {
+    modelWbs: 0,
+    learnedWbs: 0,
+    modelItemMaster: 0,
+    learnedItemMaster: 0,
+    modelClassification: 0,
+    learnedClassification: 0,
+  };
+  let wbsProposalCount = 0;
 
   const extoAssets: ExtoAsset[] = assets.map((asset, index): ExtoAsset => {
     const base = itemMasterAssets[index];
@@ -235,6 +360,8 @@ export function exportExto(
       structuralParentTag?: string;
       dependencyTags?: ReadonlyArray<string>;
       itemMaster?: string;
+      building?: string;
+      wbs?: string;
     } = { ...(base ?? { canonicalTag: asset.canonicalTag }) };
 
     if (asset.system !== undefined) {
@@ -246,29 +373,94 @@ export function exportExto(
     if (asset.dependencyTags !== undefined && asset.dependencyTags.length > 0) {
       built.dependencyTags = asset.dependencyTags;
     }
-    const itemMaster = assigned.get(asset.canonicalTag);
-    if (itemMaster !== undefined) {
-      built.itemMaster = itemMaster;
+    if (asset.building !== undefined) {
+      built.building = asset.building;
     }
+
+    /* --- WBS: mapped model value, then the learned table, then blank --- */
+    const modelWbs = nonBlank(asset.wbs);
+    if (modelWbs !== undefined) {
+      built.wbs = modelWbs;
+      counts.modelWbs += 1;
+    } else if (wbsTable !== null) {
+      const outcome = assignWbs(wbsTable, asset.system?.systemKey);
+      if (outcome.kind === 'assigned') {
+        built.wbs = outcome.wbs;
+        counts.learnedWbs += 1;
+      } else if (outcome.kind === 'proposal') {
+        wbsProposalCount += 1;
+      }
+    }
+
+    /* --- Item Master: mapped model value, then the learned table, then blank --- */
+    const modelItemMaster = nonBlank(asset.itemMaster);
+    if (modelItemMaster !== undefined) {
+      built.itemMaster = modelItemMaster;
+      counts.modelItemMaster += 1;
+    } else {
+      const learned = learnedItemMasters.get(asset.canonicalTag);
+      if (learned !== undefined) {
+        built.itemMaster = learned;
+        counts.learnedItemMaster += 1;
+      }
+    }
+
+    /* --- Classification: mapped, then equipment type, then learned, then blank --- */
+    if (built.equipmentClass !== undefined) {
+      counts.modelClassification += 1;
+    } else if (nestingRules !== null) {
+      const hit = classifyDescription(nestingRules, asset.description, asset.ssmDiscipline);
+      if (hit !== null) {
+        built.equipmentClass = hit.class;
+        counts.learnedClassification += 1;
+      }
+    }
+
     return built;
   });
 
   const options: { itemMasterVocabulary?: ReadonlyArray<string> } = {};
-  if (table !== null && table.vocabulary.length > 0) {
-    options.itemMasterVocabulary = table.vocabulary;
+  if (itemMasterTable !== null && itemMasterTable.vocabulary.length > 0) {
+    options.itemMasterVocabulary = itemMasterTable.vocabulary;
   }
   const rows = buildExtoRows(extoAssets, options);
 
+  const assignedItemMasters = counts.modelItemMaster + counts.learnedItemMaster;
   const itemMasterNote =
-    table === null
-      ? 'No item-master registry has been trained, so that column is blank.'
-      : `${count(assigned.size, 'item master', 'item masters')} assigned at or above the 0.9 gate` +
+    itemMasterTable === null && counts.modelItemMaster === 0
+      ? 'No item-master registry has been trained and no model property is mapped, so that column is blank.'
+      : `${count(assignedItemMasters, 'item master', 'item masters')} filled ` +
+        `(${String(counts.modelItemMaster)} from the model, ${String(counts.learnedItemMaster)} learned)` +
         `${proposalCount === 0 ? '' : `, ${String(proposalCount)} left as review proposals`}.`;
+
+  const wbsNote =
+    wbsTable === null && counts.modelWbs === 0
+      ? ' No WBS table has been trained and no model property is mapped, so that column is blank.'
+      : ` ${count(counts.modelWbs + counts.learnedWbs, 'WBS code', 'WBS codes')} filled ` +
+        `(${String(counts.modelWbs)} from the model, ${String(counts.learnedWbs)} learned)` +
+        `${wbsProposalCount === 0 ? '' : `, ${String(wbsProposalCount)} below the gate`}.`;
+
+  const classificationNote =
+    counts.learnedClassification === 0
+      ? ''
+      : ` ${count(counts.learnedClassification, 'classification', 'classifications')} came from ` +
+        'the learned description table.';
+
+  const layoutNote =
+    template === null
+      ? "Matchline's own Rev21 columns"
+      : `the site template's own ${count(template.headers.length, 'column', 'columns')}, ` +
+        `${count(template.matched.length, 'of them filled', 'of them filled')}`;
+
+  const writeOptions: { template?: ExtoTemplate } = {};
+  if (template !== null) {
+    writeOptions.template = template;
+  }
 
   return write(
     absolutePath,
-    writeExtoWorkbook(rows),
-    `${count(rows.length, 'row', 'rows')} on the Rev21 upload sheet. ${itemMasterNote} ` +
+    writeExtoWorkbook(rows, writeOptions),
+    `${count(rows.length, 'row', 'rows')} on ${layoutNote}. ${itemMasterNote}${wbsNote}${classificationNote} ` +
       'No P6 schedule is loaded, so the milestone column is blank.' +
       (project.stats.assetCount === rows.length ? '' : ' Some assets produced no row.'),
   );

@@ -11,13 +11,25 @@
  *    `row[P] = parentValue ? registerDisplayValue(parentValue) :
  *    (rootsAttachToSystem && recordAttribute(record,'system')) ||
  *    registerDisplayValue(parentValue)`. A root with no System Name to stand in
- *    for a parent still falls through to `'N/A'`. The frozen legacy (Eagle)
- *    profile turns this off and keeps `'N/A'` for every root — that is
- *    {@link BuildExtoRowsOptions.rootsAttachToSystem}.
- * 2. **A blank register value is spelled `'N/A'`.** The donor's
- *    `registerDisplayValue`. It applies to Closest Parent and Dependencies only;
- *    Milestone, Item Master and Equipment Classification are left genuinely
- *    blank, which is how the donor writes them.
+ *    for a parent falls through to the blank rendering. The frozen legacy
+ *    (Eagle) profile turns this off and leaves every root's Closest Parent
+ *    blank — that is {@link BuildExtoRowsOptions.rootsAttachToSystem}.
+ *
+ *    Held against a real hand-built registry, this is the convention: every
+ *    row's Closest Parent was filled, nine rows in ten naming another row's
+ *    Equipment ID and the remaining roots naming, exactly, their own System
+ *    Name. Nothing had to be invented to match that — it is what the default
+ *    already did.
+ * 2. **A stated-nothing register value is blank.** The donor's
+ *    `registerDisplayValue` spelled it `'N/A'`; a real registry spells it by
+ *    leaving the cell empty, in every one of the ~9,000 rows that has no
+ *    dependency and every root that has no parent, with the literal text `N/A`
+ *    appearing nowhere in either column. So blank is the default here, and
+ *    `'N/A'` is available behind {@link BuildExtoRowsOptions.registerBlanks}
+ *    for the frozen legacy profile that wants the donor's rendering back.
+ *
+ *    Either way this applies to Closest Parent and Dependencies only. Every
+ *    other column has always been left genuinely blank.
  *
  * ## Row order
  *
@@ -44,10 +56,27 @@ import type { ExtoCells } from './columns.js';
 import { extoCellRow, extoHeaderRow, extoSpacerRow } from './columns.js';
 import type { ItemMasterNormalization } from './itemmasters.js';
 import { describeItemMasterNormalization } from './itemmasters.js';
+import type { ExtoTemplate } from './template.js';
 import { clean, compareCodeUnits } from './text.js';
 
-/** The donor's rendering of a blank register value. */
+/**
+ * The donor's rendering of a stated-nothing register value.
+ *
+ * Retained as the `'n-a'` choice of {@link BuildExtoRowsOptions.registerBlanks},
+ * not as a default — see convention 2 in the module note.
+ */
 export const EXTO_BLANK_REGISTER_VALUE = 'N/A';
+
+/**
+ * How a register column renders "nothing was stated".
+ *
+ * `'blank'` leaves the cell empty, which is what a real registry carries and
+ * what this package does unless told otherwise. `'n-a'` writes
+ * {@link EXTO_BLANK_REGISTER_VALUE}, the donor's rendering, for a site whose
+ * downstream tooling reads an empty cell as "not yet filled in" rather than as
+ * "nothing to fill in".
+ */
+export type ExtoRegisterBlanks = 'blank' | 'n-a';
 
 /** Separator for the Dependencies cell — the donor's `join('; ')`. */
 const DEPENDENCY_SEPARATOR = '; ';
@@ -76,10 +105,15 @@ export interface ExtoRow extends ExtoCells {
 export interface BuildExtoRowsOptions {
   /**
    * Rev21 root convention: a root's Closest Parent is its own System Name.
-   * Defaults to `true`, matching the shipped profile. The frozen legacy Eagle
-   * profile sets it `false` and keeps `'N/A'`.
+   * Defaults to `true`, matching the shipped profile and what a real registry
+   * does. The frozen legacy Eagle profile sets it `false`.
    */
   readonly rootsAttachToSystem?: boolean;
+  /**
+   * How Closest Parent and Dependencies render when nothing was stated.
+   * Defaults to `'blank'`. See convention 2 in the module note.
+   */
+  readonly registerBlanks?: ExtoRegisterBlanks;
   /**
    * The legal VF item-master vocabulary — normally
    * {@link ItemMasterTable.vocabulary}. Supplied, a legacy `CA_<site>_<name>`
@@ -101,43 +135,58 @@ export function buildExtoRows(
   options: BuildExtoRowsOptions = {},
 ): ReadonlyArray<ExtoRow> {
   const rootsAttachToSystem = options.rootsAttachToSystem ?? true;
+  const registerBlanks = options.registerBlanks ?? 'blank';
   const vocabulary = options.itemMasterVocabulary ?? [];
   return assets
-    .map((asset) => toRow(asset, rootsAttachToSystem, vocabulary))
+    .map((asset) => toRow(asset, rootsAttachToSystem, registerBlanks, vocabulary))
     .sort(compareRows);
 }
 
 function toRow(
   asset: ExtoAsset,
   rootsAttachToSystem: boolean,
+  registerBlanks: ExtoRegisterBlanks,
   vocabulary: ReadonlyArray<string>,
 ): ExtoRow {
   const normalization = describeItemMasterNormalization(asset.itemMaster, vocabulary);
   return {
     upn: clean(asset.systemKey),
     equipmentId: clean(asset.canonicalTag),
-    closestParent: closestParentOf(asset, rootsAttachToSystem),
+    closestParent: closestParentOf(asset, rootsAttachToSystem, registerBlanks),
     milestone: clean(asset.milestoneLabel),
     itemMaster: normalization.output,
     equipmentClassification: clean(asset.equipmentClass),
-    dependencies: registerDisplayValue(joinDependencies(asset.dependencyTags)),
+    dependencies: registerDisplayValue(joinDependencies(asset.dependencyTags), registerBlanks),
+    building: clean(asset.building),
+    level: clean(asset.level),
+    grid: clean(asset.grid),
+    discipline: clean(asset.ssmDiscipline),
+    wbs: clean(asset.wbs),
+    systemName: clean(asset.systemLabel),
+    manufacturer: clean(asset.manufacturer),
+    modelNumber: clean(asset.modelNumber),
     itemMasterNormalization: normalization,
   };
 }
 
-/** Donor `registerDisplayValue`: a blank register value is spelled out loud. */
-function registerDisplayValue(value: string): string {
+/** Donor `registerDisplayValue`, with the blank rendering made a choice. */
+function registerDisplayValue(value: string, registerBlanks: ExtoRegisterBlanks): string {
   const cleaned = clean(value);
-  return cleaned === '' ? EXTO_BLANK_REGISTER_VALUE : cleaned;
+  if (cleaned !== '') return cleaned;
+  return registerBlanks === 'n-a' ? EXTO_BLANK_REGISTER_VALUE : '';
 }
 
 /** Rev21 convention 1. See the module note. */
-function closestParentOf(asset: ExtoAsset, rootsAttachToSystem: boolean): string {
+function closestParentOf(
+  asset: ExtoAsset,
+  rootsAttachToSystem: boolean,
+  registerBlanks: ExtoRegisterBlanks,
+): string {
   const parent = clean(asset.structuralParentTag);
-  if (parent !== '') return registerDisplayValue(parent);
+  if (parent !== '') return registerDisplayValue(parent, registerBlanks);
   const systemLabel = clean(asset.systemLabel);
   if (rootsAttachToSystem && systemLabel !== '') return systemLabel;
-  return EXTO_BLANK_REGISTER_VALUE;
+  return registerDisplayValue('', registerBlanks);
 }
 
 /** Dependency tags, code-unit sorted so the cell does not depend on input order. */
@@ -167,12 +216,20 @@ function compareUpns(a: string, b: string): number {
 /** Options for {@link writeExtoWorkbook}. */
 export interface WriteExtoWorkbookOptions {
   /**
-   * Sheet name. Defaults to {@link DEFAULT_EXTO_SHEET_NAME}. Excel's own rules
+   * Sheet name. Defaults to {@link DEFAULT_EXTO_SHEET_NAME}, or to the
+   * template's own sheet name when a template is supplied. Excel's own rules
    * apply — 31 characters, and no character it forbids — and a name that breaks
    * them raises `SpreadsheetReadError` (`invalid-sheet-name`) from the writer
    * rather than producing a file that will not open.
    */
   readonly sheetName?: string;
+  /**
+   * A layout captured by `analyzeExtoTemplate`. Supplied, the sheet comes out on
+   * the site's own columns — its header text, its width, its header row — with
+   * every column this package did not recognise left blank. Omitted, the generic
+   * Rev21 map in `columns.ts` is used.
+   */
+  readonly template?: ExtoTemplate;
 }
 
 /**
@@ -195,12 +252,57 @@ export function writeExtoWorkbook(
   rows: ReadonlyArray<ExtoRow>,
   options: WriteExtoWorkbookOptions = {},
 ): Uint8Array {
-  return writeWorkbook([
-    { name: options.sheetName ?? DEFAULT_EXTO_SHEET_NAME, aoa: extoAoa(rows) },
-  ]);
+  const template = options.template;
+  const name =
+    options.sheetName ?? (template === undefined ? DEFAULT_EXTO_SHEET_NAME : template.sheetName);
+  const aoa = template === undefined ? extoAoa(rows) : extoTemplateAoa(rows, template);
+  return writeWorkbook([{ name, aoa }]);
 }
 
 /** Spacer row, header row, then the data rows — all cells text. */
 export function extoAoa(rows: ReadonlyArray<ExtoRow>): ReadonlyArray<ReadonlyArray<string>> {
   return [extoSpacerRow(), extoHeaderRow(), ...rows.map(extoCellRow)];
+}
+
+/**
+ * The same rows on a captured layout.
+ *
+ * The template's header row is written back verbatim at the row it was captured
+ * from, with blank full-width rows above it — so a sheet whose headers were on
+ * row 0 gets no spacer, and one whose headers were on row 1 gets exactly the one
+ * it had. Data starts on the row after the headers.
+ *
+ * Every row is the template's own width, and a column the template's headers did
+ * not bind to a field is emitted empty. That is the guarantee that matters most
+ * here: a registry sheet carries columns that belong to other people — contact
+ * details among them — and this package writes into a column only when the
+ * site's own header text said what the column is for.
+ */
+export function extoTemplateAoa(
+  rows: ReadonlyArray<ExtoRow>,
+  template: ExtoTemplate,
+): ReadonlyArray<ReadonlyArray<string>> {
+  const width = template.headers.length;
+  const blankRow = (): string[] => new Array<string>(width).fill('');
+
+  const aoa: string[][] = [];
+  for (let row = 0; row < template.headerRowIndex; row += 1) aoa.push(blankRow());
+
+  const header = blankRow();
+  template.headers.forEach((text, columnIndex) => {
+    header[columnIndex] = text;
+  });
+  aoa.push(header);
+
+  for (const row of rows) {
+    const cells = blankRow();
+    for (const binding of template.matched) {
+      /* A binding past the end cannot happen through `analyzeExtoTemplate` and is
+         refused by `validateExtoTemplate`; skipping rather than growing the row
+         keeps a hand-edited template from widening the site's sheet. */
+      if (binding.columnIndex < width) cells[binding.columnIndex] = row[binding.field];
+    }
+    aoa.push(cells);
+  }
+  return aoa;
 }

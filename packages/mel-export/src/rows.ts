@@ -54,6 +54,20 @@ export interface GeneratedMelAsset {
   readonly systemParentTag?: string;
   /** Commissioning dependencies, as tags. Order here does not matter. */
   readonly dependencyTags?: ReadonlyArray<string>;
+  /**
+   * The three register fields a site may state in the model rather than leave to
+   * a learned table (`PropertyMappings`).
+   *
+   * They are carried here rather than on a shape of the EXTO layer's own because
+   * this is the flattened asset the coordinator already assembles once and hands
+   * to every exporter. None of them is a §12.1 MEL column and none is printed on
+   * the canonical sheet — `buildCanonicalMelRows` does not read them — but the
+   * EXTO assembly needs to know what the model stated in order to prefer it over
+   * an inference.
+   */
+  readonly wbs?: string;
+  readonly itemMaster?: string;
+  readonly equipmentClassification?: string;
   readonly sourceModelFile?: string;
   /** Extraction-cache object ids. Order here does not matter. */
   readonly modelObjectIds?: ReadonlyArray<number>;
