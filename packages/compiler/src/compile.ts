@@ -574,6 +574,13 @@ function generatedMelAssetOf(
       ? {}
       : { nativeDiscipline: asset.nativeDiscipline }),
     ...(ssmDiscipline === undefined ? {} : { ssmDiscipline }),
+    // Model-stated register fields, carried through verbatim. The EXTO assembly
+    // prefers these over any learned assignment; nothing else reads them.
+    ...(asset.wbs === undefined ? {} : { wbs: asset.wbs }),
+    ...(asset.itemMaster === undefined ? {} : { itemMaster: asset.itemMaster }),
+    ...(asset.equipmentClassification === undefined
+      ? {}
+      : { equipmentClassification: asset.equipmentClassification }),
     ...(resolution === null ? {} : { system: resolution }),
     ...(parentTag === undefined ? {} : { systemParentTag: parentTag }),
     ...(dependencyTags.size === 0 ? {} : { dependencyTags: [...dependencyTags] }),

@@ -44,7 +44,10 @@ type MappedField =
   | 'description'
   | 'equipmentType'
   | 'building'
-  | 'nativeDiscipline';
+  | 'nativeDiscipline'
+  | 'wbs'
+  | 'itemMaster'
+  | 'equipmentClassification';
 
 /** The roles read from the asset as a whole. The tag is read from the owner. */
 type OptionalField = Exclude<MappedField, 'equipmentTag'>;
@@ -459,6 +462,9 @@ export function buildAssetCatalog(
   addRef(mappings.equipmentType);
   addRef(mappings.building);
   addRef(mappings.nativeDiscipline);
+  addRef(mappings.wbs);
+  addRef(mappings.itemMaster);
+  addRef(mappings.equipmentClassification);
   const values = readMappedValues(cache, refs, new Set(survivors.map((object) => object.id)));
 
   const tagKey = propertyKey(mappings.equipmentTag);
@@ -552,6 +558,9 @@ export function buildAssetCatalog(
     ['equipmentType', mappings.equipmentType],
     ['building', mappings.building],
     ['nativeDiscipline', mappings.nativeDiscipline],
+    ['wbs', mappings.wbs],
+    ['itemMaster', mappings.itemMaster],
+    ['equipmentClassification', mappings.equipmentClassification],
   ];
 
   const assets: readonly ModelAsset[] = drafts.map((draft) => {

@@ -22,7 +22,16 @@ export interface PropertyRef {
   readonly name: string;
 }
 
-/** Which extracted property plays which role for this site (PRODUCT.md §6.5). */
+/**
+ * Which extracted property plays which role for this site (PRODUCT.md §6.5).
+ *
+ * The last three are the register columns a site can *also* choose to state in
+ * the model rather than leave to a learned table. Mapping one is how a site says
+ * "the model already knows this" — and a mapped, non-blank value outranks any
+ * learned assignment for that field, because a fact beats an inference. Leaving
+ * one unmapped is not a gap; it hands the field to the learned tables, which is
+ * where it was before this existed.
+ */
 export interface PropertyMappings {
   /** The only mapping with no default: without a tag there is no identity. */
   readonly equipmentTag: PropertyRef;
@@ -30,6 +39,12 @@ export interface PropertyMappings {
   readonly equipmentType?: PropertyRef;
   readonly building?: PropertyRef;
   readonly nativeDiscipline?: PropertyRef;
+  /** Registry "WBS", when the model states it. */
+  readonly wbs?: PropertyRef;
+  /** Registry "Item Master Unique Identifier", when the model states it. */
+  readonly itemMaster?: PropertyRef;
+  /** Registry "Equipment Classification", when the model states it. */
+  readonly equipmentClassification?: PropertyRef;
 }
 
 /**
