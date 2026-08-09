@@ -754,7 +754,17 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     const result = service.exportExto(target);
     assert.equal(result.written, true);
     assert.match(result.note, /No P6 schedule is loaded/);
-    assert.match(result.note, /1 item master assigned/);
+    assert.match(
+      result.note,
+      /1 item master filled \(0 from the model, 1 learned\)/,
+      'the note says which source filled the column, not merely how many',
+    );
+    assert.match(
+      result.note,
+      /No WBS table has been trained and no model property is mapped/,
+      'and admits the column it could not fill at all',
+    );
+    assert.match(result.note, /Matchline.s own Rev21 columns/, 'no template is captured here');
 
     const { aoa } = sheetAoa(readWorkbook(readFileSync(target)).getSheet('Exto SSM'));
     // Row 0 is the blank spacer the Rev21 sheet starts with.
@@ -1089,7 +1099,10 @@ test('a config left in the app-state file is copied into the project once', () =
   try {
     const { notice } = first.open(projectPathHere);
     assert.equal(notice.adoptedAppStateConfig, true, 'the copy is reported, not silent');
-    assert.deepEqual(first.config(), legacyConfig);
+    // The legacy entry predates EXTO template capture, so it carries no key for
+    // it. An absent key means "no template captured", and the schema's default
+    // is what says so — an older entry must still be adoptable.
+    assert.deepEqual(first.config(), { ...legacyConfig, extoTemplate: null });
   } finally {
     first.close();
   }
@@ -1104,7 +1117,11 @@ test('a config left in the app-state file is copied into the project once', () =
   try {
     const { notice } = second.open(projectPathHere);
     assert.equal(notice.adoptedAppStateConfig, false, 'there is nothing left to adopt');
-    assert.deepEqual(second.config(), legacyConfig, 'and the project answers on its own now');
+    assert.deepEqual(
+      second.config(),
+      { ...legacyConfig, extoTemplate: null },
+      'and the project answers on its own now',
+    );
   } finally {
     second.close();
   }

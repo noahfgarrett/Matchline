@@ -167,6 +167,62 @@ export function Screen3Assets({ context }: { readonly context: WizardContext }):
           </Field>
         </Panel>
 
+        <Panel
+          title="Register fields the model already knows"
+          description="Leave these unmapped and Matchline learns them from a prior registry. Map one and the model wins: a value the model states is a fact, and a learned value is an inference."
+        >
+          <Field
+            label="WBS"
+            what="The work-breakdown code. Unmapped, Matchline learns one code per system from a prior registry and fills it in above the 0.9 confidence gate."
+            example="1811"
+            htmlFor="map-wbs"
+          >
+            <PropertyPicker
+              id="map-wbs"
+              properties={properties}
+              value={mappings.wbs}
+              noneLabel="Not mapped — learn it"
+              onChange={(ref): void => {
+                setMapping('wbs', ref);
+              }}
+            />
+          </Field>
+
+          <Field
+            label="Item Master Unique Identifier"
+            what="The item-master name. Unmapped, Matchline learns it from a prior registry by discipline, classification and system."
+            example="VF_MECH_AHU"
+            htmlFor="map-item-master"
+          >
+            <PropertyPicker
+              id="map-item-master"
+              properties={properties}
+              value={mappings.itemMaster}
+              noneLabel="Not mapped — learn it"
+              onChange={(ref): void => {
+                setMapping('itemMaster', ref);
+              }}
+            />
+          </Field>
+
+          <Field
+            label="Equipment Classification"
+            what="The register's classification column. Unmapped, Matchline falls back to the equipment type above, then to what it learned from descriptions."
+            example="AHU"
+            htmlFor="map-classification"
+          >
+            <PropertyPicker
+              id="map-classification"
+              properties={properties}
+              value={mappings.equipmentClassification}
+              noneLabel="Not mapped — learn it"
+              onChange={(ref): void => {
+                setMapping('equipmentClassification', ref);
+              }}
+            />
+          </Field>
+        </Panel>
+
         <Panel title="Which objects count">
           <Field
             label="Require an equipment tag"

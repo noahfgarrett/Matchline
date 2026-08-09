@@ -62,6 +62,8 @@ export type SessionChannel = Extract<
   | 'export:generated-mel'
   | 'export:template-analyze'
   | 'export:template-mel'
+  | 'export:exto-template-capture'
+  | 'export:exto-template-clear'
   | 'export:exto'
   | 'export:predecessors'
   | 'export:revision-diff'
@@ -411,6 +413,18 @@ export function createSessionHandlers(
           service.exportTemplateMel(requireGranted(request.path), request.bindings),
         ),
       };
+    },
+
+    async 'export:exto-template-capture'(
+      request: IpcRequest<'export:exto-template-capture'>,
+    ): Promise<IpcResponse<'export:exto-template-capture'>> {
+      return {
+        config: guard(() => service.captureExtoTemplate(requireGranted(request.path))),
+      };
+    },
+
+    async 'export:exto-template-clear'(): Promise<IpcResponse<'export:exto-template-clear'>> {
+      return { config: guard(() => service.clearExtoTemplate()) };
     },
 
     async 'export:exto'(request: IpcRequest<'export:exto'>): Promise<IpcResponse<'export:exto'>> {

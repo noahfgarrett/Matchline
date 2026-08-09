@@ -3,8 +3,11 @@ import path from 'node:path';
 
 import {
   trainItemMasterTable,
+  trainWbsTable,
   type ItemMasterTable,
   type ItemMasterTrainingRow,
+  type WbsTable,
+  type WbsTrainingRow,
 } from '@matchline/exto-export';
 import {
   trainLearnedRules,
@@ -70,6 +73,15 @@ const ITEM_MASTER_SPELLINGS = [
   'itemmasteruid',
 ];
 const CLASS_SPELLINGS = ['equipmentclassification', 'equipmentclass', 'classification', 'class'];
+/**
+ * The work-breakdown column.
+ *
+ * Short, like every list above it, and for the same reason: each entry is a
+ * spelling a real export uses, and a header that matches none of them is left
+ * unmapped rather than guessed at. `fold` has already stripped case, spaces and
+ * punctuation, so `WBS`, `wbs` and `W.B.S.` all arrive here as `wbs`.
+ */
+const WBS_SPELLINGS = ['wbs', 'wbscode', 'workbreakdownstructure', 'wbsnumber'];
 
 /**
  * The first sheet whose header row carries an equipment-tag column.
@@ -286,6 +298,79 @@ export function trainItemMastersFrom(absolutePath: string, savedAt: string): Ite
   };
 }
 
+/* -------------------------------------------------------------- WBS table */
+
+interface WbsTraining {
+  readonly table: WbsTable;
+  readonly summary: WireLearnedSummary;
+}
+
+/**
+ * The WBS table, from the same registry export the other two are trained from.
+ *
+ * Only two columns are read, because only two mean anything to this table: the
+ * system key and the code. A row missing either teaches nothing and is skipped
+ * here rather than handed to the trainer as a blank, so `trainedFrom.rowCount`
+ * is the number of rows that could have taught something.
+ */
+export function trainWbsFrom(absolutePath: string, savedAt: string): WbsTraining {
+  const fileName = path.basename(absolutePath);
+  const sheet = findSheet(readFileSync(absolutePath), fileName);
+
+  const systemColumn = columnOf(sheet.headers, SYSTEM_SPELLINGS);
+  const wbsColumn = columnOf(sheet.headers, WBS_SPELLINGS);
+
+  if (wbsColumn < 0) {
+    throw new TrainingError(
+      `${fileName} (sheet ${sheet.sheetName}) has no WBS column, so there is nothing to ` +
+        'learn work-breakdown codes from. Matchline accepts WBS, WBS Code or WBS Number.',
+    );
+  }
+  if (systemColumn < 0) {
+    throw new TrainingError(
+      `${fileName} (sheet ${sheet.sheetName}) has no UPN column. A WBS code is a fact about a ` +
+        'system, so without the system key there is nothing to key it on.',
+    );
+  }
+
+  const rows: WbsTrainingRow[] = [];
+  for (const raw of sheet.rows) {
+    const systemKey = cell(raw, systemColumn);
+    const wbs = cell(raw, wbsColumn);
+    if (systemKey === '' || wbs === '') {
+      continue;
+    }
+    rows.push({ systemKey, wbs });
+  }
+
+  if (rows.length === 0) {
+    throw new TrainingError(
+      `${fileName} (sheet ${sheet.sheetName}) has a WBS column and a UPN column but no row ` +
+        'that fills both.',
+    );
+  }
+
+  const table = trainWbsTable(rows, { label: fileName });
+  const gated = table.entries.filter((entry) => entry.confidence >= 0.9).length;
+
+  return {
+    table,
+    summary: {
+      kind: 'wbs',
+      label: table.trainedFrom.label,
+      savedAt,
+      rowCount: table.trainedFrom.rowCount,
+      classCount: table.entries.length,
+      gateCount: gated,
+      affinityCount: 0,
+      claimGradeCount: gated,
+      proposalGradeCount: table.entries.length - gated,
+      suspectRowCount: 0,
+      grades: [],
+    },
+  };
+}
+
 /* ------------------------------------------------ reading a stored set back */
 
 /** Which kind's summary a stored record describes, for `learned:list`. */
@@ -350,6 +435,10 @@ export function summarizeStored(
     };
   }
 
+  /* The item-master and WBS tables summarize identically — both are lists of
+     `entries` carrying a `confidence` against the same 0.9 gate — so one branch
+     serves both. The WBS table has no `audit`, and `list` reads an absent key as
+     empty, which is the truthful count rather than a special case. */
   const entries = list('entries');
   const gated = entries.filter(
     (entry) =>

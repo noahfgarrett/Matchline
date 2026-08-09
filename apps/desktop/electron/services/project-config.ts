@@ -39,12 +39,17 @@ import {
  *
  * ## Where they persist
  *
- * In the project file's `config` table, one row per section (schema v2). That
- * is the whole point of v2: before it these lived in the app's machine-local
- * state file keyed by project path, so moving or copying a `.matchline` file
- * silently reset the wizard to its defaults. A project file now carries its own
- * configuration, and the portable profile package (PRODUCT.md §13.3) remains
- * the way to carry it to a *different* project.
+ * In the project file's `config` table, one row per section (schema v2, widened
+ * in v3). That is the whole point of v2: before it these lived in the app's
+ * machine-local state file keyed by project path, so moving or copying a
+ * `.matchline` file silently reset the wizard to its defaults. A project file
+ * now carries its own configuration, and the portable profile package
+ * (PRODUCT.md §13.3) remains the way to carry it to a *different* project.
+ *
+ * The sixth section, `extoTemplate`, is not a wizard screen's — it is captured
+ * in the exports view from the site's own registry workbook. It lives here
+ * because it is configuration this project's EXTO export is written on, and
+ * because it must travel with the file for the same reason the other five must.
  */
 
 /**
@@ -91,6 +96,9 @@ export function defaultProjectConfig(): WireProjectConfig {
     ladder: { tiers: [...LADDER_SOURCE_ORDER] },
     ssmDisciplineProjection: [],
     parentTagProperty: null,
+    // No captured layout: the EXTO export uses the engine's generic Rev21 map
+    // until the site supplies a workbook of its own.
+    extoTemplate: null,
   };
 }
 
@@ -106,13 +114,14 @@ export function applyConfigPatch(
     ssmDisciplineProjection: patch.ssmDisciplineProjection ?? config.ssmDisciplineProjection,
     parentTagProperty:
       patch.parentTagProperty === undefined ? config.parentTagProperty : patch.parentTagProperty,
+    extoTemplate: patch.extoTemplate === undefined ? config.extoTemplate : patch.extoTemplate,
   };
 }
 
 /* ---------------------------------------------------------- the config table */
 
 /**
- * The five sections as one object, or `null` when the project has none.
+ * The six sections as one object, or `null` when the project has none.
  *
  * `null` covers both "never configured" and "configured by something this build
  * cannot read": the caller treats them the same way, because the honest
@@ -139,14 +148,15 @@ export function readProjectConfig(store: ProjectStore): WireProjectConfig | null
     ladder: byKey.get('ladder'),
     ssmDisciplineProjection: byKey.get('ssmDisciplineProjection'),
     parentTagProperty: byKey.get('parentTagProperty') ?? null,
+    extoTemplate: byKey.get('extoTemplate') ?? null,
   });
   return parsed.success ? parsed.data : null;
 }
 
 /**
- * Writes all five sections in one transaction.
+ * Writes all six sections in one transaction.
  *
- * All five every time, rather than only the ones a patch named: the table's
+ * All six every time, rather than only the ones a patch named: the table's
  * meaning is "what this project is configured to", and a half-written table
  * would let a later read pick up four current sections and one stale one.
  */
