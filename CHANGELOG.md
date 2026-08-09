@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.1 — 2026-08-09 — registry-ready polish
+
+- EXTO template mode: capture your registry workbook layout into the local profile;
+  exports reproduce it exactly (headers, width, row position), unmatched columns stay
+  blank, register cells blank by default (legacy N/A behind an option).
+- WBS learned table keyed on System Key with the 0.9 gate; model-first property mappings
+  for WBS, Item Master, and Equipment Classification (model value wins over learned).
+- Item-master audit narrowed to whole segments with family-aware GEAR handling.
+- Project schema v3 (template config + wbs learned kind), migration with backup.
+- Suite: 1737 tests, 0 failures.
+
 ## Unreleased — registry-ready
 
 The EXTO deliverable comes out looking like the register the site already keeps.
