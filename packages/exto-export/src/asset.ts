@@ -45,10 +45,11 @@ export interface ItemMasterAsset {
  * the same asset that was handed to {@link assignItemMaster} is the one whose
  * row carries the answer.
  *
- * `description` and `ssmDiscipline` are inherited for the item-master layer's
- * sake and are deliberately *not* printed — the donor's Rev21 column map
- * positions no cell for them (see `EXTO_REV21_COLUMNS`), and inventing one
- * would be a column no template revision asked for.
+ * `ssmDiscipline` is both an item-master key and the Discipline column, so it is
+ * read twice and stated once. `description` is inherited for the item-master
+ * layer's sake alone and is deliberately *not* printed — the Rev21 map positions
+ * no cell this package fills from it, and inventing one would be a column no
+ * template revision asked for.
  */
 export interface ExtoAsset extends ItemMasterAsset {
   /**
@@ -65,4 +66,16 @@ export interface ExtoAsset extends ItemMasterAsset {
   readonly itemMaster?: string;
   /** The L2 milestone label, if the schedule layer resolved one. */
   readonly milestoneLabel?: string;
+  /* ---- the positioned generic columns (see `columns.ts`) ---- */
+  readonly building?: string;
+  readonly level?: string;
+  readonly grid?: string;
+  /**
+   * The work-breakdown code, however the caller settled it — a mapped model
+   * property or the learned table in `wbs.ts`. Text, never a number: a code with
+   * a leading zero is not the integer that follows it.
+   */
+  readonly wbs?: string;
+  readonly manufacturer?: string;
+  readonly modelNumber?: string;
 }

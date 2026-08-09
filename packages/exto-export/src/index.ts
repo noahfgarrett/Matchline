@@ -8,28 +8,39 @@
  * every plain SSM and MEL output. Nothing here is on the critical path of the
  * compiler.
  *
- * Three layers, each usable alone:
+ * Five layers, each usable alone:
  *
  * - {@link trainItemMasterTable} / {@link assignItemMaster} — the donor's
  *   learned `(discipline, class, UPN)` and `(discipline, UPN, description word)`
  *   rungs, gated at 0.9 confidence. Above the gate, an assignment with its
  *   rule, confidence and sample count; below it, a review proposal with the
  *   candidates the registry disagreed between; never a guess.
+ * - {@link trainWbsTable} / {@link assignWbs} — the same discipline for the
+ *   work-breakdown code, on one rung keyed by System Key alone. `wbs.ts` says
+ *   why that key and no other, and why a richer one would be overfitting.
+ * - {@link analyzeExtoTemplate} — captures a site's own registry layout, so the
+ *   export comes out on *its* columns rather than Matchline's. Anything
+ *   site-specific about the delivered sheet arrives this way and is stored in
+ *   the project file; nothing site-specific is compiled into this package.
  * - {@link buildExtoRows} — assets → ordered typed rows on the Rev21 column map.
  *   Pure, no workbook involved; this is what a preview grid or a diff should
  *   read.
  * - {@link writeExtoWorkbook} — the same rows as .xlsx bytes, written through
- *   `@matchline/spreadsheet-import`'s vendored SheetJS. Every cell is text, and
- *   the bytes are stable across runs.
+ *   `@matchline/spreadsheet-import`'s vendored SheetJS. Every cell is text, the
+ *   bytes are stable across runs, and a captured template is honoured exactly:
+ *   its headers, its width, its header row, and every column it did not name
+ *   left empty.
  *
- * {@link ItemMasterTable} is a plain JSON value and persists in a Site Profile
- * beside a `LearnedRuleSet`; {@link validateItemMasterTable} is the guard on the
- * way back in.
+ * {@link ItemMasterTable}, {@link WbsTable} and {@link ExtoTemplate} are plain
+ * JSON values and persist in a project file beside a `LearnedRuleSet`;
+ * {@link validateItemMasterTable}, {@link validateWbsTable} and
+ * {@link validateExtoTemplate} are the guards on the way back in.
  */
 
 export type { ExtoAsset, ItemMasterAsset } from './asset.js';
 
 export {
+  EXTO_FIELDS,
   EXTO_FIRST_DATA_ROW_INDEX,
   EXTO_HEADER_ROW_INDEX,
   EXTO_REV21_COLUMNS,
@@ -37,17 +48,54 @@ export {
   extoCellRow,
   extoHeaderRow,
   extoSpacerRow,
+  isExtoField,
 } from './columns.js';
 export type { ExtoCells, ExtoColumn, ExtoField } from './columns.js';
+
+export { ExtoExportError, describeExtoExportReason } from './errors.js';
+export type { ExtoExportReason } from './errors.js';
 
 export {
   DEFAULT_EXTO_SHEET_NAME,
   EXTO_BLANK_REGISTER_VALUE,
   buildExtoRows,
   extoAoa,
+  extoTemplateAoa,
   writeExtoWorkbook,
 } from './exto.js';
-export type { BuildExtoRowsOptions, ExtoRow, WriteExtoWorkbookOptions } from './exto.js';
+export type {
+  BuildExtoRowsOptions,
+  ExtoRegisterBlanks,
+  ExtoRow,
+  WriteExtoWorkbookOptions,
+} from './exto.js';
+
+export {
+  EXTO_TEMPLATE_HEADER_SCAN_ROWS,
+  analyzeExtoTemplate,
+  validateExtoTemplate,
+} from './template.js';
+export type {
+  AnalyzeExtoTemplateOptions,
+  ExtoHeaderMatch,
+  ExtoTemplate,
+  ExtoTemplateBinding,
+} from './template.js';
+
+export {
+  WBS_MIN_CONFIDENCE,
+  WBS_PROPOSAL_CANDIDATES,
+  assignWbs,
+  trainWbsTable,
+  validateWbsTable,
+} from './wbs.js';
+export type {
+  TrainWbsOptions,
+  WbsAssignment,
+  WbsEntry,
+  WbsTable,
+  WbsTrainingRow,
+} from './wbs.js';
 
 export {
   ITEM_MASTER_MIN_CONFIDENCE,

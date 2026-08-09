@@ -14,10 +14,24 @@
  * ## This is a positional map, not a header list
  *
  * The Standardized Upload File Template Rev21 is a wide sheet whose columns are
- * fixed by position. The donor writes exactly the seven it knows and leaves
- * every other column of the 40 blank, because a template column it cannot fill
- * honestly is better left empty than invented. This port does the same: seven
- * columns, at these indices, and nothing else.
+ * fixed by position. The donor wrote exactly the seven it knew and left every
+ * other column of the 40 blank, because a template column it cannot fill
+ * honestly is better left empty than invented.
+ *
+ * ## The generic default, and where a site's own layout comes from
+ *
+ * The seven donor columns are joined here by eight more that the Rev21
+ * vocabulary positions and Matchline can fill from facts it already holds:
+ * Building, Level and Grid, Discipline, WBS, System Name, Manufacturer and Model
+ * Number. Every one is generic Rev21 wording, and every one is still subject to
+ * the donor's rule — a column with nothing truthful to put in it comes out
+ * blank.
+ *
+ * This list is the *default*, for a project that has captured no template. A
+ * site whose sheet is a different width, or spells a header differently, or puts
+ * its headers on a different row, supplies that sheet once and `template.ts`
+ * captures it; from then on the export is written on the captured layout and
+ * this map is not consulted. Nothing site-specific is ever added here.
  *
  * The donor's own header comment above `addExtoSheet` says "Dependencies → AM".
  * The code says 39, which is column **AN**. The code is the contract — the
@@ -39,23 +53,36 @@
  */
 
 /**
- * One row of the EXTO upload sheet: the seven cells the Rev21 map positions.
+ * One row of the EXTO upload sheet: the cells the Rev21 map positions.
  *
  * All members are required and all are strings; a value no source stated is the
- * empty string (or `'N/A'`, for the two columns whose Rev21 convention is to
- * spell a blank out loud), never `undefined`.
+ * empty string, never `undefined`. The two register columns — Closest Parent and
+ * Dependencies — can be rendered `'N/A'` instead of blank by opting into the
+ * legacy convention (see {@link BuildExtoRowsOptions.registerBlanks}); blank is
+ * the default, which is what a Rev21 sheet actually carries.
  */
 export interface ExtoCells {
   /** Rev21 "UPN" — Matchline's System Key (PRODUCT.md §2.3). */
   readonly upn: string;
   readonly equipmentId: string;
-  /** `'N/A'` when the asset is a root and no System Name stands in for one. */
+  /** Blank when the asset is a root and no System Name stands in for one. */
   readonly closestParent: string;
   readonly milestone: string;
   readonly itemMaster: string;
   readonly equipmentClassification: string;
-  /** `'N/A'` when the asset has no dependencies. */
+  /** Blank when the asset has no dependencies. */
   readonly dependencies: string;
+  /* ---- the positioned generic columns (see the module note) ---- */
+  readonly building: string;
+  readonly level: string;
+  readonly grid: string;
+  readonly discipline: string;
+  /** Rev21 "WBS" — the work-breakdown code, four-digit text. */
+  readonly wbs: string;
+  /** Rev21 "System Name": the System Key and its description, as one label. */
+  readonly systemName: string;
+  readonly manufacturer: string;
+  readonly modelNumber: string;
 }
 
 /** A field of {@link ExtoCells}, usable as a column key. */
@@ -79,14 +106,37 @@ export interface ExtoColumn {
  * moves a column has to move it here, visibly, in a diff.
  */
 export const EXTO_REV21_COLUMNS = [
+  { field: 'building', header: 'Building', columnIndex: 3 },
+  { field: 'level', header: 'Level', columnIndex: 4 },
+  { field: 'grid', header: 'Grid', columnIndex: 5 },
   { field: 'upn', header: 'UPN', columnIndex: 6 },
+  { field: 'discipline', header: 'Discipline', columnIndex: 7 },
+  { field: 'wbs', header: 'WBS', columnIndex: 8 },
+  { field: 'systemName', header: 'System Name', columnIndex: 9 },
   { field: 'equipmentId', header: 'Equipment ID', columnIndex: 10 },
+  { field: 'manufacturer', header: 'Manufacturer', columnIndex: 12 },
+  { field: 'modelNumber', header: 'Model Number', columnIndex: 13 },
   { field: 'closestParent', header: 'Closest Parent', columnIndex: 15 },
   { field: 'milestone', header: 'Milestone', columnIndex: 24 },
   { field: 'itemMaster', header: 'Item Master Unique Identifier', columnIndex: 26 },
   { field: 'equipmentClassification', header: 'Equipment Classification', columnIndex: 35 },
   { field: 'dependencies', header: 'Dependencies', columnIndex: 39 },
 ] as const satisfies ReadonlyArray<ExtoColumn>;
+
+/**
+ * Every field, for validating a stored template's `matched` list on the way in.
+ *
+ * Derived from the column list rather than restated, so the two can never
+ * disagree about what a field is.
+ */
+export const EXTO_FIELDS: ReadonlyArray<ExtoField> = EXTO_REV21_COLUMNS.map(
+  (column) => column.field,
+);
+
+/** Narrows arbitrary text — a stored template, an IPC payload — to a field. */
+export function isExtoField(value: string): value is ExtoField {
+  return (EXTO_FIELDS as ReadonlyArray<string>).includes(value);
+}
 
 /** Sheet width: the donor's `W = Math.max(...indices) + 1`. */
 export const EXTO_REV21_WIDTH: number =

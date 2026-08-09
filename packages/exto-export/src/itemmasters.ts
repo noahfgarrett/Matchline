@@ -293,22 +293,102 @@ const SUSPECT_DETAIL: Readonly<Record<SuspectRowReason, string>> = {
 };
 
 /**
- * Donor `suspectRegistryRow`, ported rule for rule.
+ * Item-master names are underscore-separated, and the segment after the prefix
+ * says which discipline family the name belongs to.
  *
- * Blank and `*blank*` names are bulk-fill artifacts; a `GEAR`/`XFMR`/`SWGR`
+ * Two prefixes exist. A universal name is `VF_<family>_…`, so the family is
+ * segment 1. A legacy site-scoped name is `CA_<site>_<family>_…`, so the family
+ * is segment 2 — which is exactly what the CA→VF rewrite above assumes when it
+ * turns `CA_<site>_<rest>` into `VF_<rest>`. The donor's own worked example,
+ * `CA_NB_EL_MV_GEAR` → `VF_EL_MV_GEAR`, is that structure in both spellings.
+ *
+ * Returns `''` for anything that is neither shape, which reads as "this name
+ * states no family" and never as a match.
+ */
+function familySegment(itemMaster: string): string {
+  const segments = itemMaster.split('_');
+  if (segments.length < 2) return '';
+  const prefix = (segments[0] ?? '').toUpperCase();
+  if (prefix === 'VF') return (segments[1] ?? '').toUpperCase();
+  if (prefix === 'CA') return (segments[2] ?? '').toUpperCase();
+  return '';
+}
+
+/** The family segment that means electrical. */
+const ELECTRICAL_FAMILY = 'EL';
+
+/**
+ * Apparatus that is electrical whatever else a name says: a transformer and
+ * switchgear. Neither word has a non-electrical trade meaning, so finding one on
+ * non-electrical equipment is a misfiling regardless of the name's family.
+ */
+const ELECTRICAL_APPARATUS = ['XFMR', 'SWGR'];
+
+/**
+ * `GEAR` is not in that list because it is not that kind of word.
+ *
+ * It means switchgear inside an electrical name and it means a gearbox, a gear
+ * pump or a gear reducer inside a mechanical one, and no amount of looking at
+ * the four letters tells the two apart. What does tell them apart is the family
+ * segment the name already carries — so `GEAR` counts as electrical evidence
+ * only in an electrical-family name.
+ */
+const ELECTRICAL_GEAR = 'GEAR';
+
+function isElectricalDiscipline(discipline: string): boolean {
+  return clean(discipline).toUpperCase().includes('ELECTRICAL');
+}
+
+/**
+ * Donor `suspectRegistryRow`, narrowed on two measured points.
+ *
+ * Blank and `*blank*` names are bulk-fill artifacts. An electrical-apparatus
  * master on equipment whose discipline is not electrical is somebody's
  * copy-paste. Neither is evidence about what the equipment is, so neither is
  * learned from — but both are reported, because a registry full of them is a
- * fact about the registry.
+ * fact about the registry, and one worth showing a reviewer.
+ *
+ * ## The two narrowings, and why each is safe
+ *
+ * The donor tested `/GEAR|XFMR|SWGR/i` against the whole name, as a substring.
+ * This port requires a **whole underscore-delimited segment**. A substring test
+ * fires on any name that merely contains the letters — a mechanical `…_GEARBOX_…`
+ * would be audited out for spelling — while these names are segmented by
+ * construction and the token is always a segment when it is meant. Measured
+ * against a real 18k-row registry this changes nothing at all: every occurrence
+ * of all three tokens there is already a whole segment. It is a narrowing of what
+ * the rule *can* wrongly catch, not of what it does catch.
+ *
+ * The second narrowing is the one with a judgement in it. `XFMR` and `SWGR` stay
+ * unconditional; `GEAR` additionally requires the name's own family segment to be
+ * the electrical one, for the reason {@link ELECTRICAL_GEAR} sets out. On the
+ * same registry this also changes nothing — every `GEAR`-bearing name there is
+ * already electrical-family — so it costs no recall today and stops a mechanical
+ * gearbox master being called misfiled tomorrow.
+ *
+ * What the rule still catches on that registry, and should: one legacy
+ * electrical-switchgear master bulk-filled across several thousand rows of
+ * valves, transmitters and pumps. Learning from those would teach that a
+ * pressure transmitter's item master is switchgear, and then assign it. Roughly
+ * a fifth of that registry is audited out on this rule alone, and every one of
+ * those rows is a row it is right about.
  */
 export function suspectRowReason(
   row: Pick<ItemMasterTrainingRow, 'itemMaster' | 'discipline'>,
 ): SuspectRowReason | null {
   const itemMaster = clean(row.itemMaster);
-  const discipline = clean(row.discipline).toUpperCase();
   if (itemMaster === '') return 'blank-item-master';
   if (/blank/i.test(itemMaster)) return 'placeholder-item-master';
-  if (/GEAR|XFMR|SWGR/i.test(itemMaster) && !discipline.includes('ELECTRICAL')) {
+  if (isElectricalDiscipline(row.discipline)) return null;
+
+  const segments = itemMaster.split('_').map((segment) => segment.toUpperCase());
+  if (segments.some((segment) => ELECTRICAL_APPARATUS.includes(segment))) {
+    return 'electrical-gear-on-non-electrical';
+  }
+  if (
+    segments.includes(ELECTRICAL_GEAR) &&
+    familySegment(itemMaster) === ELECTRICAL_FAMILY
+  ) {
     return 'electrical-gear-on-non-electrical';
   }
   return null;
