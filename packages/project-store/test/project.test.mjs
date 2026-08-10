@@ -62,11 +62,15 @@ test('a project survives a close and reopen', () => {
   const path = temp.file('roundtrip.matchline');
   const clock = steppingClock();
   const created = createProject(path, { name: 'Dragon', now: clock });
-  created.upsertSource({
+  created.upsertSourceV4({
+    sourceId: 'model:dragon-coordination.nwd',
     role: 'model',
-    fileName: 'Dragon-Coordination.nwd',
-    sha256: 'a'.repeat(64),
-    byteSize: 104857600,
+    logicalName: 'Dragon-Coordination.nwd',
+    rawFileName: 'Dragon-Coordination.nwd',
+    rawSha256: 'a'.repeat(64),
+    rawByteSize: 104857600,
+    derivedCacheSha256: 'a'.repeat(64),
+    addedAt: '2026-01-15T09:30:01.000Z',
   });
   const createdMeta = created.meta();
   created.close();
@@ -85,9 +89,6 @@ test('a project survives a close and reopen', () => {
         rawByteSize: 104857600,
         derivedCacheSha256: 'a'.repeat(64),
         addedAt: '2026-01-15T09:30:01.000Z',
-        fileName: 'Dragon-Coordination.nwd',
-        sha256: 'a'.repeat(64),
-        byteSize: 104857600,
       },
     ]);
   } finally {

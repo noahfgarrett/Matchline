@@ -6,7 +6,7 @@ import type {
   WireConfigPatch,
   WireDraftPatch,
   WireDraftProfile,
-  WireModelScan,
+  WireModelUniverse,
   WireProjectConfig,
   WireProjectSummary,
   WirePropertyCatalogRow,
@@ -61,7 +61,8 @@ export interface WizardContext {
   readonly config: WireProjectConfig;
   readonly properties: readonly WirePropertyCatalogRow[];
   readonly classes: readonly WireClassCount[];
-  readonly scan: WireModelScan | null;
+  /** Every ready model source and the totals over them; `null` when none is. */
+  readonly universe: WireModelUniverse | null;
   readonly sources: readonly WireSourceSummary[];
   /**
    * Writes one section, computed from the draft as it stands *now*.
@@ -99,7 +100,7 @@ export function Wizard({
   const [config, setConfig] = useState<WireProjectConfig | null>(null);
   const [savedRevision, setSavedRevision] = useState<number | null>(project.savedRevision);
   const [sources, setSources] = useState<readonly WireSourceSummary[]>([]);
-  const [scan, setScan] = useState<WireModelScan | null>(null);
+  const [universe, setUniverse] = useState<WireModelUniverse | null>(null);
   const [properties, setProperties] = useState<readonly WirePropertyCatalogRow[]>([]);
   const [classes, setClasses] = useState<readonly WireClassCount[]>([]);
   const [compileStatus, setCompileStatus] = useState<WireCompileStatus>({ state: 'never-run' });
@@ -124,9 +125,9 @@ export function Wizard({
    */
   const refreshModel = useCallback(async (): Promise<void> => {
     const scanned = await call(window.matchline.model.scan());
-    setScan(scanned.scan);
+    setUniverse(scanned.universe);
 
-    if (scanned.scan === null) {
+    if (scanned.universe === null) {
       setProperties([]);
       setClasses([]);
       return;
@@ -269,8 +270,8 @@ export function Wizard({
     (): WizardContext | null =>
       draft === null || config === null
         ? null
-        : { draft, config, properties, classes, scan, sources, update, updateConfig, refreshModel },
-    [draft, config, properties, classes, scan, sources, update, updateConfig, refreshModel],
+        : { draft, config, properties, classes, universe, sources, update, updateConfig, refreshModel },
+    [draft, config, properties, classes, universe, sources, update, updateConfig, refreshModel],
   );
 
   const refreshSourcesAndModel = useCallback(async (): Promise<void> => {

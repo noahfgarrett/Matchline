@@ -129,6 +129,20 @@ export interface CompileProjectInput {
   readonly sources: ReadonlyArray<ModelSourceInput>;
   readonly profile: SiteProfile;
   readonly hierarchy: HierarchyConfig;
+  /**
+   * Whether to build {@link CompiledProject.propertyCatalog}. Off by default.
+   *
+   * The catalog is the one stage output nothing downstream consumes, and it
+   * costs a full streaming pass over every cache in the universe -- on a
+   * multi-cache project that is the single most expensive thing a compile does
+   * for a value most compiles throw away. A Site Profile Studio asks for it;
+   * screen 8 does not, and neither does an export or a revision diff.
+   *
+   * Absent means an empty `propertyCatalog`, never a missing field: a consumer
+   * that did not ask reads "no entries", which is what it would have to handle
+   * for an empty universe anyway.
+   */
+  readonly includePropertyCatalog?: boolean;
   /** Parent ladder walk order. Defaults to `@matchline/ssm-compiler`'s. */
   readonly ladder?: ParentLadderConfig;
   /** Taught role pairings. Without one, no family rung produces a claim. */
@@ -254,7 +268,11 @@ export interface CompiledProject {
    * Ordered by overall coverage descending, then category and name. This is the
    * one stage output nothing downstream consumes -- it is published because a
    * Site Profile Studio built on one file's catalog cannot answer "which source
-   * is the one missing the tag", and it costs one streaming pass per cache.
+   * is the one missing the tag".
+   *
+   * Empty unless {@link CompileProjectInput.includePropertyCatalog} asked for
+   * it: it costs one streaming pass per cache, and a compile that is not
+   * feeding a property picker has no use for it.
    */
   readonly propertyCatalog: ReadonlyArray<UniversePropertyCatalogEntry>;
   /** Stage 2: one property-bag subject per asset, in catalog order. */

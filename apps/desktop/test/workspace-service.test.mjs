@@ -1147,7 +1147,7 @@ test('a connectivity source whose file has gone is named, not skipped', () => {
     const status = service.compile();
     assert.equal(status.state, 'failed');
     assert.match(status.reason, /Moved-EasyPower\.xlsx/);
-    assert.match(status.reason, /cannot find/);
+    assert.match(status.reason, /cannot read/);
   } finally {
     service.close();
   }

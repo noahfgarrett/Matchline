@@ -327,12 +327,25 @@ export type WireSheetSummary = z.infer<typeof sheetSummarySchema>;
 /**
  * One registered source, as the renderer sees it. Summary only — no rows, no
  * objects, no cached tables cross IPC (APP.md "IPC contract").
+ *
+ * Keyed by `sourceId`, never by file name: a project may hold two files called
+ * `Level 1.nwc` and both are real (P0-1, hard gate 4). `rawFileName` is what
+ * the file called itself and is not unique; `logicalName` is what a person
+ * calls this source and starts equal to it.
  */
 export const sourceSummarySchema = z.object({
+  sourceId: z.string().min(1),
   role: sourceRoleSchema,
-  fileName: z.string().min(1),
-  sha256: z.string().length(64),
-  byteSize: z.number().int().nonnegative(),
+  logicalName: z.string().min(1),
+  rawFileName: z.string().min(1),
+  rawSha256: z.string().length(64),
+  rawByteSize: z.number().int().nonnegative(),
+  /**
+   * The hash of the extraction cache derived from this file, or `null` when
+   * none has been associated — which is what a raw `.nwd` is until the
+   * extraction service has run (P0-2).
+   */
+  derivedCacheSha256: z.string().length(64).nullable(),
   addedAt: z.string().min(1),
   status: sourceStatusSchema,
   /** One plain-language line about what this file is and what happens next. */
@@ -361,8 +374,13 @@ export const sourceModelSummarySchema = z.object({
 });
 export type WireSourceModelSummary = z.infer<typeof sourceModelSummarySchema>;
 
+/** What one open model source's cache contains. One row of the universe. */
 export const modelScanSchema = z.object({
-  fileName: z.string().min(1),
+  sourceId: z.string().min(1),
+  /** What a person calls this source. */
+  displayName: z.string().min(1),
+  /** The file the cache was registered from. Never unique across sources. */
+  rawFileName: z.string().min(1),
   objectCount: z.number().int().nonnegative(),
   propertyNameCount: z.number().int().nonnegative(),
   sourceModels: z.array(sourceModelSummarySchema),
@@ -371,6 +389,23 @@ export const modelScanSchema = z.object({
   warningCount: z.number().int().nonnegative(),
 });
 export type WireModelScan = z.infer<typeof modelScanSchema>;
+
+/**
+ * Every ready model source, and the universe totals over them (P0-1).
+ *
+ * `propertyNameCount` is the count of distinct `(category, name)` pairs across
+ * the whole universe, which is smaller than the sum of the per-source counts
+ * whenever two sources carry the same property — the number screen 2's Property
+ * Catalog is actually a list of.
+ */
+export const modelUniverseSchema = z.object({
+  sourceCount: z.number().int().nonnegative(),
+  objectCount: z.number().int().nonnegative(),
+  propertyNameCount: z.number().int().nonnegative(),
+  warningCount: z.number().int().nonnegative(),
+  sources: z.array(modelScanSchema),
+});
+export type WireModelUniverse = z.infer<typeof modelUniverseSchema>;
 
 /**
  * The roles Screen 2 is willing to *suggest*.
@@ -383,16 +418,40 @@ export type WireModelScan = z.infer<typeof modelScanSchema>;
 export const suggestedRoleSchema = z.enum(['equipment-tag', 'building', 'description']);
 export type WireSuggestedRole = z.infer<typeof suggestedRoleSchema>;
 
+/**
+ * How much of one model source carries one property.
+ *
+ * Overall coverage and per-source coverage are different facts and neither can
+ * be derived from the other (P0-1): 60% overall reads one way when every source
+ * is at 60% and quite another when one is at 100% and the next at 0% — and the
+ * second is the case where a person has a file to go and fix.
+ */
+export const propertySourceCoverageSchema = z.object({
+  sourceId: z.string().min(1),
+  /** The short name the disclosure prints, derived from the source id in main. */
+  label: z.string().min(1),
+  objectCount: z.number().int().nonnegative(),
+  /** `objectCount` over this source's own object count, 0..1. */
+  coverage: z.number(),
+});
+export type WirePropertySourceCoverage = z.infer<typeof propertySourceCoverageSchema>;
+
 export const propertyCatalogRowSchema = z.object({
   category: z.string(),
   name: z.string(),
   objectCount: z.number().int().nonnegative(),
-  /** `objectCount / totalObjects`, 0..1. */
+  /** `objectCount / totalObjects`, 0..1. Across the whole universe. */
   coverage: z.number(),
   distinctValueCount: z.number().int().nonnegative(),
-  /** Up to three, first-seen in object order. */
+  /** Up to three, first-seen in source-id then object order. */
   examples: z.array(z.string()),
   suggestedRole: suggestedRoleSchema.nullable(),
+  /**
+   * Coverage per model source, in source-id order. One entry per source that
+   * carries the property at all; a source absent from this list is at zero,
+   * which is exactly the disclosure a coordinator needs.
+   */
+  bySource: z.array(propertySourceCoverageSchema),
 });
 export type WirePropertyCatalogRow = z.infer<typeof propertyCatalogRowSchema>;
 
@@ -425,8 +484,29 @@ export const sampleAssetSchema = z.object({
   building: z.string(),
   objectCount: z.number().int().positive(),
   status: z.string().min(1),
+  /** Which model source this asset was read from. */
+  sourceId: z.string().min(1),
 });
 export type WireSampleAsset = z.infer<typeof sampleAssetSchema>;
+
+/**
+ * The same inclusion impact for one source (P0-1).
+ *
+ * "42 objects left" is not actionable in a universe: the first question is
+ * which file they left, and that is the only question this answers. No
+ * duplicate count — a duplicated tag is a fact about the universe, and a
+ * per-source number would read as "this file has duplicates" when the other
+ * claimant is in another file entirely.
+ */
+export const sourceImpactSchema = z.object({
+  sourceId: z.string().min(1),
+  label: z.string().min(1),
+  totalObjects: z.number().int().nonnegative(),
+  collapsedCount: z.number().int().nonnegative(),
+  finalAssetCount: z.number().int().nonnegative(),
+  untaggedDroppedCount: z.number().int().nonnegative(),
+});
+export type WireSourceImpact = z.infer<typeof sourceImpactSchema>;
 
 export const assetPreviewSchema = z.discriminatedUnion('state', [
   z.object({ state: z.literal('blocked'), reason: z.string().min(1) }),
@@ -439,6 +519,8 @@ export const assetPreviewSchema = z.discriminatedUnion('state', [
     duplicateTagCount: z.number().int().nonnegative(),
     untaggedDroppedCount: z.number().int().nonnegative(),
     samples: z.array(sampleAssetSchema),
+    /** The same numbers per model source, in source-id order. */
+    bySource: z.array(sourceImpactSchema),
   }),
 ]);
 export type WireAssetPreview = z.infer<typeof assetPreviewSchema>;
@@ -504,6 +586,8 @@ export type WireRungUsage = z.infer<typeof rungUsageSchema>;
 
 export const resolvedSampleSchema = z.object({
   assetId: z.string().min(1),
+  /** Which model source the subject was read from. */
+  sourceId: z.string().min(1),
   canonicalTag: z.string(),
   systemKey: z.string(),
   systemDescription: z.string(),

@@ -1,17 +1,27 @@
-import type { PropertyCatalogEntry } from '@matchline/model-schema';
+import type { UniversePropertyCatalogEntry } from '@matchline/asset-catalog';
 
 import type {
   WirePropertyCatalogRow,
   WirePropertySort,
+  WirePropertySourceCoverage,
   WireSuggestedRole,
 } from '../../shared/schemas.js';
 
 /**
  * Screen 2: one window of the Property Catalog, plus the name-based hints.
  *
- * The catalog itself is a full scan of the extraction cache and stays in main;
- * the renderer's virtual list asks for the rows it is about to draw and nothing
- * else (APP.md "IPC contract").
+ * The catalog is a full scan of every extraction cache in the universe and
+ * stays in main; the renderer's virtual list asks for the rows it is about to
+ * draw and nothing else (APP.md "IPC contract").
+ *
+ * ## One catalog over many sources
+ *
+ * The rows are `@matchline/asset-catalog`'s `UniversePropertyCatalogEntry`, so
+ * a row's coverage is coverage across the whole project and `bySource` is the
+ * same fact per file (P0-1). Both are shown, because neither is derivable from
+ * the other: a tag property at 60% overall is a mapping worth making when every
+ * source is at 60%, and a missing export when one source is at 100% and the
+ * next at 0%.
  *
  * ## What "suggested role" is, and what it is not
  *
@@ -83,7 +93,7 @@ export function suggestedRoleFor(propertyName: string): WireSuggestedRole | null
   return null;
 }
 
-function matchesSearch(entry: PropertyCatalogEntry, needle: string): boolean {
+function matchesSearch(entry: UniversePropertyCatalogEntry, needle: string): boolean {
   if (needle === '') {
     return true;
   }
@@ -101,8 +111,8 @@ function matchesSearch(entry: PropertyCatalogEntry, needle: string): boolean {
  * fetches looks broken even when the numbers are right.
  */
 function compare(
-  left: PropertyCatalogEntry,
-  right: PropertyCatalogEntry,
+  left: UniversePropertyCatalogEntry,
+  right: UniversePropertyCatalogEntry,
   sortBy: WirePropertySort,
 ): number {
   switch (sortBy) {
@@ -133,17 +143,22 @@ function compare(
   return left.category.localeCompare(right.category) || left.name.localeCompare(right.name);
 }
 
+/**
+ * @param sourceLabels short display name per source id
+ * ({@link shortSourceLabels}). A source id with no label prints as itself
+ * rather than as nothing.
+ */
 export function catalogPage(
-  catalog: readonly PropertyCatalogEntry[],
-  totalObjects: number,
+  catalog: readonly UniversePropertyCatalogEntry[],
+  sourceLabels: ReadonlyMap<string, string>,
   request: PropertyPageRequest,
 ): { readonly total: number; readonly rows: readonly WirePropertyCatalogRow[] } {
-  const filtered = catalog.filter((entry: PropertyCatalogEntry): boolean =>
+  const filtered = catalog.filter((entry: UniversePropertyCatalogEntry): boolean =>
     matchesSearch(entry, request.search.trim()),
   );
 
   const sorted = [...filtered].sort(
-    (left: PropertyCatalogEntry, right: PropertyCatalogEntry): number => {
+    (left: UniversePropertyCatalogEntry, right: UniversePropertyCatalogEntry): number => {
       const order = compare(left, right, request.sortBy);
       return request.descending ? -order : order;
     },
@@ -151,15 +166,31 @@ export function catalogPage(
 
   const rows = sorted
     .slice(request.offset, request.offset + request.limit)
-    .map((entry: PropertyCatalogEntry): WirePropertyCatalogRow => {
+    .map((entry: UniversePropertyCatalogEntry): WirePropertyCatalogRow => {
+      const bySource: WirePropertySourceCoverage[] = [];
+      // `bySource` is keyed by source id ascending by construction
+      // (`buildUniversePropertyCatalog`), so the disclosure prints in a stable
+      // order without a second sort.
+      for (const [sourceId, coverage] of entry.bySource) {
+        bySource.push({
+          sourceId,
+          label: sourceLabels.get(sourceId) ?? sourceId,
+          objectCount: coverage.objectCount,
+          coverage: coverage.objectFraction,
+        });
+      }
+
       return {
         category: entry.category,
         name: entry.name,
         objectCount: entry.objectCount,
-        coverage: totalObjects === 0 ? 0 : entry.objectCount / totalObjects,
+        // The universe's own fraction, not a recount: a page must never
+        // disagree with the catalog it is a window onto.
+        coverage: entry.objectFraction,
         distinctValueCount: entry.distinctValueCount,
         examples: entry.exampleValues.slice(0, EXAMPLE_LIMIT),
         suggestedRole: suggestedRoleFor(entry.name),
+        bySource,
       };
     });
 

@@ -214,11 +214,11 @@ export function createSessionHandlers(
     async 'source:remove'(
       request: IpcRequest<'source:remove'>,
     ): Promise<IpcResponse<'source:remove'>> {
-      return { removed: guard(() => service.removeSource(request.role, request.fileName)) };
+      return { removed: guard(() => service.removeSource(request.sourceId)) };
     },
 
     async 'model:scan'(): Promise<IpcResponse<'model:scan'>> {
-      return { scan: guard(() => service.modelScan()) };
+      return { universe: guard(() => service.modelUniverse()) };
     },
 
     async 'model:property-page'(

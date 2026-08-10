@@ -35,11 +35,14 @@ function seededProject(name) {
   const path = temp.file(name);
   const store = createProject(path, { name: 'Dragon', now: steppingClock() });
   store.saveProfile(dragonProfile(), 'initial import');
-  store.upsertSource({
+  store.upsertSourceV4({
+    sourceId: 'model:dragon-coordination.nwd',
     role: 'model',
-    fileName: 'Dragon-Coordination.nwd',
-    sha256: digest('dragoncoordination'),
-    byteSize: 104857600,
+    logicalName: 'Dragon-Coordination.nwd',
+    rawFileName: 'Dragon-Coordination.nwd',
+    rawSha256: digest('dragoncoordination'),
+    rawByteSize: 104857600,
+    derivedCacheSha256: digest('dragoncoordination'),
     addedAt: '2026-01-15T09:00:00.000Z',
   });
   store.close();

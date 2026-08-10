@@ -20,6 +20,7 @@ import type {
   WireResolverPreview,
   WireRungUsage,
   WireSampleAsset,
+  WireSourceImpact,
   WireSystemConflict,
   WireTagAnatomy,
 } from '../../shared/schemas.js';
@@ -65,10 +66,18 @@ function sampleAssetOf(asset: ModelAsset): WireSampleAsset {
     building: asset.building ?? '',
     objectCount: asset.objectIds.length,
     status: asset.status,
+    sourceId: asset.sourceId,
   };
 }
 
-export function buildAssetPreview(catalog: AssetCatalog): WireAssetPreview {
+/**
+ * @param sourceLabels short display name per source id, for the per-source
+ * breakdown. A source with no label prints as its own id.
+ */
+export function buildAssetPreview(
+  catalog: AssetCatalog,
+  sourceLabels: ReadonlyMap<string, string>,
+): WireAssetPreview {
   const impact = catalog.impact;
 
   const stages: WireFilterStage[] = impact.candidatesAfterEachFilter.map(
@@ -81,6 +90,20 @@ export function buildAssetPreview(catalog: AssetCatalog): WireAssetPreview {
     }),
   );
 
+  // `impact.bySource` is keyed by source id ascending by construction, so the
+  // rows print in the same order every time without a second sort.
+  const bySource: WireSourceImpact[] = [];
+  for (const [sourceId, source] of impact.bySource) {
+    bySource.push({
+      sourceId,
+      label: sourceLabels.get(sourceId) ?? sourceId,
+      totalObjects: source.totalObjects,
+      collapsedCount: source.collapsedCount,
+      finalAssetCount: source.finalAssetCount,
+      untaggedDroppedCount: source.untaggedDroppedCount,
+    });
+  }
+
   return {
     state: 'ready',
     totalObjects: impact.totalObjects,
@@ -90,6 +113,7 @@ export function buildAssetPreview(catalog: AssetCatalog): WireAssetPreview {
     duplicateTagCount: impact.duplicateTagCount,
     untaggedDroppedCount: impact.untaggedDroppedCount,
     samples: catalog.assets.slice(0, SAMPLE_LIMIT).map(sampleAssetOf),
+    bySource,
   };
 }
 
@@ -245,6 +269,15 @@ export function buildResolverPreview(
       asset.canonicalTag,
     ]),
   );
+  // Which file a sampled subject came out of. A resolver preview over a
+  // universe has to be able to say "this key came from the controls model",
+  // and an asset id only names a source when its tag is duplicated.
+  const sourceOf = new Map<string, string>(
+    catalog.assets.map((asset: ModelAsset): readonly [string, string] => [
+      asset.assetId,
+      asset.sourceId,
+    ]),
+  );
 
   const tallies = new Map<string, RungTally>();
   const bump = (
@@ -316,6 +349,8 @@ export function buildResolverPreview(
       const keyClaim = resolution.keyClaim;
       samples.push({
         assetId: subject.assetId,
+        // Unreachable: every subject was built from a catalog asset above.
+        sourceId: sourceOf.get(subject.assetId) ?? subject.assetId,
         canonicalTag,
         systemKey: resolution.resolution.systemKey,
         systemDescription: resolution.resolution.systemDescription ?? '',

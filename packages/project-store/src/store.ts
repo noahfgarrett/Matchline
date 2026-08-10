@@ -113,9 +113,8 @@ export interface ProjectMeta {
 /**
  * A source file registered with the project (v4).
  *
- * The last three fields are the pre-v4 names, kept as aliases so the desktop
- * app compiles against this build unchanged. They are removed together with
- * {@link ProjectStore.upsertSource} once the app is wired to source ids.
+ * Identified by `sourceId` and never by name: a project may hold two files
+ * called `Level 1.nwc` and both are real equipment (P0-1, hard gate 4).
  */
 export interface ProjectSource {
   /** The identity. Stable for the life of the row, whatever gets renamed. */
@@ -134,13 +133,6 @@ export interface ProjectSource {
    */
   readonly derivedCacheSha256: string | null;
   readonly addedAt: string;
-
-  /** @deprecated pre-v4 alias for `rawFileName`. */
-  readonly fileName: string;
-  /** @deprecated pre-v4 alias for `rawSha256`. */
-  readonly sha256: string;
-  /** @deprecated pre-v4 alias for `rawByteSize`. */
-  readonly byteSize: number;
 }
 
 /** What `upsertSourceV4` needs. Everything but the cache hash is required. */
@@ -154,20 +146,6 @@ export interface SourceInputV4 {
   /** Omitted means "no cache associated", which is what a raw drop is. */
   readonly derivedCacheSha256?: string;
   readonly addedAt: string;
-}
-
-/**
- * What the pre-v4 `upsertSource` needs. `addedAt` defaults to the injected
- * clock.
- *
- * @deprecated use {@link SourceInputV4}.
- */
-export interface SourceInput {
-  readonly role: SourceRole;
-  readonly fileName: string;
-  readonly sha256: string;
-  readonly byteSize: number;
-  readonly addedAt?: string;
 }
 
 /** One stored profile revision. */
@@ -293,30 +271,6 @@ export interface ProjectStore {
   listSources(): readonly ProjectSource[];
   /** Removes one source by id. Returns whether a row was there to remove. */
   removeSource(sourceId: string): boolean;
-
-  /**
-   * Adds a source, or replaces the one already registered for this
-   * `(role, fileName)`.
-   *
-   * The pre-v4 signature, kept so the desktop app compiles against this build
-   * unchanged; it derives a `sourceId` and reuses the existing row's id when
-   * one is already registered for that role and file name. It therefore cannot
-   * register two sources with the same basename -- which is the whole reason
-   * v4 exists, and the reason this wrapper is temporary. `derivedCacheSha256`
-   * is set to the same hash: a pre-v4 caller registers the exact bytes the
-   * compiler reads.
-   *
-   * @deprecated use {@link ProjectStore.upsertSourceV4}.
-   */
-  upsertSource(input: SourceInput): void;
-  /**
-   * Removes the source registered for this `(role, fileName)` -- the same row
-   * {@link ProjectStore.upsertSource} would have replaced, which when a v4
-   * caller has registered two files of one name is the lower id of the two.
-   *
-   * @deprecated use `removeSource(sourceId)`.
-   */
-  removeSource(role: SourceRole, fileName: string): boolean;
 
   /** Validates and stores a profile as a new revision. Returns the revision. */
   saveProfile(profile: SiteProfile, revisionNote?: string): number;
@@ -900,9 +854,6 @@ class SqliteProjectStore implements ProjectStore {
   }
 
   #readSource(row: SqlRow): ProjectSource {
-    const rawFileName = requireText(row, 'sources', 'raw_file_name');
-    const rawSha256 = requireText(row, 'sources', 'raw_sha256');
-    const rawByteSize = requireInteger(row, 'sources', 'raw_byte_size');
     return {
       sourceId: requireText(row, 'sources', 'source_id'),
       role: requireMemberArgument(
@@ -911,80 +862,16 @@ class SqliteProjectStore implements ProjectStore {
         'sources.role',
       ),
       logicalName: requireText(row, 'sources', 'logical_name'),
-      rawFileName,
-      rawSha256,
-      rawByteSize,
+      rawFileName: requireText(row, 'sources', 'raw_file_name'),
+      rawSha256: requireText(row, 'sources', 'raw_sha256'),
+      rawByteSize: requireInteger(row, 'sources', 'raw_byte_size'),
       derivedCacheSha256: optionalText(row, 'sources', 'derived_cache_sha256'),
       addedAt: requireText(row, 'sources', 'added_at'),
-      fileName: rawFileName,
-      sha256: rawSha256,
-      byteSize: rawByteSize,
     };
   }
 
-  upsertSource(input: SourceInput): void {
-    const role = requireMemberArgument(input.role, SOURCE_ROLES, 'role');
-    const fileName = requireFilledArgument(input.fileName, 'fileName');
-    const sha256 = requireSha256Argument(input.sha256, 'sha256');
-    const byteSize = requireCountArgument(input.byteSize, 'byteSize');
-    const suppliedAt =
-      input.addedAt === undefined ? undefined : requireTimestampArgument(input.addedAt, 'addedAt');
-
-    this.#mutate((at) => {
-      this.#putSource({
-        sourceId: this.#legacySourceId(role, fileName),
-        role,
-        logicalName: fileName,
-        rawFileName: fileName,
-        rawSha256: sha256,
-        rawByteSize: byteSize,
-        // A pre-v4 caller registers the exact bytes the compiler reads -- for a
-        // `model` row, a `.matchline-cache` -- so the file's own hash is also
-        // the hash of what was derived from it. Same equivalence the v3 -> v4
-        // migration records.
-        derivedCacheSha256: sha256,
-        addedAt: suppliedAt ?? at,
-      });
-    });
-  }
-
-  /**
-   * The id the pre-v4 accessors act on: the row already registered for this
-   * `(role, fileName)`, or a fresh derived one.
-   *
-   * Lowest id wins when a v4 caller has registered two files of one name, so
-   * the legacy pair of calls stays coherent -- what `upsertSource` replaces is
-   * what `removeSource(role, fileName)` removes.
-   */
-  #legacySourceId(role: SourceRole, fileName: string): string {
-    const existing = this.#legacyRowId(role, fileName);
-    if (existing !== undefined) {
-      return existing;
-    }
-    // Every id, not just this name's: a derived id must dodge whatever else is
-    // registered, including ids a v4 caller chose freely.
-    const taken = this.#open()
-      .prepare('SELECT source_id FROM sources')
-      .all()
-      .map((row) => requireText(row, 'sources', 'source_id'));
-    return deriveSourceId(role, fileName, taken);
-  }
-
-  removeSource(sourceId: string): boolean;
-  removeSource(role: SourceRole, fileName: string): boolean;
-  removeSource(sourceIdOrRole: string, fileName?: string): boolean {
-    // One argument is the v4 form; two is the pre-v4 one. Arity, not a type
-    // check, because a `SourceRole` is a string and would be ambiguous.
-    const id =
-      fileName === undefined
-        ? requireFilledArgument(sourceIdOrRole, 'sourceId')
-        : this.#legacyRowId(
-            requireMemberArgument(sourceIdOrRole, SOURCE_ROLES, 'role'),
-            requireFilledArgument(fileName, 'fileName'),
-          );
-    if (id === undefined) {
-      return false;
-    }
+  removeSource(sourceId: string): boolean {
+    const id = requireFilledArgument(sourceId, 'sourceId');
     return this.withTransaction(() => {
       const changes = toCount(
         this.#open().prepare('DELETE FROM sources WHERE source_id = ?').run(id).changes,
@@ -994,16 +881,6 @@ class SqliteProjectStore implements ProjectStore {
       }
       return changes > 0;
     });
-  }
-
-  /** The registered row for a `(role, fileName)`, or `undefined` if none is. */
-  #legacyRowId(role: SourceRole, fileName: string): string | undefined {
-    const row = this.#open()
-      .prepare(
-        'SELECT source_id FROM sources WHERE role = ? AND raw_file_name = ? ORDER BY source_id LIMIT 1',
-      )
-      .get(role, fileName);
-    return row === undefined ? undefined : requireText(row, 'sources', 'source_id');
   }
 
   saveProfile(profile: SiteProfile, revisionNote?: string): number {

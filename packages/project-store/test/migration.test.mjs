@@ -418,9 +418,6 @@ test('migrating a v1 project backs it up and keeps every row', () => {
         rawByteSize: 104857600,
         derivedCacheSha256: 'a'.repeat(64),
         addedAt: CREATED_AT,
-        fileName: 'Dragon-Coordination.nwd',
-        sha256: 'a'.repeat(64),
-        byteSize: 104857600,
       },
     ]);
     assert.equal(store.listDecisions().length, 1);
@@ -812,9 +809,6 @@ test('migrating a v3 project gives every source an id and keeps every row', () =
         rawByteSize: 20480,
         derivedCacheSha256: 'c'.repeat(64),
         addedAt: CREATED_AT,
-        fileName: 'Dragon-MEL.xlsx',
-        sha256: 'c'.repeat(64),
-        byteSize: 20480,
       },
       {
         sourceId: 'model:dragon-controls.matchline-cache',
@@ -825,9 +819,6 @@ test('migrating a v3 project gives every source an id and keeps every row', () =
         rawByteSize: 8388608,
         derivedCacheSha256: 'b'.repeat(64),
         addedAt: CREATED_AT,
-        fileName: 'Dragon-Controls.matchline-cache',
-        sha256: 'b'.repeat(64),
-        byteSize: 8388608,
       },
       {
         sourceId: 'model:dragon-coordination.nwd',
@@ -838,9 +829,6 @@ test('migrating a v3 project gives every source an id and keeps every row', () =
         rawByteSize: 104857600,
         derivedCacheSha256: 'a'.repeat(64),
         addedAt: CREATED_AT,
-        fileName: 'Dragon Coordination.nwd',
-        sha256: 'a'.repeat(64),
-        byteSize: 104857600,
       },
       {
         // Same slug as the row above, and a different source: the suffix is
@@ -853,9 +841,6 @@ test('migrating a v3 project gives every source an id and keeps every row', () =
         rawByteSize: 104857601,
         derivedCacheSha256: 'f'.repeat(64),
         addedAt: CREATED_AT,
-        fileName: 'Dragon-Coordination.nwd',
-        sha256: 'f'.repeat(64),
-        byteSize: 104857601,
       },
       {
         sourceId: 'pmd:dragon-pmd.xlsx',
@@ -866,9 +851,6 @@ test('migrating a v3 project gives every source an id and keeps every row', () =
         rawByteSize: 4096,
         derivedCacheSha256: 'd'.repeat(64),
         addedAt: CREATED_AT,
-        fileName: 'Dragon-PMD.xlsx',
-        sha256: 'd'.repeat(64),
-        byteSize: 4096,
       },
     ]);
 

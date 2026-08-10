@@ -275,15 +275,42 @@ test('the per-source breakdown is published, in source order, and sums to the to
   );
 });
 
+test('the property catalog is off unless a caller asks for it', () => {
+  // It is one streaming pass per cache for a value nothing downstream reads, so
+  // a compile that did not ask does not pay for it.
+  const universe = [
+    { sourceId: 'dragon-mechanical', cache: mechanical.cache },
+    { sourceId: 'dragon-controls', cache: controls.cache },
+  ];
+  assert.deepEqual(compileProject(inputFor(universe)).propertyCatalog, []);
+  assert.deepEqual(
+    compileProject(inputFor(universe, { includePropertyCatalog: false })).propertyCatalog,
+    [],
+  );
+  assert.ok(
+    compileProject(inputFor(universe, { includePropertyCatalog: true })).propertyCatalog.length > 0,
+  );
+
+  // The stats a screen 8 reads are unaffected either way: the per-source
+  // breakdown comes off the asset catalog, not off this stage.
+  const without = compileProject(inputFor(universe)).stats;
+  const with_ = compileProject(inputFor(universe, { includePropertyCatalog: true })).stats;
+  assert.equal(without.sourceCount, with_.sourceCount);
+  assert.deepEqual(without.assetCountBySource, with_.assetCountBySource);
+});
+
 test('the property catalog aggregates the universe and keeps the per-source coverage', () => {
   // P0-1: "Property Catalog aggregates across sources with per-source + overall
   // coverage." 60% overall means something different when one source is at 100%
   // and another at 0%, so neither number is derivable from the other.
   const project = compileProject(
-    inputFor([
-      { sourceId: 'dragon-mechanical', cache: mechanical.cache },
-      { sourceId: 'dragon-controls', cache: controls.cache },
-    ]),
+    inputFor(
+      [
+        { sourceId: 'dragon-mechanical', cache: mechanical.cache },
+        { sourceId: 'dragon-controls', cache: controls.cache },
+      ],
+      { includePropertyCatalog: true },
+    ),
   );
 
   const tag = project.propertyCatalog.find(

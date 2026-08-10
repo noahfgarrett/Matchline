@@ -20,11 +20,14 @@ const SHA = digest('dragoncoordination');
 function seeded(name) {
   const store = createProject(temp.file(name), { name: 'Dragon', now: steppingClock() });
   store.saveProfile(dragonProfile(), 'initial import');
-  store.upsertSource({
+  store.upsertSourceV4({
+    sourceId: 'model:dragon-coordination.nwd',
     role: 'model',
-    fileName: 'Dragon-Coordination.nwd',
-    sha256: SHA,
-    byteSize: 104857600,
+    logicalName: 'Dragon-Coordination.nwd',
+    rawFileName: 'Dragon-Coordination.nwd',
+    rawSha256: SHA,
+    rawByteSize: 104857600,
+    derivedCacheSha256: SHA,
     addedAt: '2026-01-15T09:00:00.000Z',
   });
   return store;
@@ -39,11 +42,14 @@ test('a throw partway through a transaction rolls the whole thing back', () => {
   assert.throws(
     () =>
       store.withTransaction(() => {
-        store.upsertSource({
+        store.upsertSourceV4({
+          sourceId: 'mel:dragon-mel.xlsx',
           role: 'mel',
-          fileName: 'Dragon-MEL.xlsx',
-          sha256: digest('dragonmel'),
-          byteSize: 20480,
+          logicalName: 'Dragon-MEL.xlsx',
+          rawFileName: 'Dragon-MEL.xlsx',
+          rawSha256: digest('dragonmel'),
+          rawByteSize: 20480,
+          derivedCacheSha256: digest('dragonmel'),
           addedAt: '2026-01-15T09:10:00.000Z',
         });
         store.setSystemOverride('MAH001-10-01', { systemKey: '001' });

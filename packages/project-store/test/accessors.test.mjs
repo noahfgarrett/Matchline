@@ -197,119 +197,77 @@ test('deriveSourceId is readable, stable and collision-free', () => {
   assert.equal(reason(() => deriveSourceId('model', '   ', [])).parameter, 'rawFileName');
 });
 
-/* --------------------------------------------- sources: the legacy wrappers */
+/* ----------------------------------------- sources: re-registering one file */
 
-test('the legacy upsert keys by role and file name, so re-importing replaces', () => {
-  store.upsertSource({
-    role: 'model',
-    fileName: 'Dragon-Coordination.nwd',
-    sha256: MODEL_SHA,
-    byteSize: 104857600,
-    addedAt: '2026-01-15T09:00:00.000Z',
-  });
-  store.upsertSource({
+test('re-registering the same source replaces its row rather than adding one', () => {
+  store.upsertSourceV4(modelSource());
+  store.upsertSourceV4({
+    sourceId: 'mel:dragon-mel.xlsx',
     role: 'mel',
-    fileName: 'Dragon-MEL.xlsx',
-    sha256: MEL_SHA,
-    byteSize: 20480,
+    logicalName: 'Dragon MEL',
+    rawFileName: 'Dragon-MEL.xlsx',
+    rawSha256: MEL_SHA,
+    rawByteSize: 20480,
+    derivedCacheSha256: MEL_SHA,
     addedAt: '2026-01-15T09:05:00.000Z',
   });
   // The same file, edited: one row, new hash. A second row would leave a stale
   // hash behind and make the next compile look up to date.
-  store.upsertSource({
+  store.upsertSourceV4({
+    sourceId: 'mel:dragon-mel.xlsx',
     role: 'mel',
-    fileName: 'Dragon-MEL.xlsx',
-    sha256: digest('dragonmelv2'),
-    byteSize: 20600,
-    addedAt: '2026-01-16T08:00:00.000Z',
+    logicalName: 'Dragon MEL',
+    rawFileName: 'Dragon-MEL.xlsx',
+    rawSha256: digest('dragonmelv2'),
+    rawByteSize: 20600,
+    derivedCacheSha256: digest('dragonmelv2'),
+    addedAt: '2026-01-15T09:05:00.000Z',
   });
 
   const sources = store.listSources();
-  assert.equal(sources.length, 2, 'the legacy wrapper cannot create a duplicate basename');
+  assert.equal(sources.length, 2);
   assert.deepEqual(
     sources.map((source) => source.sourceId),
-    ['mel:dragon-mel.xlsx', 'model:dragon-coordination.nwd'],
+    ['mel:dragon-mel.xlsx', 'model:dragon-mechanical.nwd'],
   );
-  assert.equal(sources[0].sha256, digest('dragonmelv2'));
-  assert.equal(sources[0].byteSize, 20600);
-  assert.equal(
-    sources[0].derivedCacheSha256,
-    digest('dragonmelv2'),
-    'a legacy caller registers the exact bytes the compiler reads, cache and raw at once',
-  );
-  assert.equal(sources[0].logicalName, 'Dragon-MEL.xlsx', 'the file name is the only name it has');
+  assert.equal(sources[0].rawSha256, digest('dragonmelv2'));
+  assert.equal(sources[0].rawByteSize, 20600);
+  assert.equal(sources[0].derivedCacheSha256, digest('dragonmelv2'));
 
-  assert.equal(store.removeSource('mel', 'Dragon-MEL.xlsx'), true);
-  assert.equal(store.removeSource('mel', 'Dragon-MEL.xlsx'), false, 'second remove is a no-op');
+  assert.equal(store.removeSource('mel:dragon-mel.xlsx'), true);
+  assert.equal(store.removeSource('mel:dragon-mel.xlsx'), false, 'second remove is a no-op');
   assert.equal(store.listSources().length, 1);
 });
 
-test('the legacy upsert replaces the first of two same-basename sources', () => {
-  // A v4 caller registered two `Level 1.nwc`; a legacy caller re-adds that file
-  // name. It replaces the first row rather than inventing a third or refusing.
+test('replacing one same-basename source leaves its twin exactly as it was', () => {
   store.upsertSourceV4(modelSource({ sourceId: 'model:level-1.nwc', rawFileName: 'Level 1.nwc' }));
   store.upsertSourceV4(modelSource({ sourceId: 'model:level-1.nwc-2', rawFileName: 'Level 1.nwc' }));
 
-  store.upsertSource({
-    role: 'model',
-    fileName: 'Level 1.nwc',
-    sha256: digest('level1v2'),
-    byteSize: 99,
-    addedAt: '2026-01-16T08:00:00.000Z',
-  });
+  store.upsertSourceV4(
+    modelSource({
+      sourceId: 'model:level-1.nwc',
+      rawFileName: 'Level 1.nwc',
+      rawSha256: digest('level1v2'),
+      rawByteSize: 99,
+    }),
+  );
 
   assert.equal(store.listSources().length, 2, 'no third row');
   assert.equal(store.getSource('model:level-1.nwc').rawSha256, digest('level1v2'));
   assert.equal(store.getSource('model:level-1.nwc-2').rawSha256, MODEL_SHA, 'the twin is untouched');
-  assert.equal(store.removeSource('model', 'Level 1.nwc'), true);
+  assert.equal(store.removeSource('model:level-1.nwc'), true);
   assert.deepEqual(
     store.listSources().map((source) => source.sourceId),
     ['model:level-1.nwc-2'],
-    'and the legacy remove takes the same row the legacy upsert would have replaced',
+    'and removing by id takes exactly the row that id names',
   );
 });
 
-test('the legacy upsert takes an id that is already spoken for without clobbering it', () => {
-  store.upsertSourceV4(modelSource({ sourceId: 'model:dragon-mel.xlsx' }));
-  store.upsertSource({
-    role: 'model',
-    fileName: 'Dragon-MEL.xlsx',
-    sha256: MEL_SHA,
-    byteSize: 20480,
-    addedAt: '2026-01-15T09:05:00.000Z',
-  });
-
-  assert.deepEqual(
-    store.listSources().map((source) => source.sourceId),
-    ['model:dragon-mel.xlsx', 'model:dragon-mel.xlsx-2'],
-  );
-  assert.equal(
-    store.getSource('model:dragon-mel.xlsx').rawFileName,
-    'Dragon-Mechanical.nwd',
-    'the row that already held the id is exactly as it was',
-  );
-});
-
-test('a source added without a timestamp takes one from the injected clock', () => {
-  store.upsertSource({
-    role: 'pmd',
-    fileName: 'Dragon-PMD.xlsx',
-    sha256: digest('dragonpmd'),
-    byteSize: 4096,
-  });
-  assert.equal(store.listSources()[0].addedAt, '2026-01-15T09:30:01.000Z');
-});
-
-test('a source with a malformed hash or timestamp is refused', () => {
-  const base = { role: 'pmd', fileName: 'Dragon-PMD.xlsx', sha256: MODEL_SHA, byteSize: 1 };
-  assert.equal(reason(() => store.upsertSource({ ...base, sha256: 'ABC' })).parameter, 'sha256');
-  assert.equal(
-    reason(() => store.upsertSource({ ...base, addedAt: '15 January 2026' })).parameter,
-    'addedAt',
-  );
-  assert.equal(reason(() => store.upsertSource({ ...base, byteSize: -1 })).parameter, 'byteSize');
-  assert.equal(reason(() => store.upsertSource({ ...base, role: 'invoice' })).parameter, 'role');
-  assert.deepEqual(store.listSources(), [], 'nothing was written');
+test('removing a source id nothing holds is a no-op, not a throw', () => {
+  store.upsertSourceV4(modelSource());
+  assert.equal(store.removeSource('model:not-registered.nwd'), false);
+  assert.equal(store.listSources().length, 1);
+  assert.equal(reason(() => store.removeSource('  ')).parameter, 'sourceId');
 });
 
 test('profiles are revisions: latest wins, history is kept', () => {
@@ -596,19 +554,21 @@ test('every successful mutation stamps the modified timestamp', () => {
   const created = store.meta();
   assert.equal(created.modifiedAt, created.createdAt);
 
-  store.upsertSource({
+  store.upsertSourceV4({
+    sourceId: 'model:dragon-coordination.nwd',
     role: 'model',
-    fileName: 'Dragon-Coordination.nwd',
-    sha256: MODEL_SHA,
-    byteSize: 1,
+    logicalName: 'Dragon-Coordination.nwd',
+    rawFileName: 'Dragon-Coordination.nwd',
+    rawSha256: MODEL_SHA,
+    rawByteSize: 1,
     addedAt: '2026-01-15T09:00:00.000Z',
   });
   const afterInsert = store.meta().modifiedAt;
   assert.notEqual(afterInsert, created.modifiedAt);
 
-  assert.equal(store.removeSource('model', 'Dragon-Nothing.nwd'), false);
+  assert.equal(store.removeSource('model:dragon-nothing.nwd'), false);
   assert.equal(store.meta().modifiedAt, afterInsert, 'a no-op delete changed nothing');
 
-  store.removeSource('model', 'Dragon-Coordination.nwd');
+  store.removeSource('model:dragon-coordination.nwd');
   assert.notEqual(store.meta().modifiedAt, afterInsert);
 });

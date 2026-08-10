@@ -60,20 +60,25 @@ import {
 /* ======================================================== running a compile */
 
 /**
- * The `sourceId` this app registers its one model under.
+ * One open model source, as a compile and the wizard's previews both read it.
  *
- * `@matchline/compiler` takes a model universe (P0-1), and this app still holds
- * exactly one extraction cache per session, so it registers a universe of one.
- * The id is a constant rather than a file name because a `sourceId` is an
- * identity and a file name is not — and it is shared with the wizard's own
- * catalog preview (`project-session.ts`) so that the asset ids a person sees on
- * screen 3 are the asset ids the compile produces on screen 8.
+ * The `sourceId` is the project's own (`deriveSourceId`), never a file name and
+ * never a constant: it is the identity every per-source number, duplicate-tag
+ * report and untagged asset id is addressed by. The same array feeds the
+ * wizard's catalog preview (`project-session.ts`), so the asset ids a person
+ * sees on screen 3 are the asset ids the compile produces on screen 8.
  */
-export const MODEL_SOURCE_ID = 'model';
+export interface CompileSource {
+  readonly sourceId: string;
+  readonly cache: ExtractionCache;
+  readonly displayName: string;
+  readonly rawFileName: string;
+}
 
 /** Everything a compile needs that the session already holds. */
 export interface CompileRequest {
-  readonly cache: ExtractionCache;
+  /** Every ready model source, in `sourceId` order. Never empty. */
+  readonly sources: readonly CompileSource[];
   readonly profile: SiteProfile;
   readonly config: WireProjectConfig;
   readonly connectivityWorkbooks: readonly ConnectivityWorkbookInput[];
@@ -96,6 +101,7 @@ export function buildCompileInput(request: CompileRequest): CompileProjectInput 
     sources: CompileProjectInput['sources'];
     profile: SiteProfile;
     hierarchy: CompileProjectInput['hierarchy'];
+    includePropertyCatalog: boolean;
     ladder?: NonNullable<CompileProjectInput['ladder']>;
     roleGraph?: NonNullable<CompileProjectInput['roleGraph']>;
     connectivityWorkbooks?: ReadonlyArray<ConnectivityWorkbookInput>;
@@ -105,9 +111,20 @@ export function buildCompileInput(request: CompileRequest): CompileProjectInput 
     parentTagProperty?: NonNullable<CompileProjectInput['parentTagProperty']>;
     ssmDisciplineProjection?: NonNullable<CompileProjectInput['ssmDisciplineProjection']>;
   } = {
-    sources: [{ sourceId: MODEL_SOURCE_ID, cache: request.cache }],
+    // Every ready model source, not the first one: a project is a universe
+    // (P0-1). `compileProject` reorders by `sourceId` itself, so registering
+    // them in a different order is the same compile.
+    sources: request.sources.map((source) => ({
+      sourceId: source.sourceId,
+      cache: source.cache,
+      displayName: source.displayName,
+      rawFileName: source.rawFileName,
+    })),
     profile: request.profile,
     hierarchy: toHierarchyConfig(request.config),
+    // Screen 2 builds its own catalog from the same caches; a compile paying
+    // for a second streaming pass per cache would be work nothing reads.
+    includePropertyCatalog: false,
   };
 
   const ladder = toLadder(request.config);

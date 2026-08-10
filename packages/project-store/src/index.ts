@@ -78,6 +78,5 @@ export type {
   ProjectSource,
   ProjectStore,
   ReviewDecision,
-  SourceInput,
   SourceInputV4,
 } from './store.js';

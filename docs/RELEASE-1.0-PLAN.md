@@ -12,9 +12,9 @@ hard gates are mandatory; if code-complete but hardware-blocked, produce
 | # | Hard gate | Status |
 |---|-----------|--------|
 | 1 | Drop one raw NWD → automatic extraction | open |
-| 2 | Several NWD/NWC/NWF sources in one project | engine green (`tests/acceptance-1.0/multi-model.test.mjs`, in `npm test`); source registration in the store + UI still open |
-| 3 | Split AND federated model organization | engine green (same file: federated and split compile to equivalent canonical outputs) |
-| 4 | Duplicate basenames coexist | engine green (same file); store `sources` table still open |
+| 2 | Several NWD/NWC/NWF sources in one project | GREEN for cache sources (engine+store v4+UI, M2); raw-NWD auto-extract is gate 1 (M5) |
+| 3 | Split AND federated model organization | GREEN (M2: equivalence proven engine + desktop service level) |
+| 4 | Duplicate basenames coexist | GREEN (M2: engine + store v4 + session identity rules) |
 | 5 | Global / per-source / ordered-fallback metadata mapping | open |
 | 6 | Source-level Building/Discipline/custom assignments | open |
 | 7 | Arbitrary model-derived hierarchy levels | open |

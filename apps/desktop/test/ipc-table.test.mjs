@@ -201,6 +201,82 @@ test('the review:decide example is a key reviewKey really produces', () => {
   assert.equal(IPC_CHANNELS['review:decide'].example.request.reviewKey, reviewKey(conflict));
 });
 
+/**
+ * Every channel that carries per-source data addresses it by `sourceId`
+ * (RELEASE-1.0-PLAN P0-1).
+ *
+ * A file name is not an address once a project may hold two files called
+ * `Level 1.nwc`, so a wire shape that named one would be ambiguous exactly
+ * where it matters most. This asserts against the declared examples, which the
+ * test above already proves are schema-valid.
+ */
+test('the per-source channels address sources by id, never by file name', () => {
+  const [added] = IPC_CHANNELS['source:add'].example.response.results;
+  assert.equal(added.outcome, 'added');
+  assert.ok(added.source.sourceId.length > 0, 'a registered source carries its id');
+  assert.ok(added.source.rawFileName.length > 0);
+  assert.ok(added.source.logicalName.length > 0);
+  assert.ok('derivedCacheSha256' in added.source, 'and whether a cache is associated yet');
+
+  assert.deepEqual(
+    Object.keys(IPC_CHANNELS['source:remove'].example.request),
+    ['sourceId'],
+    'remove takes an id and nothing else: a name could name two rows',
+  );
+
+  const { universe } = IPC_CHANNELS['model:scan'].example.response;
+  assert.equal(universe.sources.length, universe.sourceCount);
+  for (const source of universe.sources) {
+    assert.ok(source.sourceId.length > 0);
+  }
+
+  for (const row of IPC_CHANNELS['model:property-page'].example.response.rows) {
+    assert.ok(row.bySource.length > 0, 'a catalog row discloses its per-source coverage');
+    for (const source of row.bySource) {
+      assert.ok(source.sourceId.length > 0);
+      assert.ok(source.label.length > 0, 'and a short name to print it under');
+    }
+  }
+
+  const { preview } = IPC_CHANNELS['asset:preview'].example.response;
+  assert.equal(preview.state, 'ready');
+  assert.ok(preview.bySource.length > 0, 'the inclusion impact breaks down per source');
+  for (const sample of preview.samples) {
+    assert.ok(sample.sourceId.length > 0, 'and every sampled asset says where it came from');
+  }
+
+  const resolver = IPC_CHANNELS['resolver:preview'].example.response.preview;
+  assert.equal(resolver.state, 'ready');
+  for (const sample of resolver.samples) {
+    assert.ok(sample.sourceId.length > 0);
+  }
+});
+
+/**
+ * A per-source list and its total have to be able to disagree in the shape,
+ * because they disagree in the world: 60% overall with one source at 100% and
+ * another at 0% is the case the disclosure exists for. A schema that derived
+ * one from the other could not express it.
+ */
+test('per-source coverage is carried, not derived from the overall number', () => {
+  const { response } = IPC_CHANNELS['model:property-page'];
+  const [row] = IPC_CHANNELS['model:property-page'].example.response.rows;
+  const lopsided = {
+    ...IPC_CHANNELS['model:property-page'].example.response,
+    rows: [
+      {
+        ...row,
+        coverage: 0.6,
+        bySource: [
+          { sourceId: 'model:a.nwd', label: 'a', objectCount: 10, coverage: 1 },
+          { sourceId: 'model:b.nwd', label: 'b', objectCount: 0, coverage: 0 },
+        ],
+      },
+    ],
+  };
+  assert.ok(response.safeParse(lopsided).success);
+});
+
 test('examples survive the structured clone that IPC actually performs', () => {
   for (const channel of IPC_CHANNEL_NAMES) {
     const { example } = IPC_CHANNELS[channel];

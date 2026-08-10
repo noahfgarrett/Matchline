@@ -228,7 +228,10 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
 
   // --- 1. the model-first asset universe -----------------------------------
   const catalog = buildAssetCatalog(sources, profile.propertyMappings, profile.assetFilters);
-  const propertyCatalog = buildUniversePropertyCatalog(sources);
+  // One streaming pass per cache, for a value only a property picker reads. Not
+  // run unless it was asked for (see `includePropertyCatalog`).
+  const propertyCatalog =
+    input.includePropertyCatalog === true ? buildUniversePropertyCatalog(sources) : [];
 
   // --- 2. the property-bag seam --------------------------------------------
   // One pass over the owning source's cache per asset, and both consumers of the

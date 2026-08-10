@@ -130,7 +130,9 @@ function identifyExtractionCache(absolutePath: string): SourceIdentification {
         note:
           `Extracted from ${inputFileName}: ${count(objectCount, 'object', 'objects')} ` +
           `across ${count(sourceModelCount, 'source model', 'source models')}. ` +
-          'This is the equipment universe every other source is matched against.',
+          // "Joins", not "is": a project may register several model sources and
+          // the universe is all of them together (P0-1).
+          'It joins the equipment universe every other source is matched against.',
         sheets: [],
       },
     ],
@@ -185,6 +187,56 @@ const ROLE_LABELS: Readonly<Record<SourceRole, string>> = {
 
 export function roleLabel(role: SourceRole): string {
   return ROLE_LABELS[role];
+}
+
+/* --------------------------------------------------------- short source names */
+
+/** `model:level-1.nwc-2` -> base `level-1.nwc`, duplicate suffix `2`. */
+const DUPLICATE_SUFFIX = /-(\d+)$/;
+
+/**
+ * Compact per-source names for the places a row has to name several sources at
+ * once — the Property Catalog's coverage disclosure, the inclusion impact.
+ *
+ * A `sourceId` is `role:slug` (`@matchline/project-store`'s `deriveSourceId`),
+ * and printing it whole turns "which file is missing the tag" into a line of
+ * mostly-extension. So the role prefix and the extension come off, and the
+ * duplicate-basename suffix stays: `level-1-2` is a different file from
+ * `level-1` and a label that hid the difference would be worse than a long one.
+ *
+ * Computed for the whole set rather than one id at a time because shortening is
+ * only safe if it stays unique: two sources whose stems collide (`A.nwd` and
+ * `A.nwc`) both keep their full slug instead. Every source gets a non-empty
+ * label, and no two sources get the same one.
+ */
+export function shortSourceLabels(sourceIds: Iterable<string>): ReadonlyMap<string, string> {
+  const withoutRole = new Map<string, string>();
+  const stems = new Map<string, string>();
+  const stemUsers = new Map<string, number>();
+
+  for (const sourceId of sourceIds) {
+    const colon = sourceId.indexOf(':');
+    const slug = colon < 0 ? sourceId : sourceId.slice(colon + 1);
+    const bare = slug === '' ? sourceId : slug;
+    withoutRole.set(sourceId, bare);
+
+    const suffix = DUPLICATE_SUFFIX.exec(bare);
+    const base = suffix === null ? bare : bare.slice(0, bare.length - suffix[0].length);
+    const dot = base.lastIndexOf('.');
+    const trimmed = dot > 0 ? base.slice(0, dot) : base;
+    const stem =
+      trimmed === '' ? bare : suffix === null ? trimmed : `${trimmed}-${suffix[1] ?? ''}`;
+
+    stems.set(sourceId, stem);
+    stemUsers.set(stem, (stemUsers.get(stem) ?? 0) + 1);
+  }
+
+  const labels = new Map<string, string>();
+  for (const [sourceId, stem] of stems) {
+    const bare = withoutRole.get(sourceId) ?? sourceId;
+    labels.set(sourceId, (stemUsers.get(stem) ?? 0) > 1 ? bare : stem);
+  }
+  return labels;
 }
 
 function identifyWorkbook(absolutePath: string, fileName: string): SourceIdentification {

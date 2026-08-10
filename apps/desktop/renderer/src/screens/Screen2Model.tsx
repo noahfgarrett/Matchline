@@ -2,8 +2,11 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 
 import type {
+  WireModelScan,
+  WireModelUniverse,
   WirePropertyCatalogRow,
   WirePropertySort,
+  WirePropertySourceCoverage,
   WireSourceModelSummary,
   WireSuggestedRole,
 } from '../../../shared/schemas';
@@ -20,9 +23,23 @@ import type { WizardContext } from './Wizard';
  * (APP.md "IPC contract"). Chunks already fetched are kept; changing the sort or
  * the search starts a new generation and drops them, because a row's position
  * is only meaningful under the ordering it was fetched for.
+ *
+ * The catalog is aggregated over every model source in the project (P0-1), so
+ * every row carries two facts: coverage across the site, and coverage per file.
+ * The second is the one that turns "the tag is on 61% of objects" into "the
+ * controls model is the one that does not carry it".
  */
 
+/**
+ * One catalog row, and the taller one a universe needs.
+ *
+ * The virtualizer positions rows absolutely at a fixed height, so this is the
+ * height the content has to fit inside — not a suggestion. A multi-source row
+ * carries a second line, and a row whose content outgrew its box shows the top
+ * of the next row through the gap.
+ */
 const ROW_HEIGHT = 52;
+const SOURCED_ROW_HEIGHT = 70;
 const CHUNK_SIZE = 100;
 
 const ROLE_LABELS: Readonly<Record<WireSuggestedRole, string>> = {
@@ -37,6 +54,38 @@ const SORT_LABELS: ReadonlyArray<readonly [WirePropertySort, string]> = [
   ['name', 'Property name'],
 ];
 
+/**
+ * Which universe the loaded rows belong to.
+ *
+ * Row *indices* only mean something under the catalog they were fetched from,
+ * and adding or replacing a model source produces a different catalog — so this
+ * is part of the fetch generation, exactly as the sort and the search are.
+ */
+function universeKeyOf(universe: WireModelUniverse | null): string {
+  return universe === null
+    ? ''
+    : universe.sources.map((source: WireModelScan): string => source.sourceId).join('|');
+}
+
+/**
+ * `mechanical 98% · controls 61%` — the per-source coverage behind one overall
+ * number (P0-1).
+ *
+ * Ordered by coverage descending so the file that is missing the property is
+ * the one at the end, which is where a reader looking for a gap looks.
+ */
+function coverageDisclosure(bySource: readonly WirePropertySourceCoverage[]): string {
+  return [...bySource]
+    .sort(
+      (left: WirePropertySourceCoverage, right: WirePropertySourceCoverage): number =>
+        right.coverage - left.coverage,
+    )
+    .map(
+      (source: WirePropertySourceCoverage): string => `${source.label} ${percent(source.coverage)}`,
+    )
+    .join(' · ');
+}
+
 export function Screen2Model({ context }: { readonly context: WizardContext }): JSX.Element {
   const [sortBy, setSortBy] = useState<WirePropertySort>('coverage');
   const [descending, setDescending] = useState<boolean>(true);
@@ -46,14 +95,14 @@ export function Screen2Model({ context }: { readonly context: WizardContext }): 
   const [error, setError] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const hasModel = context.scan !== null;
+  const universe = context.universe;
 
   /**
    * One string naming the current ordering. Row *indices* only mean anything
    * under the ordering they were fetched for, so this is both the cache key and
    * the guard on every in-flight response.
    */
-  const queryKey = `${sortBy}|${String(descending)}|${search}|${context.scan?.fileName ?? ''}`;
+  const queryKey = `${sortBy}|${String(descending)}|${search}|${universeKeyOf(universe)}`;
   const loaded = useRef<{ key: string; chunks: Set<number> }>({
     key: '',
     chunks: new Set<number>(),
@@ -98,12 +147,20 @@ export function Screen2Model({ context }: { readonly context: WizardContext }): 
     void loadChunk(0, queryKey);
   }, [queryKey, loadChunk]);
 
+  const rowHeight = (universe?.sourceCount ?? 0) < 2 ? ROW_HEIGHT : SOURCED_ROW_HEIGHT;
   const virtualizer = useVirtualizer({
     count: total,
     getScrollElement: (): HTMLDivElement | null => scrollRef.current,
-    estimateSize: (): number => ROW_HEIGHT,
+    estimateSize: (): number => rowHeight,
     overscan: 10,
   });
+
+  // The row height changes when a project goes from one model source to two,
+  // and the virtualizer caches what it measured. Without this the list would
+  // keep positioning rows at the old pitch and overlap them.
+  useEffect((): void => {
+    virtualizer.measure();
+  }, [virtualizer, rowHeight]);
 
   const virtualItems = virtualizer.getVirtualItems();
   const firstIndex = virtualItems[0]?.index ?? 0;
@@ -123,7 +180,7 @@ export function Screen2Model({ context }: { readonly context: WizardContext }): 
     }
   }, [firstIndex, lastIndex, queryKey, loadChunk]);
 
-  if (!hasModel) {
+  if (universe === null) {
     return (
       <div className="screen" data-testid="screen-2">
         <header className="screen__header">
@@ -137,8 +194,6 @@ export function Screen2Model({ context }: { readonly context: WizardContext }): 
     );
   }
 
-  const scan = context.scan;
-
   return (
     <div className="screen" data-testid="screen-2">
       <header className="screen__header">
@@ -150,33 +205,65 @@ export function Screen2Model({ context }: { readonly context: WizardContext }): 
         </p>
       </header>
 
-      <Panel title="What the extraction contains">
+      <Panel title="What the extractions contain">
         <StatRow>
-          <Stat label="Objects" value={count(scan?.objectCount ?? 0)} />
-          <Stat label="Distinct properties" value={count(scan?.propertyNameCount ?? 0)} />
-          <Stat label="Source models" value={count(scan?.sourceModels.length ?? 0)} />
+          <Stat label="Model sources" value={count(universe.sourceCount)} />
+          <Stat label="Objects" value={count(universe.objectCount)} />
           <Stat
-            label="Extraction warnings"
-            value={count(scan?.warningCount ?? 0)}
-            hint={scan?.navisworksVersion === '' ? undefined : `Navisworks ${scan?.navisworksVersion ?? ''}`}
+            label="Distinct properties"
+            value={count(universe.propertyNameCount)}
+            hint={
+              universe.sourceCount < 2 ? undefined : 'Across every source; shared names counted once'
+            }
           />
+          <Stat label="Extraction warnings" value={count(universe.warningCount)} />
         </StatRow>
 
         <TableScroll>
           <table className="table" data-testid="source-model-table">
             <thead>
               <tr>
+                <th>Model source</th>
                 <th>Source model</th>
                 <th className="table__number">Objects</th>
               </tr>
             </thead>
             <tbody>
-              {(scan?.sourceModels ?? []).map((model: WireSourceModelSummary): JSX.Element => (
-                <tr key={`${String(model.sourceModelId)} ${model.fileName}`}>
-                  <td>{model.fileName}</td>
-                  <td className="table__number">{count(model.objectCount)}</td>
-                </tr>
-              ))}
+              {universe.sources.flatMap((source: WireModelScan): readonly JSX.Element[] =>
+                source.sourceModels.map(
+                  (model: WireSourceModelSummary, index: number): JSX.Element => (
+                    <tr key={`${source.sourceId} ${String(model.sourceModelId)} ${model.fileName}`}>
+                      {/* The file a person registered, stated once per group;
+                          the rows under it are the models inside it. */}
+                      <td>
+                        {index === 0 ? (
+                          <span title={`Navisworks ${source.navisworksVersion}`}>
+                            {source.displayName}
+                          </span>
+                        ) : (
+                          ''
+                        )}
+                      </td>
+                      <td>{model.fileName}</td>
+                      <td className="table__number">{count(model.objectCount)}</td>
+                    </tr>
+                  ),
+                ),
+              )}
+              <tr className="table__total">
+                <td>{count(universe.sourceCount)} sources</td>
+                <td>
+                  {count(
+                    universe.sources.reduce(
+                      (total: number, source: WireModelScan): number =>
+                        total + source.sourceModels.length,
+                      0,
+                    ),
+                  )}{' '}
+                  source models
+                </td>
+                <td className="table__number">{count(universe.objectCount)}</td>
+              </tr>
             </tbody>
           </table>
         </TableScroll>
@@ -223,7 +310,10 @@ export function Screen2Model({ context }: { readonly context: WizardContext }): 
 
         {error === null ? null : <Callout tone="error">{error}</Callout>}
 
-        <div className="virtual-table" data-testid="property-catalog">
+        <div
+          className={`virtual-table${universe.sourceCount < 2 ? '' : ' virtual-table--sourced'}`}
+          data-testid="property-catalog"
+        >
           <div className="virtual-table__head">
             <span className="virtual-table__cell virtual-table__cell--wide">Property</span>
             <span className="virtual-table__cell virtual-table__cell--number">Coverage</span>
@@ -281,6 +371,16 @@ export function Screen2Model({ context }: { readonly context: WizardContext }): 
                             </span>
                           )}
                         </span>
+                        {universe.sourceCount < 2 ? null : (
+                          // A second line spanning the whole row: which file
+                          // carries the property, and which one does not.
+                          <span
+                            className="virtual-table__sources"
+                            title={coverageDisclosure(row.bySource)}
+                          >
+                            {coverageDisclosure(row.bySource)}
+                          </span>
+                        )}
                       </>
                     )}
                   </div>

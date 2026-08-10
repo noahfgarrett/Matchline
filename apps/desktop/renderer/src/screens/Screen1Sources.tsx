@@ -45,6 +45,18 @@ const STATUS_LABELS: Readonly<Record<WireSourceStatus, string>> = {
   'file-changed': 'File has changed',
 };
 
+/**
+ * "3 registered, 2 model sources" — the second half only once there are two,
+ * because a project with one model has nothing to disambiguate.
+ */
+function sourcesDescription(sources: readonly WireSourceSummary[]): string {
+  const models = sources.filter(
+    (source: WireSourceSummary): boolean => source.role === 'model',
+  ).length;
+  const registered = `${String(sources.length)} registered.`;
+  return models < 2 ? registered : `${registered} ${String(models)} model sources.`;
+}
+
 export function Screen1Sources({
   context,
   onSourcesChanged,
@@ -131,9 +143,9 @@ export function Screen1Sources({
     async (source: WireSourceSummary): Promise<void> => {
       setBusy(true);
       try {
-        await call(
-          window.matchline.source.remove({ role: source.role, fileName: source.fileName }),
-        );
+        // By id: two rows may show the same file name and only one of them is
+        // the one whose Remove button was pressed.
+        await call(window.matchline.source.remove({ sourceId: source.sourceId }));
         await onSourcesChanged();
       } catch (caught: unknown) {
         setError(messageOf(caught));
@@ -198,7 +210,7 @@ export function Screen1Sources({
 
       <Panel
         title="Sources in this project"
-        description={`${String(context.sources.length)} registered.`}
+        description={sourcesDescription(context.sources)}
       >
         {context.sources.length === 0 ? (
           <Callout tone="info">
@@ -208,18 +220,21 @@ export function Screen1Sources({
         ) : (
           <ul className="source-list" data-testid="source-list">
             {context.sources.map((source: WireSourceSummary): JSX.Element => (
-              <li className="source" key={`${source.role} ${source.fileName}`}>
+              // Keyed and rendered by source id: a project may hold two files
+              // called `Level 1.nwc` and both are real (P0-1, hard gate 4).
+              <li className="source" key={source.sourceId} data-source-id={source.sourceId}>
                 <div className="source__head">
                   <span className="source__role">{ROLE_LABELS[source.role] ?? source.role}</span>
-                  <span className="source__name">{source.fileName}</span>
+                  <span className="source__name">{source.logicalName}</span>
                   <span className={`badge badge--${source.status}`}>
                     {STATUS_LABELS[source.status]}
                   </span>
-                  <span className="source__size">{fileSize(source.byteSize)}</span>
+                  <span className="source__size">{fileSize(source.rawByteSize)}</span>
                   <button
                     className="button button--quiet button--small"
                     type="button"
                     disabled={busy}
+                    aria-label={`Remove ${source.logicalName}`}
                     onClick={(): void => {
                       void removeSource(source);
                     }}
@@ -227,6 +242,9 @@ export function Screen1Sources({
                     Remove
                   </button>
                 </div>
+                {source.logicalName === source.rawFileName ? null : (
+                  <p className="source__note muted">Extracted from {source.rawFileName}</p>
+                )}
                 <p className="source__note">{source.note}</p>
                 {source.sheets.length === 0 ? null : (
                   <TableScroll>

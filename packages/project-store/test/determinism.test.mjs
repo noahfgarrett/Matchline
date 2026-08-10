@@ -35,18 +35,25 @@ function writeProject(name) {
     now: steppingClock(),
   });
   try {
-    store.upsertSource({
+    store.upsertSourceV4({
+      sourceId: 'model:dragon-coordination.nwd',
       role: 'model',
-      fileName: 'Dragon-Coordination.nwd',
-      sha256: digest('dragoncoordination'),
-      byteSize: 104857600,
+      logicalName: 'Dragon-Coordination.nwd',
+      rawFileName: 'Dragon-Coordination.nwd',
+      rawSha256: digest('dragoncoordination'),
+      rawByteSize: 104857600,
+      derivedCacheSha256: digest('dragoncoordination'),
       addedAt: '2026-01-15T09:00:00.000Z',
     });
-    store.upsertSource({
+    store.upsertSourceV4({
+      sourceId: 'mel:dragon-mel.xlsx',
       role: 'mel',
-      fileName: 'Dragon-MEL.xlsx',
-      sha256: digest('dragonmel'),
-      byteSize: 20480,
+      logicalName: 'Dragon-MEL.xlsx',
+      rawFileName: 'Dragon-MEL.xlsx',
+      rawSha256: digest('dragonmel'),
+      rawByteSize: 20480,
+      derivedCacheSha256: digest('dragonmel'),
+      addedAt: '2026-01-15T09:01:00.000Z',
     });
 
     const revision = store.saveProfile(dragonProfile(), 'initial import');

@@ -19,7 +19,7 @@ import {
   flowRootSchema,
   learnedRuleKindSchema,
   learnedSummarySchema,
-  modelScanSchema,
+  modelUniverseSchema,
   overrideRowSchema,
   profileSectionSchema,
   projectConfigSchema,
@@ -31,7 +31,6 @@ import {
   reparentPreviewSchema,
   resolverPreviewSchema,
   reviewPageSchema,
-  sourceRoleSchema,
   sourceSummarySchema,
   templateAnalysisSchema,
   templateBindingSchema,
@@ -369,16 +368,19 @@ export const IPC_CHANNELS = {
     request: z.object({ paths: z.array(z.string().min(1)).min(1) }),
     response: z.object({ results: z.array(addSourceResultSchema) }),
     example: {
-      request: { paths: ['/Users/dragon/Dragon.matchline-cache'] },
+      request: { paths: ['/Users/dragon/Dragon-Mechanical.matchline-cache'] },
       response: {
         results: [
           {
             outcome: 'added',
             source: {
+              sourceId: 'model:dragon-mechanical.matchline-cache',
               role: 'model',
-              fileName: 'Dragon.matchline-cache',
-              sha256: 'a'.repeat(64),
-              byteSize: 262144,
+              logicalName: 'Dragon-Mechanical.matchline-cache',
+              rawFileName: 'Dragon-Mechanical.matchline-cache',
+              rawSha256: 'a'.repeat(64),
+              rawByteSize: 262144,
+              derivedCacheSha256: 'a'.repeat(64),
               addedAt: '2026-08-08T09:01:00.000Z',
               status: 'ready',
               note: 'Extraction cache with 42 objects from 3 source models.',
@@ -428,10 +430,13 @@ export const IPC_CHANNELS = {
       response: {
         sources: [
           {
+            sourceId: 'mel:dragon-mel.xlsx',
             role: 'mel',
-            fileName: 'Dragon-MEL.xlsx',
-            sha256: 'b'.repeat(64),
-            byteSize: 8192,
+            logicalName: 'Dragon-MEL.xlsx',
+            rawFileName: 'Dragon-MEL.xlsx',
+            rawSha256: 'b'.repeat(64),
+            rawByteSize: 8192,
+            derivedCacheSha256: 'b'.repeat(64),
             addedAt: '2026-08-08T09:02:00.000Z',
             status: 'ready',
             note: 'Workbook with 1 recognized sheet.',
@@ -450,33 +455,56 @@ export const IPC_CHANNELS = {
     },
   },
 
+  /**
+   * Removes one source, by id.
+   *
+   * By id rather than by `(role, fileName)`: two sources may honestly share a
+   * basename (P0-1, hard gate 4), and a remove keyed on the name would take
+   * away whichever one the store happened to find first.
+   */
   'source:remove': {
-    request: z.object({ role: sourceRoleSchema, fileName: z.string().min(1) }),
+    request: z.object({ sourceId: z.string().min(1) }),
     response: z.object({ removed: z.boolean() }),
     example: {
-      request: { role: 'mel', fileName: 'Dragon-MEL.xlsx' },
+      request: { sourceId: 'mel:dragon-mel.xlsx' },
       response: { removed: true },
     },
   },
 
   /* -------------------------------- screen 2: model scan + Property Catalog */
 
+  /**
+   * Every ready model source, with the universe totals over them (P0-1).
+   *
+   * A project is a universe of caches, not one file, so this answers with the
+   * list and the totals rather than with "the model".
+   */
   'model:scan': {
     request: z.void(),
-    response: z.object({ scan: modelScanSchema.nullable() }),
+    response: z.object({ universe: modelUniverseSchema.nullable() }),
     example: {
       request: undefined,
       response: {
-        scan: {
-          fileName: 'Dragon.nwd',
+        universe: {
+          sourceCount: 1,
           objectCount: 42,
           propertyNameCount: 11,
-          sourceModels: [
-            { sourceModelId: 1, fileName: 'Dragon-Mechanical.nwc', objectCount: 18 },
-          ],
-          extractedAtUtc: '2026-08-01T00:00:00Z',
-          navisworksVersion: '2025',
           warningCount: 0,
+          sources: [
+            {
+              sourceId: 'model:dragon.matchline-cache',
+              displayName: 'Dragon.matchline-cache',
+              rawFileName: 'Dragon.matchline-cache',
+              objectCount: 42,
+              propertyNameCount: 11,
+              sourceModels: [
+                { sourceModelId: 1, fileName: 'Dragon-Mechanical.nwc', objectCount: 18 },
+              ],
+              extractedAtUtc: '2026-08-01T00:00:00Z',
+              navisworksVersion: '2025',
+              warningCount: 0,
+            },
+          ],
         },
       },
     },
@@ -511,6 +539,14 @@ export const IPC_CHANNELS = {
             distinctValueCount: 24,
             examples: ['MAH001-10-01', 'TIT001-10-01', 'PLC001-10-01'],
             suggestedRole: 'equipment-tag',
+            bySource: [
+              {
+                sourceId: 'model:dragon-mechanical.matchline-cache',
+                label: 'dragon-mechanical',
+                objectCount: 24,
+                coverage: 0.5714285714285714,
+              },
+            ],
           },
         ],
       },
@@ -561,6 +597,17 @@ export const IPC_CHANNELS = {
               building: 'B14',
               objectCount: 1,
               status: 'MODEL_CONFIRMED',
+              sourceId: 'model:dragon-mechanical.matchline-cache',
+            },
+          ],
+          bySource: [
+            {
+              sourceId: 'model:dragon-mechanical.matchline-cache',
+              label: 'dragon-mechanical',
+              totalObjects: 42,
+              collapsedCount: 0,
+              finalAssetCount: 24,
+              untaggedDroppedCount: 18,
             },
           ],
         },
@@ -633,6 +680,7 @@ export const IPC_CHANNELS = {
           samples: [
             {
               assetId: 'tag:MAH001-10-01',
+              sourceId: 'model:dragon-mechanical.matchline-cache',
               canonicalTag: 'MAH001-10-01',
               systemKey: '001',
               systemDescription: 'Mechanical Dry Air Handling',

@@ -1,7 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { buildAssetCatalog, type AssetCatalog } from '@matchline/asset-catalog';
+import {
+  buildAssetCatalog,
+  buildUniversePropertyCatalog,
+  type AssetCatalog,
+  type UniversePropertyCatalogEntry,
+} from '@matchline/asset-catalog';
 import {
   subjectPropertiesFor,
   type CompiledProject,
@@ -12,15 +17,14 @@ import type { ManualRelationshipOverride, SiteProfile } from '@matchline/domain'
 import { validateLearnedRuleSet, type LearnedRuleSet } from '@matchline/learned-rules';
 import type { GeneratedMelAsset } from '@matchline/mel-export';
 import {
-  buildPropertyCatalog,
   openExtractionCache,
   type ExtractionCache,
-  type PropertyCatalogEntry,
   type SourceModelNode,
 } from '@matchline/model-schema';
 import {
   ProjectStoreError,
   createProject,
+  deriveSourceId,
   openProject,
   serializeSnapshot,
   type CompileRecord,
@@ -51,6 +55,7 @@ import type {
   WireLearnedRuleKind,
   WireLearnedSummary,
   WireModelScan,
+  WireModelUniverse,
   WireOverrideRow,
   WireProfileSection,
   WireProjectConfig,
@@ -63,6 +68,7 @@ import type {
   WireReviewPage,
   WireReviewRow,
   WireSheetSummary,
+  WireSourceModelSummary,
   WireSourceStatus,
   WireSourceSummary,
   WireTemplateAnalysis,
@@ -75,7 +81,7 @@ import { createAppStateStore, type AppStateStore } from './app-store.js';
 import {
   createCompileView,
   runCompile,
-  MODEL_SOURCE_ID,
+  type CompileSource,
   type CompileView,
   type Page,
 } from './compile-service.js';
@@ -127,6 +133,7 @@ import {
   melSheetDescriptor,
   readMelCatalogRows,
   roleLabel,
+  shortSourceLabels,
   type SourceRegistration,
 } from './sources.js';
 
@@ -139,14 +146,28 @@ import {
  * drawing; the extraction cache, the Property Catalog, the asset catalog and
  * the resolver subjects never leave this process.
  *
+ * ## Many model sources, one universe (RELEASE-1.0-PLAN P0-1)
+ *
+ * A project registers a *set* of model sources, not one file, and every one of
+ * them that has a readable cache is open at once. The map is keyed by
+ * `sourceId` — the project's own identity for a registered file — because two
+ * consultants really do both ship `Level 1.nwc` and keying on the name would
+ * silently drop one of them (hard gate 4).
+ *
  * ## Derived state and when it is thrown away
  *
- * - The **extraction cache handle** and its **Property Catalog** belong to the
- *   model source. They are built when a model becomes available and released
- *   when the project closes or the model source is removed.
- * - The **asset catalog** and the **resolver subjects** depend on the draft, so
- *   they are memoized against the exact mappings-and-filters they were built
- *   from and dropped the moment those change. Recomputing is correct but slow;
+ * - An **extraction cache handle** belongs to one source. It is opened when
+ *   that source becomes ready and closed when the source is removed, replaced
+ *   with different bytes, or the project closes. Reconciliation is per source:
+ *   replacing one file never re-opens the caches of the others, which on a
+ *   real project is the difference between a keystroke and a coffee.
+ * - The **universe Property Catalog** is a streaming pass over every open
+ *   cache. It is built on demand and memoized against the universe it was
+ *   built from, so screen 2 pays for it once.
+ * - The **asset catalog** and the **resolver subjects** depend on the draft AND
+ *   on the universe, so they are memoized against both — the exact
+ *   mappings-and-filters and the exact set of `(sourceId, cache hash)` pairs —
+ *   and dropped the moment either changes. Recomputing is correct but slow;
  *   serving a stale catalog would be fast and wrong.
  */
 
@@ -198,11 +219,24 @@ export interface ProjectService {
 
   addSources(paths: readonly string[]): readonly WireAddSourceResult[];
   listSources(): readonly WireSourceSummary[];
-  removeSource(role: SourceRole, fileName: string): boolean;
+  /** Removes one registered source by id. Names cannot be used: they repeat. */
+  removeSource(sourceId: string): boolean;
 
-  modelScan(): WireModelScan | null;
+  /** Every ready model source and the totals over them, or `null` when none is. */
+  modelUniverse(): WireModelUniverse | null;
   propertyPage(request: PropertyPageRequest): PropertyPageResult;
+  /** Navisworks class names with counts, summed across every open cache. */
   classList(): readonly WireClassCount[];
+  /**
+   * The internal handle id of each open extraction cache, by source id.
+   *
+   * Not a wire type and not read by any screen. It exists because "replacing
+   * one source must not re-open the others" (P0-1) is a promise about cache
+   * handles, and the only honest way to test a promise about handles is to be
+   * able to see them: a source whose id here is unchanged across a mutation was
+   * demonstrably not re-opened.
+   */
+  cacheHandleIds(): ReadonlyMap<string, number>;
 
   draftState(): DraftState;
   updateDraft(patch: WireDraftPatch): WireDraftProfile;
@@ -280,7 +314,15 @@ export interface ProjectService {
   suggestExportName(suffix: string, extension: string): string;
 }
 
-/** What identification learned about one registered source, kept in memory. */
+/**
+ * What identification learned about one registered source, kept in memory.
+ *
+ * `absolutePath` is where this machine last saw the file, and it is recorded
+ * even for a source that is not readable right now: it is what tells a re-add
+ * of a changed file from the registration of a *different* file that happens to
+ * share its basename. Nothing reads the file on the strength of this field —
+ * every read requires `status === 'ready'` as well.
+ */
 interface SourceDetail {
   readonly absolutePath: string;
   readonly status: WireSourceStatus;
@@ -288,17 +330,42 @@ interface SourceDetail {
   readonly sheets: readonly WireSheetSummary[];
 }
 
-/** The open model, plus the two full-cache scans screen 2 is made of. */
+/** One open model source: its cache handle and the object scan over it. */
 interface ModelState {
+  readonly sourceId: string;
+  readonly displayName: string;
+  readonly rawFileName: string;
+  /** What this handle was opened for. A change here is a different file. */
+  readonly cacheSha256: string;
+  /** Distinguishes this handle from the next one opened for the same source. */
+  readonly handleId: number;
   readonly cache: ExtractionCache;
-  readonly catalog: readonly PropertyCatalogEntry[];
   readonly classes: readonly WireClassCount[];
-  readonly scan: WireModelScan;
+  readonly objectCount: number;
+  readonly sourceModels: readonly WireSourceModelSummary[];
+  readonly extractedAtUtc: string;
+  readonly navisworksVersion: string;
+  readonly warningCount: number;
 }
 
-/** The asset catalog and its subjects, tied to the config that produced them. */
+/**
+ * The universe Property Catalog, tied to the universe it was built from.
+ *
+ * A streaming pass per cache, so it is built when a screen asks and kept until
+ * the set of open caches changes.
+ */
+interface DerivedCatalog {
+  readonly universeKey: string;
+  readonly entries: readonly UniversePropertyCatalogEntry[];
+}
+
+/**
+ * The asset catalog and its subjects, tied to the draft AND the universe that
+ * produced them. Either changing invalidates both.
+ */
 interface DerivedAssets {
   readonly configKey: string;
+  readonly universeKey: string;
   readonly catalog: AssetCatalog;
   readonly subjects: readonly ResolverSubject[];
 }
@@ -319,9 +386,12 @@ interface Session {
    * profile that is not what produced them.
    */
   savedRevision: number | null;
+  /** Keyed by `sourceId`, for every registered source of every role. */
   readonly details: Map<string, SourceDetail>;
-  model: ModelState | null;
+  /** Keyed by `sourceId`, for every model source with an open cache. */
+  readonly models: Map<string, ModelState>;
   melRows: readonly MelCatalogRow[];
+  propertyCatalog: DerivedCatalog | null;
   derived: DerivedAssets | null;
   /** The last compile and every index over it, or `null` before the first run. */
   view: CompileView | null;
@@ -376,10 +446,6 @@ function storedAssetsOf(record: CompileRecord): readonly GeneratedMelAsset[] | n
   return assets as readonly GeneratedMelAsset[];
 }
 
-function detailKey(role: SourceRole, fileName: string): string {
-  return `${role} ${fileName}`;
-}
-
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -427,6 +493,14 @@ function openRefusal(error: unknown): WireProjectOpenResult | null {
 export function createProjectService(options: ProjectServiceOptions): ProjectService {
   const appState: AppStateStore = createAppStateStore(options.userDataDir);
   let session: Session | null = null;
+  /**
+   * Distinguishes one opened cache handle from the next.
+   *
+   * Process-wide and never reset, so an id is unique across projects too: a
+   * handle that survived a mutation and a handle that replaced it can never
+   * accidentally compare equal.
+   */
+  let nextCacheHandleId = 1;
 
   /* ------------------------------------------------------------- lifecycle */
 
@@ -437,11 +511,13 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     return session;
   }
 
-  function releaseModel(active: Session): void {
-    if (active.model !== null) {
-      active.model.cache.close();
-      active.model = null;
+  /** Closes every open cache. Used when the project closes, never per source. */
+  function releaseModels(active: Session): void {
+    for (const model of active.models.values()) {
+      model.cache.close();
     }
+    active.models.clear();
+    active.propertyCatalog = null;
     active.derived = null;
   }
 
@@ -455,7 +531,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       modifiedAt: meta.modifiedAt,
       sourceCount: active.store.listSources().length,
       savedRevision: active.savedRevision,
-      hasModel: active.model !== null,
+      hasModel: active.models.size > 0,
     };
   }
 
@@ -513,8 +589,9 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       config,
       savedRevision: stored?.revision ?? null,
       details: new Map<string, SourceDetail>(),
-      model: null,
+      models: new Map<string, ModelState>(),
       melRows: [],
+      propertyCatalog: null,
       derived: null,
       view: null,
       compile: { state: 'never-run' },
@@ -540,22 +617,25 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
    */
   function rehydrateSources(active: Session): void {
     for (const source of active.store.listSources()) {
-      const knownPath = appState.sourcePath(source.sha256);
+      const knownPath = appState.sourcePath(source.rawSha256);
       if (knownPath === undefined || !existsSync(knownPath)) {
-        active.details.set(detailKey(source.role, source.fileName), {
+        active.details.set(source.sourceId, {
           absolutePath: '',
           status: 'file-missing',
           note:
-            `Matchline recorded ${source.fileName} but cannot find it on this machine. ` +
+            `Matchline recorded ${source.rawFileName} but cannot find it on this machine. ` +
             'Add the file again to work with it.',
           sheets: [],
         });
         continue;
       }
 
-      if (!bytesStillMatch(knownPath, source.sha256)) {
-        active.details.set(detailKey(source.role, source.fileName), {
-          absolutePath: '',
+      if (!bytesStillMatch(knownPath, source.rawSha256)) {
+        active.details.set(source.sourceId, {
+          // The path is kept even though nothing may read it: re-adding this
+          // same file has to land on this same source rather than register a
+          // second one, and the path is what proves it is the same file.
+          absolutePath: knownPath,
           status: 'file-changed',
           note:
             `The file at ${knownPath} has changed since it was added to this project. ` +
@@ -567,7 +647,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
 
       const identification = identifySource(knownPath);
       if (!identification.recognized) {
-        active.details.set(detailKey(source.role, source.fileName), {
+        active.details.set(source.sourceId, {
           absolutePath: knownPath,
           status: 'needs-attention',
           note: identification.reason,
@@ -582,7 +662,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       if (registration === undefined) {
         continue;
       }
-      active.details.set(detailKey(source.role, source.fileName), {
+      active.details.set(source.sourceId, {
         absolutePath: knownPath,
         status: registration.status,
         note: registration.note,
@@ -590,38 +670,109 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       });
     }
 
-    loadModel(active);
+    syncModels(active);
     loadMelRows(active);
   }
 
-  /* ----------------------------------------------------------------- model */
+  /* -------------------------------------------------------- model universe */
 
-  /** Opens the first ready model source, if there is one. Idempotent. */
-  function loadModel(active: Session): void {
-    releaseModel(active);
+  /**
+   * The extraction cache a model source is currently readable through, or
+   * `null` when it is not readable at all.
+   *
+   * A raw `.nwd` answers `null` today — it is registered but has no cache until
+   * the extraction service (P0-2, milestone 5) has produced one, which is what
+   * its `requires-windows-extraction` status says on screen 1. Everything else
+   * uses the source's own recorded cache hash, so "the file this handle was
+   * opened for" is a fact the session can compare against later.
+   */
+  function readableCacheOf(
+    active: Session,
+    source: ProjectSource,
+  ): { readonly absolutePath: string; readonly cacheSha256: string } | null {
+    if (source.role !== 'model' || source.derivedCacheSha256 === null) {
+      return null;
+    }
+    const detail = active.details.get(source.sourceId);
+    if (detail === undefined || detail.status !== 'ready' || detail.absolutePath === '') {
+      return null;
+    }
+    return { absolutePath: detail.absolutePath, cacheSha256: source.derivedCacheSha256 };
+  }
 
+  /**
+   * Brings the open caches in line with the registered model sources, opening
+   * and closing only what actually changed.
+   *
+   * This is the heart of P0-1's "replacing one source invalidates only its
+   * cache". A source whose id and cache hash are both unchanged keeps the very
+   * handle it had — not an equal one, the same one — so re-adding one file in a
+   * ten-file project costs one open, not ten. Derived state is dropped only
+   * when something did change, because the universe key it is memoized against
+   * is exactly the set this function reconciles.
+   */
+  function syncModels(active: Session): void {
+    const wanted = new Map<string, { source: ProjectSource; absolutePath: string; cacheSha256: string }>();
     for (const source of active.store.listSources()) {
-      if (source.role !== 'model') {
-        continue;
+      const readable = readableCacheOf(active, source);
+      if (readable !== null) {
+        wanted.set(source.sourceId, { source, ...readable });
       }
-      const detail = active.details.get(detailKey(source.role, source.fileName));
-      if (detail === undefined || detail.status !== 'ready' || detail.absolutePath === '') {
+    }
+
+    let changed = false;
+
+    for (const [sourceId, model] of [...active.models]) {
+      const target = wanted.get(sourceId);
+      if (target === undefined || target.cacheSha256 !== model.cacheSha256) {
+        model.cache.close();
+        active.models.delete(sourceId);
+        changed = true;
+      }
+    }
+
+    for (const [sourceId, target] of wanted) {
+      const existing = active.models.get(sourceId);
+      if (existing !== undefined) {
+        // Same source, same bytes: the handle stays open and untouched. Only
+        // the labels are refreshed, because a rename is not a re-extraction.
+        if (
+          existing.displayName !== target.source.logicalName ||
+          existing.rawFileName !== target.source.rawFileName
+        ) {
+          active.models.set(sourceId, {
+            ...existing,
+            displayName: target.source.logicalName,
+            rawFileName: target.source.rawFileName,
+          });
+        }
         continue;
       }
 
       let cache: ExtractionCache;
       try {
-        cache = openExtractionCache(detail.absolutePath);
+        cache = openExtractionCache(target.absolutePath);
       } catch {
+        // Reported through the source's status on screen 1, not by failing
+        // every other source in the universe.
         continue;
       }
-      active.model = describeModel(cache, source.fileName);
-      return;
+      active.models.set(sourceId, describeModel(target.source, target.cacheSha256, cache));
+      changed = true;
+    }
+
+    if (changed) {
+      active.propertyCatalog = null;
+      active.derived = null;
     }
   }
 
-  function describeModel(cache: ExtractionCache, fileName: string): ModelState {
-    const catalog = buildPropertyCatalog(cache);
+  /** One object pass over a newly opened cache: classes, source models, counts. */
+  function describeModel(
+    source: ProjectSource,
+    cacheSha256: string,
+    cache: ExtractionCache,
+  ): ModelState {
     const meta = cache.meta();
 
     const objectsPerModel = new Map<number | null, number>();
@@ -661,20 +812,79 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           : right.objectCount - left.objectCount,
       );
 
+    const handleId = nextCacheHandleId;
+    nextCacheHandleId += 1;
+
     return {
+      sourceId: source.sourceId,
+      displayName: source.logicalName,
+      rawFileName: source.rawFileName,
+      cacheSha256,
+      handleId,
       cache,
-      catalog,
       classes,
-      scan: {
-        fileName,
-        objectCount: cache.objectCount(),
-        propertyNameCount: catalog.length,
-        sourceModels,
-        extractedAtUtc: meta.extractedAtUtc,
-        navisworksVersion: meta.navisworksVersion,
-        warningCount: cache.warnings().length,
-      },
+      objectCount: cache.objectCount(),
+      sourceModels,
+      extractedAtUtc: meta.extractedAtUtc,
+      navisworksVersion: meta.navisworksVersion,
+      warningCount: cache.warnings().length,
     };
+  }
+
+  /** Every open model source, in `sourceId` order — the order the engine reads. */
+  function orderedModels(active: Session): readonly ModelState[] {
+    return [...active.models.values()].sort((left, right) =>
+      left.sourceId < right.sourceId ? -1 : left.sourceId > right.sourceId ? 1 : 0,
+    );
+  }
+
+  /**
+   * The identity of the universe as it stands: every open source and the bytes
+   * behind it.
+   *
+   * Everything derived from the caches is memoized against this. Replacing one
+   * source changes it; renaming one does not, because a rename is not new
+   * content and re-deriving on one would be work for nothing.
+   */
+  function universeKeyOf(active: Session): string {
+    return orderedModels(active)
+      .map((model) => `${model.sourceId}@${model.cacheSha256}`)
+      .join('|');
+  }
+
+  /** Compact per-source names for the rows that name several sources at once. */
+  function modelLabels(active: Session): ReadonlyMap<string, string> {
+    return shortSourceLabels(orderedModels(active).map((model) => model.sourceId));
+  }
+
+  /** The universe as `@matchline/compiler` and `@matchline/asset-catalog` take it. */
+  function compileSources(active: Session): readonly CompileSource[] {
+    return orderedModels(active).map((model) => ({
+      sourceId: model.sourceId,
+      cache: model.cache,
+      displayName: model.displayName,
+      rawFileName: model.rawFileName,
+    }));
+  }
+
+  /**
+   * The aggregated Property Catalog, built once per universe.
+   *
+   * One streaming pass per open cache, which is why it is built on demand and
+   * kept: screen 2 pages it, screen 3's pickers read it, and neither should pay
+   * for it twice.
+   */
+  function universeCatalog(active: Session): readonly UniversePropertyCatalogEntry[] {
+    const universeKey = universeKeyOf(active);
+    const cached = active.propertyCatalog;
+    if (cached !== null && cached.universeKey === universeKey) {
+      return cached.entries;
+    }
+    const entries = buildUniversePropertyCatalog(
+      orderedModels(active).map((model) => ({ sourceId: model.sourceId, cache: model.cache })),
+    );
+    active.propertyCatalog = { universeKey, entries };
+    return entries;
   }
 
   /** Re-reads every MEL source. Screen 5's `mel-lookup` rungs join against these. */
@@ -684,8 +894,8 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       if (source.role !== 'mel') {
         continue;
       }
-      const detail = active.details.get(detailKey(source.role, source.fileName));
-      if (detail === undefined || detail.absolutePath === '') {
+      const detail = active.details.get(source.sourceId);
+      if (detail === undefined || detail.status !== 'ready' || detail.absolutePath === '') {
         continue;
       }
       try {
@@ -705,52 +915,108 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
   }
 
   /**
-   * The asset catalog for the current draft, rebuilt only when the mappings or
-   * filters actually changed.
+   * The asset catalog for the current draft over the current universe, rebuilt
+   * only when the mappings, the filters or the universe actually changed.
    *
-   * @throws Error when there is no model, or no equipment tag property chosen.
+   * @throws Error when no model source is readable, or no equipment tag
+   * property has been chosen.
    */
   function requireDerived(active: Session): DerivedAssets {
-    const model = active.model;
-    if (model === null) {
+    if (active.models.size === 0) {
       throw new Error('Add a model extraction cache on screen 1 before previewing assets.');
     }
 
     const configKey = configKeyOf(active);
+    const universeKey = universeKeyOf(active);
     const cached = active.derived;
-    if (cached !== null && cached.configKey === configKey) {
+    if (cached !== null && cached.configKey === configKey && cached.universeKey === universeKey) {
       return cached;
     }
 
     const mappings = toPropertyMappings(active.draft.propertyMappings);
     const filters = toAssetFilters(active.draft.assetFilters);
-    // The same universe of one the compile runs on, so the asset ids previewed
-    // on screen 3 are the asset ids screen 8 reports.
-    const sources = [{ sourceId: MODEL_SOURCE_ID, cache: model.cache }];
+    // The same universe the compile runs on, so the asset ids previewed on
+    // screen 3 are the asset ids screen 8 reports.
+    const sources = compileSources(active);
     const catalog = buildAssetCatalog(sources, mappings, filters);
 
+    const fileOf = new Map(sources.map((source) => [source.sourceId, source.rawFileName]));
     const subjects: ResolverSubject[] = catalog.assets.map((asset) => ({
       assetId: asset.assetId,
       canonicalTag: asset.canonicalTag,
       properties: subjectPropertiesFor(sources, asset, mappings.equipmentTag),
-      sourceFile: model.scan.fileName,
+      // The asset's own source, never the first one: a subject that named the
+      // wrong file would put a wrong document behind every claim it makes.
+      sourceFile: fileOf.get(asset.sourceId) ?? asset.sourceId,
       objectId: String(asset.objectIds[0] ?? 0),
     }));
 
-    const derived: DerivedAssets = { configKey, catalog, subjects };
+    const derived: DerivedAssets = { configKey, universeKey, catalog, subjects };
     active.derived = derived;
     return derived;
   }
 
   /* --------------------------------------------------------------- sources */
 
+  /**
+   * The `sourceId` a file being added belongs to: an existing source it *is*,
+   * or a fresh one.
+   *
+   * Three cases, and the difference between them is the whole of P0-1's
+   * "same-basename files coexist":
+   *
+   * 1. **The same bytes, again.** Same role, same basename, same hash — this is
+   *    the source that is already registered, being re-added. It replaces
+   *    itself and nothing else moves.
+   * 2. **The same file, changed.** Same role, same basename, and the path this
+   *    machine last saw that source at. New bytes for a file that is still the
+   *    same file, so it keeps its id and its cache is invalidated — which is
+   *    also how a `file-changed` row is cleared: re-adding re-digests it.
+   * 3. **A different file wearing the same name.** Anything else. Four
+   *    consultants each ship `Level 1.nwc` and all four are real equipment, so
+   *    this becomes a NEW source and `deriveSourceId` suffixes the id.
+   *
+   * The path is what separates 2 from 3, and it is the only thing that can:
+   * the bytes differ in both cases and the names are equal in both.
+   */
+  function sourceIdFor(
+    active: Session,
+    role: SourceRole,
+    fileName: string,
+    absolutePath: string,
+    sha256: string,
+  ): string {
+    const rows = active.store.listSources();
+    const sameName = rows.filter(
+      (row: ProjectSource): boolean => row.role === role && row.rawFileName === fileName,
+    );
+
+    const sameBytes = sameName.find((row: ProjectSource): boolean => row.rawSha256 === sha256);
+    if (sameBytes !== undefined) {
+      return sameBytes.sourceId;
+    }
+    const samePath = sameName.find(
+      (row: ProjectSource): boolean =>
+        active.details.get(row.sourceId)?.absolutePath === absolutePath,
+    );
+    if (samePath !== undefined) {
+      return samePath.sourceId;
+    }
+    // Every id in the project, not just this name's: an id has to dodge
+    // whatever else is registered, whatever role it holds.
+    return deriveSourceId(role, fileName, rows.map((row: ProjectSource): string => row.sourceId));
+  }
+
   function summarizeSource(source: ProjectSource): WireSourceSummary {
-    const detail = session?.details.get(detailKey(source.role, source.fileName));
+    const detail = session?.details.get(source.sourceId);
     return {
+      sourceId: source.sourceId,
       role: source.role,
-      fileName: source.fileName,
-      sha256: source.sha256,
-      byteSize: source.byteSize,
+      logicalName: source.logicalName,
+      rawFileName: source.rawFileName,
+      rawSha256: source.rawSha256,
+      rawByteSize: source.rawByteSize,
+      derivedCacheSha256: source.derivedCacheSha256,
       addedAt: source.addedAt,
       status: detail?.status ?? 'needs-attention',
       note: detail?.note ?? `${roleLabel(source.role)} source recorded in this project.`,
@@ -762,7 +1028,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     if (session === null) {
       return false;
     }
-    releaseModel(session);
+    releaseModels(session);
     session.store.close();
     session = null;
     return true;
@@ -809,17 +1075,22 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       if (!wanted.includes(source.role)) {
         continue;
       }
-      const detail = active.details.get(detailKey(source.role, source.fileName));
-      if (detail === undefined || detail.absolutePath === '' || !existsSync(detail.absolutePath)) {
+      const detail = active.details.get(source.sourceId);
+      if (
+        detail === undefined ||
+        detail.status !== 'ready' ||
+        detail.absolutePath === '' ||
+        !existsSync(detail.absolutePath)
+      ) {
         throw new Error(
-          `Matchline cannot find ${source.fileName} on this machine, and it is a ` +
+          `Matchline cannot read ${source.rawFileName} on this machine, and it is a ` +
             `${roleLabel(source.role)} source this project compiles from. ` +
             'Add the file again on screen 1, or remove the source.',
         );
       }
       inputs.push({
         bytes: readFileSync(detail.absolutePath),
-        sourceFile: source.fileName,
+        sourceFile: source.rawFileName,
       });
     }
     return inputs;
@@ -831,10 +1102,15 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       if (source.role !== 'mel') {
         continue;
       }
-      const detail = active.details.get(detailKey(source.role, source.fileName));
-      if (detail === undefined || detail.absolutePath === '' || !existsSync(detail.absolutePath)) {
+      const detail = active.details.get(source.sourceId);
+      if (
+        detail === undefined ||
+        detail.status !== 'ready' ||
+        detail.absolutePath === '' ||
+        !existsSync(detail.absolutePath)
+      ) {
         throw new Error(
-          `Matchline cannot find ${source.fileName} on this machine, and it is the master ` +
+          `Matchline cannot read ${source.rawFileName} on this machine, and it is the master ` +
             'equipment list this project resolves systems against. Add it again on screen 1, ' +
             'or remove the source.',
         );
@@ -846,7 +1122,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       }
       return {
         bytes,
-        sourceFile: source.fileName,
+        sourceFile: source.rawFileName,
         sheetName: descriptor.sheetName,
         mapping: descriptor.mapping,
         headerRow: descriptor.headerRow,
@@ -918,16 +1194,61 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
    * A compile is refused while any of these exist. Silently skipping them would
    * produce a register with a third of the edges missing; reading them anyway
    * would put content the project never recorded behind an approved compile id.
+   *
+   * Named `rawFileName (sourceId)` when two sources share a basename, because
+   * "Level 1.nwc has changed" is not actionable in a project holding four of
+   * them.
    */
   function changedSourceNames(active: Session): readonly string[] {
+    const rows = active.store.listSources();
+    const nameUses = new Map<string, number>();
+    for (const source of rows) {
+      nameUses.set(source.rawFileName, (nameUses.get(source.rawFileName) ?? 0) + 1);
+    }
+
     const names: string[] = [];
+    for (const source of rows) {
+      if (active.details.get(source.sourceId)?.status !== 'file-changed') {
+        continue;
+      }
+      names.push(
+        (nameUses.get(source.rawFileName) ?? 0) > 1
+          ? `${source.rawFileName} (${source.sourceId})`
+          : source.rawFileName,
+      );
+    }
+    return names;
+  }
+
+  /**
+   * Every model source this project cannot read right now, and why.
+   *
+   * A compile over a universe with a hole in it is not a smaller compile — it
+   * is a register that quietly lost a building. So the refusal names the
+   * sources rather than dropping them, and it says which of "changed" and
+   * "missing" each one is, because the fix differs: a changed file is re-added,
+   * a missing one is found.
+   *
+   * A raw `.nwd` awaiting extraction is not in here. It has never contributed
+   * to a compile, its status says so on screen 1, and refusing every compile
+   * until milestone 5 lands would be a different product.
+   */
+  function unreadableModelSources(active: Session): readonly string[] {
+    const blocked: string[] = [];
     for (const source of active.store.listSources()) {
-      const detail = active.details.get(detailKey(source.role, source.fileName));
-      if (detail?.status === 'file-changed') {
-        names.push(source.fileName);
+      if (source.role !== 'model' || source.derivedCacheSha256 === null) {
+        continue;
+      }
+      const status = active.details.get(source.sourceId)?.status;
+      if (status === 'file-changed') {
+        blocked.push(`${source.logicalName} has changed on disk`);
+      } else if (status === 'file-missing') {
+        blocked.push(`${source.logicalName} cannot be found on this machine`);
+      } else if (!active.models.has(source.sourceId)) {
+        blocked.push(`${source.logicalName} could not be opened`);
       }
     }
-    return [...new Set(names)];
+    return blocked;
   }
 
   function requireView(active: Session): CompileView {
@@ -986,7 +1307,18 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           'recorded. Add the file again on screen 1, or remove the source.',
       };
     }
-    if (active.model === null) {
+    const blocked = unreadableModelSources(active);
+    if (blocked.length > 0) {
+      return {
+        state: 'failed',
+        reason:
+          `This project compiles from ${String(blocked.length)} model ` +
+          `${blocked.length === 1 ? 'source' : 'sources'} it cannot read: ${blocked.join('; ')}. ` +
+          'Compiling without them would produce a register missing everything they hold. ' +
+          'Add each file again on screen 1, or remove the source.',
+      };
+    }
+    if (active.models.size === 0) {
       return {
         state: 'failed',
         reason: 'Add a model extraction cache on screen 1. Everything else is matched against it.',
@@ -1017,7 +1349,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     let project: CompiledProject;
     try {
       project = runCompile({
-        cache: active.model.cache,
+        sources: compileSources(active),
         profile,
         config: active.config,
         connectivityWorkbooks: connectivityInputs(active),
@@ -1036,9 +1368,12 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     const finishedAt = new Date(finishedAtMs).toISOString();
     const view = createCompileView(project, active.config);
 
+    // Keyed by `sourceId`, which is unique by construction — two sources of one
+    // basename used to collapse into a single entry here, recording one hash
+    // for two files.
     const inputHashes: Record<string, string> = {};
     for (const source of active.store.listSources()) {
-      inputHashes[`${source.role}/${source.fileName}`] = source.sha256;
+      inputHashes[source.sourceId] = source.rawSha256;
     }
 
     const compileId = active.store.withTransaction((): number => {
@@ -1170,32 +1505,50 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         appState.rememberSourcePath(digest.sha256, absolutePath);
 
         for (const registration of identification.registrations) {
-          active.store.upsertSource({
-            role: registration.role,
+          const sourceId = sourceIdFor(
+            active,
+            registration.role,
             fileName,
-            sha256: digest.sha256,
-            byteSize: digest.byteSize,
+            absolutePath,
+            digest.sha256,
+          );
+          const existing = active.store.getSource(sourceId);
+          active.store.upsertSourceV4({
+            sourceId,
+            role: registration.role,
+            // The logical name and the added-at of an existing source are left
+            // alone: the first is what a person calls this source and the
+            // second is when the project took it on. Re-adding a file is
+            // neither a rename nor a new registration.
+            logicalName: existing?.logicalName ?? fileName,
+            rawFileName: fileName,
+            rawSha256: digest.sha256,
+            rawByteSize: digest.byteSize,
+            addedAt: existing?.addedAt ?? new Date().toISOString(),
+            // A cache or a workbook IS the bytes the engine reads, so the file's
+            // own hash is also the hash of what was derived from it. A raw
+            // Navisworks file is not: it has no cache until the extraction
+            // service produces one (P0-2), so the key is left out entirely and
+            // `upsertSourceV4` records "no cache associated".
+            ...(registration.status === 'requires-windows-extraction'
+              ? {}
+              : { derivedCacheSha256: digest.sha256 }),
           });
-          active.details.set(detailKey(registration.role, fileName), {
+          active.details.set(sourceId, {
             absolutePath,
             status: registration.status,
             note: registration.note,
             sheets: registration.sheets,
           });
 
-          const stored = active.store
-            .listSources()
-            .find(
-              (row: ProjectSource): boolean =>
-                row.role === registration.role && row.fileName === fileName,
-            );
+          const stored = active.store.getSource(sourceId);
           if (stored !== undefined) {
             results.push({ outcome: 'added', source: summarizeSource(stored) });
           }
         }
       }
 
-      loadModel(active);
+      syncModels(active);
       loadMelRows(active);
       return results;
     },
@@ -1204,33 +1557,87 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       return requireSession().store.listSources().map(summarizeSource);
     },
 
-    removeSource(role: SourceRole, fileName: string): boolean {
+    removeSource(sourceId: string): boolean {
       const active = requireSession();
-      const removed = active.store.removeSource(role, fileName);
-      active.details.delete(detailKey(role, fileName));
-      if (role === 'model') {
-        loadModel(active);
-      }
-      if (role === 'mel') {
-        loadMelRows(active);
-      }
+      const removed = active.store.removeSource(sourceId);
+      active.details.delete(sourceId);
+      // Both, unconditionally: which role the row held is no longer knowable
+      // once it is gone, and both reconcilers are no-ops when nothing changed.
+      syncModels(active);
+      loadMelRows(active);
       return removed;
     },
 
-    modelScan(): WireModelScan | null {
-      return requireSession().model?.scan ?? null;
+    modelUniverse(): WireModelUniverse | null {
+      const active = requireSession();
+      const models = orderedModels(active);
+      if (models.length === 0) {
+        return null;
+      }
+
+      // Read off the aggregated catalog rather than summed per source: two
+      // sources carrying `Dragon Data > Tag` are ONE property on screen 2, and
+      // a total that said two would not be the length of the list below it.
+      const catalog = universeCatalog(active);
+      const perSourcePropertyCount = new Map<string, number>();
+      for (const entry of catalog) {
+        for (const sourceId of entry.bySource.keys()) {
+          perSourcePropertyCount.set(sourceId, (perSourcePropertyCount.get(sourceId) ?? 0) + 1);
+        }
+      }
+
+      const sources: WireModelScan[] = models.map((model) => ({
+        sourceId: model.sourceId,
+        displayName: model.displayName,
+        rawFileName: model.rawFileName,
+        objectCount: model.objectCount,
+        propertyNameCount: perSourcePropertyCount.get(model.sourceId) ?? 0,
+        sourceModels: [...model.sourceModels],
+        extractedAtUtc: model.extractedAtUtc,
+        navisworksVersion: model.navisworksVersion,
+        warningCount: model.warningCount,
+      }));
+
+      return {
+        sourceCount: sources.length,
+        objectCount: sources.reduce((total, source) => total + source.objectCount, 0),
+        propertyNameCount: catalog.length,
+        warningCount: sources.reduce((total, source) => total + source.warningCount, 0),
+        sources,
+      };
     },
 
     propertyPage(request: PropertyPageRequest): PropertyPageResult {
       const active = requireSession();
-      if (active.model === null) {
+      if (active.models.size === 0) {
         return { total: 0, rows: [] };
       }
-      return catalogPage(active.model.catalog, active.model.scan.objectCount, request);
+      return catalogPage(universeCatalog(active), modelLabels(active), request);
     },
 
     classList(): readonly WireClassCount[] {
-      return requireSession().model?.classes ?? [];
+      const active = requireSession();
+      // Summed across the universe: a class filter is a decision about the
+      // project, and a count from whichever cache opened first would understate
+      // what excluding it removes.
+      const counts = new Map<string, number>();
+      for (const model of active.models.values()) {
+        for (const entry of model.classes) {
+          counts.set(entry.className, (counts.get(entry.className) ?? 0) + entry.objectCount);
+        }
+      }
+      return [...counts.entries()]
+        .map(([className, objectCount]) => ({ className, objectCount }))
+        .sort((left, right) =>
+          left.objectCount === right.objectCount
+            ? left.className.localeCompare(right.className)
+            : right.objectCount - left.objectCount,
+        );
+    },
+
+    cacheHandleIds(): ReadonlyMap<string, number> {
+      const active = requireSession();
+      return new Map([...active.models].map(([sourceId, model]) => [sourceId, model.handleId]));
     },
 
     draftState(): DraftState {
@@ -1281,7 +1688,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
 
     assetPreview(): WireAssetPreview {
       const active = requireSession();
-      if (active.model === null) {
+      if (active.models.size === 0) {
         return {
           state: 'blocked',
           reason: 'Add a model extraction cache on screen 1 to see which objects become assets.',
@@ -1293,12 +1700,12 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           reason: 'Choose the property that holds the equipment tag to see the inclusion impact.',
         };
       }
-      return buildAssetPreview(requireDerived(active).catalog);
+      return buildAssetPreview(requireDerived(active).catalog, modelLabels(active));
     },
 
     anatomyPreview(): WireAnatomyPreview {
       const active = requireSession();
-      if (active.model === null || !hasMappings(active.draft)) {
+      if (active.models.size === 0 || !hasMappings(active.draft)) {
         return {
           state: 'blocked',
           reason: 'Finish screen 3 first — the anatomy is previewed against your real asset tags.',
@@ -1315,7 +1722,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
 
     resolverPreview(): WireResolverPreview {
       const active = requireSession();
-      if (active.model === null || !hasMappings(active.draft)) {
+      if (active.models.size === 0 || !hasMappings(active.draft)) {
         return {
           state: 'blocked',
           reason: 'Finish screen 3 first — systems are resolved for the assets it defines.',
@@ -1372,7 +1779,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     roleValues(): readonly string[] {
       const active = requireSession();
       const anatomy = toTagAnatomy(active.draft.tagAnatomy);
-      if (anatomy === null || active.model === null || !hasMappings(active.draft)) {
+      if (anatomy === null || active.models.size === 0 || !hasMappings(active.draft)) {
         return [];
       }
       const roles = new Set<string>();
@@ -1393,7 +1800,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
 
     disciplineValues(): readonly string[] {
       const active = requireSession();
-      if (active.model === null || !hasMappings(active.draft)) {
+      if (active.models.size === 0 || !hasMappings(active.draft)) {
         return [];
       }
       const disciplines = new Set<string>();

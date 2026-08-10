@@ -7,6 +7,7 @@ import type {
   WirePropertyMappings,
   WirePropertyRef,
   WireSampleAsset,
+  WireSourceImpact,
 } from '../../../shared/schemas';
 import { call, count, percent } from '../api';
 import { Field } from '../components/Field';
@@ -63,8 +64,14 @@ export function Screen3Assets({ context }: { readonly context: WizardContext }):
     [context],
   );
 
+  // The universe is part of the key: adding or replacing a model source
+  // changes the impact even when nothing on this screen was touched.
   const preview = usePreview(
-    JSON.stringify([mappings, filters, context.scan?.fileName ?? '']),
+    JSON.stringify([
+      mappings,
+      filters,
+      context.universe?.sources.map((source) => source.sourceId) ?? [],
+    ]),
     async () => (await call(window.matchline.asset.preview())).preview,
   );
 
@@ -322,6 +329,45 @@ export function Screen3Assets({ context }: { readonly context: WizardContext }):
                   </tbody>
                 </table>
               </TableScroll>
+
+              {preview.data.bySource.length < 2 ? null : (
+                <>
+                  <h3 className="panel__subtitle">Per model source</h3>
+                  <TableScroll>
+                    <table className="table table--compact" data-testid="impact-by-source">
+                      <thead>
+                        <tr>
+                          <th>Source</th>
+                          <th className="table__number">Objects</th>
+                          <th className="table__number">No tag</th>
+                          <th className="table__number">Folded in</th>
+                          <th className="table__number">Assets</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {preview.data.bySource.map((source: WireSourceImpact): JSX.Element => (
+                          <tr key={source.sourceId}>
+                            <td>{source.label}</td>
+                            <td className="table__number">{count(source.totalObjects)}</td>
+                            <td className="table__number">{count(source.untaggedDroppedCount)}</td>
+                            <td className="table__number">{count(source.collapsedCount)}</td>
+                            <td className="table__number">{count(source.finalAssetCount)}</td>
+                          </tr>
+                        ))}
+                        <tr className="table__total">
+                          <td>{count(preview.data.bySource.length)} sources</td>
+                          <td className="table__number">{count(preview.data.totalObjects)}</td>
+                          <td className="table__number">
+                            {count(preview.data.untaggedDroppedCount)}
+                          </td>
+                          <td className="table__number">{count(preview.data.collapsedCount)}</td>
+                          <td className="table__number">{count(preview.data.finalAssetCount)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </TableScroll>
+                </>
+              )}
 
               <h3 className="panel__subtitle">First assets</h3>
               <TableScroll>

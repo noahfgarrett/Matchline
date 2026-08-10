@@ -803,6 +803,16 @@ code {
   padding: var(--space-1) var(--space-3);
 }
 
+/*
+ * The summed row of a per-source table. Ruled off above rather than bolded
+ * throughout: it is the same numbers added up, not a more important fact.
+ */
+.table__total td {
+  border-top: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
 /* ----------------------------------------------------------- virtual table */
 
 .virtual-table {
@@ -821,6 +831,31 @@ code {
   align-items: center;
   gap: var(--space-3);
   padding: 0 var(--space-3);
+}
+
+/*
+ * Once a project holds two model sources every row carries a second line: the
+ * per-source coverage behind its overall number. It spans the whole row rather
+ * than sitting inside the coverage column, because
+ * `mechanical 98% · controls 61%` does not fit in a column sized for `98%` and
+ * the point of the line is to be readable.
+ *
+ * The rows are absolutely positioned at a fixed height by the virtualizer, so
+ * the cells are top-aligned here: centring a two-line row against a one-line
+ * one is what makes a virtual list look like it is vibrating.
+ */
+.virtual-table--sourced .virtual-table__row {
+  align-items: start;
+  padding-top: var(--space-2);
+}
+
+.virtual-table__sources {
+  overflow: hidden;
+  grid-column: 1 / -1;
+  color: var(--text-faint);
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .virtual-table__head {

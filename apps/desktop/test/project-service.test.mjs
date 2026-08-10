@@ -141,9 +141,12 @@ test('the full screens 1-5 flow, over the Dragon fixture', async (t) => {
     const added = results.filter((entry) => entry.outcome === 'added').map((entry) => entry.source);
     const model = added.find((source) => source.role === 'model');
     assert.ok(model !== undefined, 'the cache registered as a model source');
-    assert.equal(model.fileName, 'Dragon.matchline-cache');
+    assert.equal(model.sourceId, 'model:dragon.matchline-cache');
+    assert.equal(model.rawFileName, 'Dragon.matchline-cache');
+    assert.equal(model.logicalName, 'Dragon.matchline-cache', 'the name starts as the file name');
     assert.equal(model.status, 'ready');
-    assert.equal(model.sha256.length, 64);
+    assert.equal(model.rawSha256.length, 64);
+    assert.equal(model.derivedCacheSha256, model.rawSha256, 'a cache IS the bytes the engine reads');
     assert.match(model.note, /76 objects/);
 
     const mel = added.find((source) => source.role === 'mel');
@@ -169,7 +172,13 @@ test('the full screens 1-5 flow, over the Dragon fixture', async (t) => {
   });
 
   await t.test('screen 2 reports the model and pages the Property Catalog', () => {
-    const scan = service.modelScan();
+    const universe = service.modelUniverse();
+    assert.equal(universe.sourceCount, 1);
+    assert.equal(universe.objectCount, DRAGON_OBJECT_COUNT);
+    assert.equal(universe.propertyNameCount, DRAGON_PROPERTY_COUNT);
+
+    const [scan] = universe.sources;
+    assert.equal(scan.sourceId, 'model:dragon.matchline-cache');
     assert.equal(scan.objectCount, DRAGON_OBJECT_COUNT);
     assert.equal(scan.propertyNameCount, DRAGON_PROPERTY_COUNT);
     assert.equal(scan.sourceModels.length, 3);
@@ -206,6 +215,13 @@ test('the full screens 1-5 flow, over the Dragon fixture', async (t) => {
     assert.equal(tagPage.rows[0].objectCount, DRAGON_TAGGED_COUNT);
     assert.equal(tagPage.rows[0].distinctValueCount, DRAGON_TAGGED_COUNT);
     assert.equal(tagPage.rows[0].examples.length, 3, 'up to three examples');
+    assert.deepEqual(
+      tagPage.rows[0].bySource.map((source) => source.sourceId),
+      ['model:dragon.matchline-cache'],
+      'a one-source project still discloses which source the coverage came from',
+    );
+    assert.equal(tagPage.rows[0].bySource[0].label, 'dragon');
+    assert.equal(tagPage.rows[0].bySource[0].objectCount, DRAGON_TAGGED_COUNT);
     assert.equal(
       tagPage.rows[0].suggestedRole,
       'equipment-tag',
@@ -457,8 +473,8 @@ test('removing the model source takes screens 2-5 back to blocked', () => {
   const service = newService();
   try {
     service.open(projectPath, false);
-    assert.equal(service.removeSource('model', 'Dragon.matchline-cache'), true);
-    assert.equal(service.modelScan(), null);
+    assert.equal(service.removeSource('model:dragon.matchline-cache'), true);
+    assert.equal(service.modelUniverse(), null);
     assert.deepEqual(service.classList(), []);
     assert.equal(service.assetPreview().state, 'blocked');
     assert.equal(service.anatomyPreview().state, 'blocked');
