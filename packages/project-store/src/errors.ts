@@ -44,6 +44,7 @@ export type ProjectStoreReason =
   | { readonly kind: 'malformed-json'; readonly table: string; readonly detail: string }
   | { readonly kind: 'invalid-profile'; readonly field: string; readonly detail: string }
   | { readonly kind: 'invalid-snapshot'; readonly field: string; readonly detail: string }
+  | { readonly kind: 'invalid-ledger'; readonly field: string; readonly detail: string }
   | { readonly kind: 'invalid-override'; readonly field: string; readonly detail: string }
   | { readonly kind: 'unknown-compile'; readonly compileId: number }
   | { readonly kind: 'unknown-profile-revision'; readonly revision: number }
@@ -95,6 +96,8 @@ export function describeProjectStoreReason(reason: ProjectStoreReason): string {
       return `site profile field '${reason.field}' is invalid: ${reason.detail}`;
     case 'invalid-snapshot':
       return `snapshot field '${reason.field}' is invalid: ${reason.detail}`;
+    case 'invalid-ledger':
+      return `asset identity ledger field '${reason.field}' is invalid: ${reason.detail}`;
     case 'invalid-override':
       return `override field '${reason.field}' is invalid: ${reason.detail}`;
     case 'unknown-compile':

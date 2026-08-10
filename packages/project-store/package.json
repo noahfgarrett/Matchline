@@ -19,6 +19,7 @@
     "test": "tsc -b && node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@matchline/asset-identity": "0.1.0",
     "@matchline/domain": "0.1.0"
   }
 }

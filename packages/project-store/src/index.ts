@@ -15,10 +15,13 @@ export type { ProjectStoreReason } from './errors.js';
 
 export { canonicalJson } from './json.js';
 
+export { deserializeLedger } from './ledger-json.js';
+
 export { validateRelationshipOverride, validateSystemOverride } from './overrides.js';
 export type { ManualSystemOverride, StoredOverride } from './overrides.js';
 
 export {
+  addLedgerTableV5,
   MIGRATION_STEPS,
   migrateSourcesToV4,
   WIDEN_CHECKS_SQL,
@@ -39,6 +42,7 @@ export {
   isSourceRole,
   LEARNED_RULE_KINDS,
   LEARNED_TABLE_SQL,
+  LEDGER_TABLE_SQL,
   OVERRIDE_KINDS,
   PROJECT_SCHEMA_SQL,
   PROJECT_SCHEMA_VERSION,
@@ -79,4 +83,5 @@ export type {
   ProjectStore,
   ReviewDecision,
   SourceInputV4,
+  StoredLedger,
 } from './store.js';

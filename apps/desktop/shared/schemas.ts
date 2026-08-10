@@ -887,8 +887,48 @@ export const compileSummarySchema = z.object({
   generatedMelRowCount: z.number().int().nonnegative(),
   reviewItemCount: z.number().int().nonnegative(),
   undecidedReviewItemCount: z.number().int().nonnegative(),
+
+  /**
+   * What the asset identity ledger did this compile (P0-9).
+   *
+   * One number per {@link ledgerEventSchema} kind, plus the orphaned decisions
+   * that fell out of re-addressing stored decisions through it. A first compile
+   * reports every asset as new and nothing else; an ordinary recompile of an
+   * unchanged project reports zero across the board, which is the answer that
+   * says identity held.
+   */
+  ledgerNewAssetCount: z.number().int().nonnegative(),
+  ledgerTagChangedCount: z.number().int().nonnegative(),
+  ledgerRematchedByTagCount: z.number().int().nonnegative(),
+  ledgerSplitCount: z.number().int().nonnegative(),
+  ledgerDisappearedCount: z.number().int().nonnegative(),
+  /** Stored decisions the ledger could not re-address. They are review items. */
+  orphanedDecisionCount: z.number().int().nonnegative(),
 });
 export type WireCompileSummary = z.infer<typeof compileSummarySchema>;
+
+/**
+ * One thing reconciliation did to one asset, as the identity log prints it.
+ *
+ * Mirrors `LedgerEvent` in `@matchline/asset-identity` with its optional fields
+ * spelled `''`, which is this app's wire convention: a renderer that has to tell
+ * `undefined` from a missing key to decide whether to draw a cell is a renderer
+ * that will eventually get it wrong.
+ */
+export const ledgerEventSchema = z.object({
+  /** `new-asset`, `tag-changed`, `rematched-by-tag`, `split` or `disappeared`. */
+  kind: z.string().min(1),
+  assetId: z.string().min(1),
+  /** The tag after this compile. `''` when the asset carries none. */
+  tag: z.string(),
+  /** `tag-changed` only: the spelling that became an alias. `''` otherwise. */
+  previousTag: z.string(),
+  /** Which evidence tier tied this compile to the previous ledger. `''` if new. */
+  tier: z.string(),
+  /** One line a person can read. Written by the engine, not by the app. */
+  detail: z.string().min(1),
+});
+export type WireLedgerEvent = z.infer<typeof ledgerEventSchema>;
 
 export const compileStatusSchema = z.discriminatedUnion('state', [
   z.object({ state: z.literal('never-run') }),

@@ -22,8 +22,8 @@ hard gates are mandatory; if code-complete but hardware-blocked, produce
 | 9 | Manual parent cannot violate an enabled boundary | open |
 | 10 | Cross-System parents become dependencies | open (holds today for claims; manual pending) |
 | 11 | Default SSM Discipline level nonstructural | open |
-| 12 | Stable asset identity survives tag correction | GREEN at engine level (M3: ledger + reconciliation + override migration + identity-derived diff); store/desktop persistence of the ledger is M3's second half |
-| 13 | 0.8.1 projects migrate with backup, no silent decision loss | open |
+| 12 | Stable asset identity survives tag correction | GREEN (M3: ledger engine + store v5 + desktop lifecycle; tier-1 stable-id property arrives with SiteProfileV2 in M4) |
+| 13 | 0.8.1 projects migrate with backup, no silent decision loss | partial: v3->v4->v5 chain opt-in+backup proven; tag-keyed decisions resolve via ledger; final 0.8.1 end-to-end migration test in M10 |
 | 14 | Real Navisworks Manage 2025 extraction proof | BLOCKED: needs Noah's Windows box |
 | 15 | Selection Set behavior verified | BLOCKED: same |
 | 16 | Search Sets fully implemented or honestly blocked | open (code side) / verify on Windows |

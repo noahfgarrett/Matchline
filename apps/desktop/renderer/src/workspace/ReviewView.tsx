@@ -16,6 +16,14 @@ import { Callout, Panel, Stat, StatRow, TableScroll } from '../components/Panel'
 
 const PAGE_SIZE = 100;
 
+/**
+ * One plain-language name per `ReviewItem['kind']`.
+ *
+ * The filter chips are built from the kinds the compile actually produced, so a
+ * kind the engine adds appears here on its own; what this table adds is the
+ * words. A kind with no entry falls back to its own slug, which is honest but
+ * reads like a bug report, so every kind the engine can emit has a line.
+ */
 const KIND_LABELS: Readonly<Record<string, string>> = {
   'system-conflict': 'Systems disagree',
   'duplicate-model-tag': 'Duplicate tags',
@@ -26,6 +34,12 @@ const KIND_LABELS: Readonly<Record<string, string>> = {
   'structural-cycle': 'Equipment parenting each other',
   'missing-boundary': 'Boundary value not stated',
   'nesting-proposal': 'Learned suggestion',
+  'dead-claim-rule': 'A rule produced nothing',
+  'unresolvable-alias': 'Alias points at no asset',
+  'absorbed-tagged-component': 'Tagged component absorbed',
+  // P0-9: a decision recorded against an asset id this compile cannot find. The
+  // decision is kept, note and all; what is lost is the thing it pointed at.
+  'orphaned-decision': 'Stored decision no longer resolves',
 };
 
 const DECISIONS: ReadonlyArray<readonly [WireDecisionValue, string]> = [

@@ -15,7 +15,12 @@ import type { DatabaseSync } from 'node:sqlite';
 
 import { canonicalJson, isRecord } from './json.js';
 import { requireInteger, requireText } from './rows.js';
-import { CONFIG_TABLE_SQL, SOURCE_ROLES, SOURCES_TABLE_SQL } from './schema.js';
+import {
+  CONFIG_TABLE_SQL,
+  LEDGER_TABLE_SQL,
+  SOURCE_ROLES,
+  SOURCES_TABLE_SQL,
+} from './schema.js';
 import { deriveSourceId } from './source-id.js';
 import { requireMemberArgument } from './validate.js';
 
@@ -249,6 +254,38 @@ export function migrateSourcesToV4(db: DatabaseSync): void {
   }
 }
 
+/** Whether the open file already has a table of this name. */
+function hasTable(db: DatabaseSync, table: string): boolean {
+  return (
+    db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) !==
+    undefined
+  );
+}
+
+/**
+ * v4 → v5: give the project somewhere to keep its asset identity ledger.
+ *
+ * Additive and empty. Nothing back-fills the table, and nothing could: a ledger
+ * is what a compile writes, and the identities in it come from model evidence
+ * this step cannot read. A migrated project's first compile therefore mints an
+ * id per asset and reports every one as `new-asset` -- the truthful account of a
+ * project that has just learned to remember what it contains. Nothing is lost by
+ * that: `decisionResolverOf` resolves the tag-keyed references older projects
+ * stored (`tag:<tag>` and the bare tag) against that first ledger, so decisions
+ * recorded before v5 keep applying (P0-9, "never dropped").
+ *
+ * A procedure rather than plain SQL for one reason: a file that already has the
+ * table. That happens when a test walks a current file's `schema_version`
+ * backwards to exercise the migration opt-in, and `CREATE TABLE` would fail
+ * where the honest answer is "there is nothing to do".
+ */
+export function addLedgerTableV5(db: DatabaseSync): void {
+  if (hasTable(db, 'ledger')) {
+    return;
+  }
+  db.exec(LEDGER_TABLE_SQL);
+}
+
 /**
  * Every migration this build can run, in order, each one version apart.
  *
@@ -260,4 +297,5 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
   { kind: 'sql', to: 2, sql: CONFIG_TABLE_SQL },
   { kind: 'sql', to: 3, sql: WIDEN_CHECKS_SQL },
   { kind: 'procedure', to: 4, run: migrateSourcesToV4 },
+  { kind: 'procedure', to: 5, run: addLedgerTableV5 },
 ];

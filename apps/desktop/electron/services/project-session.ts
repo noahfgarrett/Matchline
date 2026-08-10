@@ -7,6 +7,7 @@ import {
   type AssetCatalog,
   type UniversePropertyCatalogEntry,
 } from '@matchline/asset-catalog';
+import type { AssetLedger } from '@matchline/asset-identity';
 import {
   subjectPropertiesFor,
   type CompiledProject,
@@ -25,6 +26,7 @@ import {
   ProjectStoreError,
   createProject,
   deriveSourceId,
+  deserializeLedger,
   openProject,
   serializeSnapshot,
   type CompileRecord,
@@ -54,6 +56,7 @@ import type {
   WireFlowRoot,
   WireLearnedRuleKind,
   WireLearnedSummary,
+  WireLedgerEvent,
   WireModelScan,
   WireModelUniverse,
   WireOverrideRow,
@@ -267,6 +270,8 @@ export interface ProjectService {
     offset: number,
     limit: number,
   ): Page<WireCompileIssueRow>;
+  /** One page of the identity log: what the ledger did this compile (P0-9). */
+  compileLedgerEvents(offset: number, limit: number): Page<WireLedgerEvent>;
   compileHistory(): readonly WireCompileHistoryEntry[];
 
   /* ------------------------------------------------------------ workspace */
@@ -1142,6 +1147,21 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     return validateLearnedRuleSet(stored) ? stored : null;
   }
 
+  /**
+   * The asset identity ledger this project last wrote, validated (P0-9).
+   *
+   * `null` means the project has never compiled — or was last compiled by a
+   * build older than schema v5 — and the next compile mints the ids. Both are
+   * ordinary; what is not ordinary is a ledger that is *there* and unreadable,
+   * which throws rather than degrading to `null`. Compiling past it would mint a
+   * fresh id for every asset and orphan every decision recorded against the old
+   * ones, which is the precise failure the ledger exists to prevent, so
+   * `compileNow` turns the throw into a refusal the user can read.
+   */
+  function storedLedger(active: Session): AssetLedger | null {
+    return active.store.getLedger(deserializeLedger)?.ledger ?? null;
+  }
+
   function storedRelationshipOverrides(active: Session): readonly ManualRelationshipOverride[] {
     return active.store
       .listOverrides()
@@ -1346,6 +1366,21 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       return { state: 'failed', reason: messageOf(error) };
     }
 
+    let previousLedger: AssetLedger | null;
+    try {
+      previousLedger = storedLedger(active);
+    } catch (error: unknown) {
+      return {
+        state: 'failed',
+        reason:
+          'This project carries an asset identity ledger that this build cannot read ' +
+          `(${messageOf(error)}). Compiling would give every asset a new id and orphan every ` +
+          'manual system, parent and review decision recorded against the old ones, so nothing ' +
+          'was run. Open the project with the version of Matchline that wrote it, or restore ' +
+          'the backup taken when it was last upgraded.',
+      };
+    }
+
     let project: CompiledProject;
     try {
       project = runCompile({
@@ -1356,6 +1391,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         melWorkbook: melInput(active),
         learnedRules: storedNestingRules(active),
         manualRelationshipOverrides: storedRelationshipOverrides(active),
+        previousLedger,
       });
     } catch (error: unknown) {
       active.view = null;
@@ -1376,6 +1412,11 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       inputHashes[source.sourceId] = source.rawSha256;
     }
 
+    // One transaction for all three, because they are one fact: this compile
+    // happened, this is what it resolved, and these are the asset ids it minted.
+    // A ledger committed without its compile would hand the next compile ids
+    // nothing can date; a compile committed without its ledger would re-mint
+    // every id on the next run and orphan every decision (P0-9).
     const compileId = active.store.withTransaction((): number => {
       const id = active.store.recordCompile({
         inputHashes,
@@ -1390,6 +1431,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         finishedAt,
       });
       active.store.saveSnapshot(id, serializeSnapshot(project.snapshot));
+      active.store.saveLedger(id, project.identityLedger);
       return id;
     });
 
@@ -1867,6 +1909,10 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       limit: number,
     ): Page<WireCompileIssueRow> {
       return requireView(requireSession()).issues(kind, offset, limit);
+    },
+
+    compileLedgerEvents(offset: number, limit: number): Page<WireLedgerEvent> {
+      return requireView(requireSession()).ledgerEvents(offset, limit);
     },
 
     compileHistory(): readonly WireCompileHistoryEntry[] {

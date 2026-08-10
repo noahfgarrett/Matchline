@@ -152,6 +152,7 @@ test('every paged channel caps its page size, so paging cannot be defeated', () 
     'flow:roots',
     'flow:walk',
     'review:page',
+    'compile:ledger-events',
   ];
 
   for (const channel of paged) {

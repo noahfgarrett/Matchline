@@ -48,6 +48,7 @@ export type SessionChannel = Extract<
   | 'compile:run'
   | 'compile:status'
   | 'compile:issues'
+  | 'compile:ledger-events'
   | 'compile:history'
   | 'tree:children'
   | 'tree:search'
@@ -313,6 +314,13 @@ export function createSessionHandlers(
       request: IpcRequest<'compile:issues'>,
     ): Promise<IpcResponse<'compile:issues'>> {
       const page = guard(() => service.compileIssues(request.kind, request.offset, request.limit));
+      return { total: page.total, rows: [...page.rows] };
+    },
+
+    async 'compile:ledger-events'(
+      request: IpcRequest<'compile:ledger-events'>,
+    ): Promise<IpcResponse<'compile:ledger-events'>> {
+      const page = guard(() => service.compileLedgerEvents(request.offset, request.limit));
       return { total: page.total, rows: [...page.rows] };
     },
 

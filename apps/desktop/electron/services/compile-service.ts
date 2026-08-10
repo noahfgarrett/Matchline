@@ -12,6 +12,7 @@ import type {
   SiteProfile,
 } from '@matchline/domain';
 import { reviewItemSummary } from '@matchline/domain';
+import type { AssetLedger, LedgerEvent } from '@matchline/asset-identity';
 import {
   sourceStatusOf,
   walkSourceToLoad,
@@ -30,6 +31,7 @@ import type {
   WireCompileSummary,
   WireFlowNode,
   WireFlowRoot,
+  WireLedgerEvent,
   WireProjectConfig,
   WireReparentPreview,
   WireReviewRow,
@@ -85,6 +87,17 @@ export interface CompileRequest {
   readonly melWorkbook: MelWorkbookInput | null;
   readonly learnedRules: LearnedRuleSet | null;
   readonly manualRelationshipOverrides: readonly ManualRelationshipOverride[];
+  /**
+   * The asset identity ledger the project's last compile wrote, or `null` when
+   * it has never been compiled (P0-9).
+   *
+   * `null` is not a degraded mode: it is a first compile, which mints the ids.
+   * What it must never be is "the project has a ledger and we did not read it" —
+   * that would re-mint every id and orphan every stored decision, which is the
+   * exact failure the ledger exists to prevent. `project-session.ts` reads it
+   * out of the project file before every compile.
+   */
+  readonly previousLedger: AssetLedger | null;
 }
 
 /**
@@ -110,6 +123,7 @@ export function buildCompileInput(request: CompileRequest): CompileProjectInput 
     manualRelationshipOverrides?: ReadonlyArray<ManualRelationshipOverride>;
     parentTagProperty?: NonNullable<CompileProjectInput['parentTagProperty']>;
     ssmDisciplineProjection?: NonNullable<CompileProjectInput['ssmDisciplineProjection']>;
+    identityLedger?: AssetLedger;
   } = {
     // Every ready model source, not the first one: a project is a universe
     // (P0-1). `compileProject` reorders by `sourceId` itself, so registering
@@ -154,6 +168,9 @@ export function buildCompileInput(request: CompileRequest): CompileProjectInput 
   const projection = toDisciplineProjection(request.config);
   if (projection !== null) {
     input.ssmDisciplineProjection = projection;
+  }
+  if (request.previousLedger !== null) {
+    input.identityLedger = request.previousLedger;
   }
 
   return input;
@@ -336,6 +353,7 @@ export interface CompileView {
   treeChildren(nodeKey: string, offset: number, limit: number): Page<WireTreeNode>;
   treeSearch(query: string, limit: number): readonly WireTreeNode[];
   issues(kind: WireCompileIssueKind, offset: number, limit: number): Page<WireCompileIssueRow>;
+  ledgerEvents(offset: number, limit: number): Page<WireLedgerEvent>;
   flowRoots(offset: number, limit: number): Page<WireFlowRoot>;
   flowWalk(rootNodeId: string, offset: number, limit: number): Page<WireFlowNode>;
   reviewRows(): readonly WireReviewRow[];
@@ -560,6 +578,34 @@ export function createCompileView(
     note: '',
   }));
 
+  /* --------------------------------------------------------- the identity log */
+
+  /**
+   * What the ledger did this compile, as rows (P0-9).
+   *
+   * Read straight off `CompiledProject.identityLedgerEvents`, in the order the
+   * engine reported them (by kind, then by asset id). The tag on the row is the
+   * event's own, not a lookup: a `disappeared` event is about an asset this
+   * compile has no catalog entry for, so asking the tag index would print an
+   * asset id where the tag belongs.
+   */
+  const ledgerEventRows: WireLedgerEvent[] = project.identityLedgerEvents.map(
+    (event: LedgerEvent): WireLedgerEvent => ({
+      kind: event.kind,
+      assetId: event.assetId,
+      tag: event.canonicalTag,
+      previousTag: event.previousCanonicalTag ?? '',
+      tier: event.tier ?? '',
+      detail: event.detail,
+    }),
+  );
+
+  const ledgerEventCounts = new Map<LedgerEvent['kind'], number>();
+  for (const event of project.identityLedgerEvents) {
+    ledgerEventCounts.set(event.kind, (ledgerEventCounts.get(event.kind) ?? 0) + 1);
+  }
+  const ledgerCount = (kind: LedgerEvent['kind']): number => ledgerEventCounts.get(kind) ?? 0;
+
   /* ---------------------------------------------------------- the issues */
 
   const missingSystemAssets = project.catalog.assets.filter(
@@ -744,6 +790,15 @@ export function createCompileView(
         generatedMelRowCount: stats.generatedMelRowCount,
         reviewItemCount: stats.reviewItemCount,
         undecidedReviewItemCount: base.undecidedReviewItemCount,
+
+        ledgerNewAssetCount: ledgerCount('new-asset'),
+        ledgerTagChangedCount: ledgerCount('tag-changed'),
+        ledgerRematchedByTagCount: ledgerCount('rematched-by-tag'),
+        ledgerSplitCount: ledgerCount('split'),
+        ledgerDisappearedCount: ledgerCount('disappeared'),
+        orphanedDecisionCount: project.reviewItems.filter(
+          (item) => item.kind === 'orphaned-decision',
+        ).length,
       };
     },
 
@@ -770,6 +825,10 @@ export function createCompileView(
 
     issues(kind, offset, limit): Page<WireCompileIssueRow> {
       return page(rowsFor(kind), offset, limit);
+    },
+
+    ledgerEvents(offset: number, limit: number): Page<WireLedgerEvent> {
+      return page(ledgerEventRows, offset, limit);
     },
 
     flowRoots(offset: number, limit: number): Page<WireFlowRoot> {

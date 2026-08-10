@@ -5,9 +5,10 @@ import type {
   WireCompileIssueRow,
   WireCompileStatus,
   WireCompileSummary,
+  WireLedgerEvent,
 } from '../../../shared/schemas';
 import { call, count, messageOf } from '../api';
-import { Callout, Panel, TableScroll } from '../components/Panel';
+import { Callout, Panel, Stat, StatRow, TableScroll } from '../components/Panel';
 
 import type { WizardContext } from './Wizard';
 
@@ -256,6 +257,8 @@ export function Screen8Preview({
 
           {openKind === null ? null : <IssueList kind={openKind} />}
 
+          <IdentityPanel summary={summary} />
+
           {summary.skippedClaimInputCount === 0 ? null : (
             <Callout tone="warning">
               {count(summary.skippedClaimInputCount)} relationship inputs named something this
@@ -284,6 +287,167 @@ export function Screen8Preview({
         </Callout>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * What the asset identity ledger did this compile (P0-9).
+ *
+ * Its own panel rather than another QA card, because these are not defects.
+ * A tag correction that kept its asset id is the thing working, and the numbers
+ * that matter are the ones that say identity moved — a split, an asset that
+ * disappeared, a decision that could no longer be re-addressed.
+ */
+function IdentityPanel({ summary }: { readonly summary: WireCompileSummary }): JSX.Element {
+  const [open, setOpen] = useState<boolean>(false);
+  const moved =
+    summary.ledgerTagChangedCount +
+    summary.ledgerRematchedByTagCount +
+    summary.ledgerSplitCount +
+    summary.ledgerDisappearedCount;
+
+  return (
+    <Panel
+      title="Asset identity"
+      description="An asset id outlives the tag it was first read from, so a corrected tag keeps every manual system, parent and review decision recorded against it."
+      actions={
+        <button
+          className="button button--small"
+          type="button"
+          data-testid="identity-log-toggle"
+          onClick={(): void => {
+            setOpen(!open);
+          }}
+        >
+          {open ? 'Hide the identity log' : 'Show the identity log'}
+        </button>
+      }
+    >
+      <StatRow>
+        <Stat
+          label="New assets"
+          value={count(summary.ledgerNewAssetCount)}
+          hint="ids minted this compile"
+        />
+        <Stat
+          label="Tags corrected"
+          value={count(summary.ledgerTagChangedCount)}
+          hint="same equipment, new spelling"
+        />
+        <Stat
+          label="Matched on tag alone"
+          value={count(summary.ledgerRematchedByTagCount)}
+          hint="the weakest evidence there is"
+        />
+        <Stat label="Split" value={count(summary.ledgerSplitCount)} hint="one entry, several assets" />
+        <Stat
+          label="Disappeared"
+          value={count(summary.ledgerDisappearedCount)}
+          hint="known before, absent now"
+        />
+        <Stat
+          label="Orphaned decisions"
+          value={count(summary.orphanedDecisionCount)}
+          hint={
+            summary.orphanedDecisionCount === 0 ? 'none to re-address' : 'kept, in the review queue'
+          }
+        />
+      </StatRow>
+
+      {summary.orphanedDecisionCount > 0 ? (
+        <Callout tone="warning">
+          {count(summary.orphanedDecisionCount)}{' '}
+          {summary.orphanedDecisionCount === 1 ? 'stored decision names' : 'stored decisions name'}{' '}
+          equipment this compile does not have. Nothing was dropped — each one is in the review
+          queue with the words that were written on it.
+        </Callout>
+      ) : null}
+      {moved === 0 && summary.ledgerNewAssetCount > 0 ? (
+        <Callout tone="info">
+          Every asset in this compile is new to the project, so every id was minted here. The next
+          compile is the one that has something to hold on to.
+        </Callout>
+      ) : null}
+
+      {open ? <LedgerEventList /> : null}
+    </Panel>
+  );
+}
+
+/** The identity log itself, paged through `compile:ledger-events`. */
+function LedgerEventList(): JSX.Element {
+  const [rows, setRows] = useState<readonly WireLedgerEvent[]>([]);
+  const [total, setTotal] = useState<number>(0);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async (offset: number): Promise<void> => {
+    try {
+      const page = await call(window.matchline.compile.ledgerEvents({ offset, limit: PAGE_SIZE }));
+      setTotal(page.total);
+      setRows((current) => (offset === 0 ? page.rows : [...current, ...page.rows]));
+    } catch (caught: unknown) {
+      setError(messageOf(caught));
+    }
+  }, []);
+
+  useEffect((): void => {
+    void load(0);
+  }, [load]);
+
+  if (error !== null) {
+    return <Callout tone="error">{error}</Callout>;
+  }
+  if (total === 0) {
+    return (
+      <Callout tone="success">
+        Nothing moved. Every asset in this compile kept the id it already had.
+      </Callout>
+    );
+  }
+
+  return (
+    <>
+      <TableScroll>
+        <table className="table table--compact" data-testid="ledger-events">
+          <thead>
+            <tr>
+              <th>What happened</th>
+              <th>Equipment</th>
+              <th>Evidence</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row: WireLedgerEvent): JSX.Element => (
+              <tr key={`${row.kind}:${row.assetId}`}>
+                <td>
+                  <span className="badge">{row.kind}</span>
+                </td>
+                <td>
+                  {row.tag === '' ? row.assetId : row.tag}
+                  {row.previousTag === '' ? null : (
+                    <span className="muted"> — was {row.previousTag}</span>
+                  )}
+                </td>
+                <td className="muted">{row.tier === '' ? 'minted' : row.tier}</td>
+                <td className="muted">{row.detail}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TableScroll>
+      {rows.length < total ? (
+        <button
+          className="button button--small"
+          type="button"
+          onClick={(): void => {
+            void load(rows.length);
+          }}
+        >
+          Show {count(Math.min(PAGE_SIZE, total - rows.length))} more
+        </button>
+      ) : null}
+    </>
   );
 }
 

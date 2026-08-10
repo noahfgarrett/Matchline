@@ -34,6 +34,14 @@ jobs:
       - name: Integration tests
         run: npm run test:integration
 
+      # The 1.0 acceptance gates that have been wired to real behaviour. The
+      # rest of tests/acceptance-1.0 is staged red on purpose (it describes
+      # milestones that have not landed), so this runs the green subset by name
+      # and each milestone adds its file to `test:acceptance10:green` as it
+      # turns. A gate that goes green and then breaks fails CI here.
+      - name: Acceptance gates (green subset)
+        run: npm run test:acceptance10:green
+
       # The donor suite is plain JavaScript with its own scripts and is not part
       # of the TypeScript build. It runs by path so it is never run twice.
       # The differential tests compare against the frozen SSM Builder checkout at

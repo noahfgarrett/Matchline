@@ -1,5 +1,5 @@
 /**
- * The `.matchline` project file schema, version 4 (APP.md "Project file",
+ * The `.matchline` project file schema, version 5 (APP.md "Project file",
  * PRODUCT.md §15).
  *
  * This file is the single source of truth for the DDL: `createProject` executes
@@ -35,11 +35,16 @@
  *   the hash of that file (`raw_sha256`) from the hash of the extraction cache
  *   derived from it (`derived_cache_sha256`). `compiles.input_hashes_json` is
  *   re-keyed to match.
+ * - **v5** — the asset identity ledger (P0-9). One `ledger` row holds the
+ *   ledger the latest compile wrote, so an asset id outlives the tag it was
+ *   first derived from and every manual decision recorded against that id keeps
+ *   applying. Purely additive: no existing table changes, so a v4 file reaches
+ *   v5 by gaining an empty table.
  */
 import type { SourceKind } from '@matchline/domain';
 
 /** The schema version this build writes and reads. */
-export const PROJECT_SCHEMA_VERSION = 4;
+export const PROJECT_SCHEMA_VERSION = 5;
 
 /**
  * The `app_version` written into a new project when the caller does not supply
@@ -58,7 +63,7 @@ export const REQUIRED_META_KEYS = [
   'modified_at',
 ] as const;
 
-/** Tables v2 creates. All must exist before a file counts as a project. */
+/** Tables a current file has. All must exist before it counts as a project. */
 export const REQUIRED_TABLES = [
   'meta',
   'sources',
@@ -70,6 +75,7 @@ export const REQUIRED_TABLES = [
   'decisions',
   'migrations',
   'config',
+  'ledger',
 ] as const;
 
 /** What a registered input file is to the compile (PRODUCT.md §6, §12). */
@@ -259,7 +265,35 @@ CREATE TABLE sources (
 `;
 
 /**
- * The v4 DDL.
+ * The `ledger` table, as v5 creates it.
+ *
+ * Its own constant because two places need exactly these bytes: the full DDL a
+ * new project is created from, and the v4 → v5 migration that adds the table to
+ * a file that has none.
+ *
+ * Shaped like `snapshots`, and for the same reason. The ledger is CUMULATIVE
+ * project state, not a per-compile artefact: it carries every asset this project
+ * has ever seen, including the ones that have since disappeared, and each
+ * compile rewrites it whole. So there is one row -- `slot` pinned to 0 by the
+ * DDL, exactly as `snapshots` pins it -- rather than a row per compile that
+ * would store the same growing document over and over.
+ *
+ * `compile_id` says which compile wrote the row that is there. It is a foreign
+ * key into `compiles` because a ledger whose compile has no history row is a
+ * ledger nobody can date; and it is what makes a per-compile history derivable
+ * if one is ever wanted, without paying for it now.
+ */
+export const LEDGER_TABLE_SQL = `
+CREATE TABLE ledger (
+  slot        INTEGER PRIMARY KEY CHECK (slot = 0),
+  compile_id  INTEGER NOT NULL REFERENCES compiles(id),
+  ledger_json TEXT NOT NULL,
+  saved_at    TEXT NOT NULL
+);
+`;
+
+/**
+ * The v5 DDL.
  *
  * Notes on the shapes that are not obvious:
  * - `sources` is keyed by `source_id` (see {@link SOURCES_TABLE_SQL}).
@@ -268,8 +302,8 @@ CREATE TABLE sources (
  *   is a question a reviewer really asks (PRODUCT.md §13.3).
  * - `overrides` is keyed by `(kind, asset_key)` where `asset_key` is the
  *   canonical tag. Tags are the human identity that survives a recompile.
- * - `snapshots.slot` is pinned to 0, so "latest snapshot" is structural rather
- *   than a convention a future writer could break.
+ * - `snapshots.slot` and `ledger.slot` are pinned to 0, so "the latest one" is
+ *   structural rather than a convention a future writer could break.
  * - `config` is keyed by section, one row each, so writing the hierarchy cannot
  *   disturb the ladder and a section nobody has set is simply absent.
  */
@@ -326,4 +360,4 @@ CREATE TABLE migrations (
   version    INTEGER PRIMARY KEY,
   applied_at TEXT NOT NULL
 );
-${CONFIG_TABLE_SQL}`;
+${CONFIG_TABLE_SQL}${LEDGER_TABLE_SQL}`;

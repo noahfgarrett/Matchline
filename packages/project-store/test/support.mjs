@@ -195,6 +195,7 @@ const DUMPED_TABLES = [
   'decisions',
   'migrations',
   'config',
+  'ledger',
 ];
 
 /**

@@ -199,6 +199,17 @@ export interface LatestSnapshot<T> {
   readonly snapshot: T;
 }
 
+/**
+ * The stored asset identity ledger and the compile that wrote it (v5).
+ *
+ * `compileId` is provenance rather than a key: there is only ever one ledger,
+ * and this says which compile last moved it forward.
+ */
+export interface StoredLedger<T> {
+  readonly compileId: number;
+  readonly ledger: T;
+}
+
 /** What `recordDecision` needs. */
 export interface DecisionInput {
   /** Stable identity of the review item, e.g. `system-conflict:MAH001-10-01`. */
@@ -310,6 +321,37 @@ export interface ProjectStore {
    * JSON verbatim and never assumes a shape for it.
    */
   getLatestSnapshot<T = unknown>(validate?: (value: unknown) => T): LatestSnapshot<T> | undefined;
+
+  /**
+   * Stores the asset identity ledger this compile wrote, replacing the previous
+   * one (P0-9, schema v5).
+   *
+   * Replace rather than append, because the ledger is cumulative project state
+   * and not a per-compile artefact: it already carries every asset the project
+   * has ever seen, including the ones that have disappeared. Keeping a row per
+   * compile would store the same growing document over and over to answer a
+   * question -- "what did the ledger look like in June" -- that `compiles` and
+   * this row's `compile_id` can answer between them if it is ever asked.
+   *
+   * Call it in the SAME transaction as the `recordCompile` and `saveSnapshot`
+   * of the compile it belongs to. A ledger saved without its compile, or a
+   * compile recorded without its ledger, is a project that has minted asset ids
+   * nothing will hand back to the next compile.
+   *
+   * @throws ProjectStoreError `unknown-compile` when no such compile exists.
+   */
+  saveLedger(compileId: number, ledger: unknown): void;
+  /**
+   * The stored ledger, or `undefined` when no compile has saved one.
+   *
+   * `undefined` is what a project that has never been compiled, and a project
+   * last compiled by a build older than v5, both look like -- and both mean the
+   * same thing to a caller: this compile mints the ids.
+   *
+   * Returned as `unknown` unless `validate` is supplied; `deserializeLedger` is
+   * the usual argument, exactly as `deserializeSnapshot` is for the snapshot.
+   */
+  getLedger<T = unknown>(validate?: (value: unknown) => T): StoredLedger<T> | undefined;
 
   /**
    * Stores one configuration section, replacing whatever was there.
@@ -1167,6 +1209,38 @@ class SqliteProjectStore implements ProjectStore {
     // `T` defaults to; the assertion cannot widen anything they can misuse.
     const snapshot = validate === undefined ? (parsed as T) : validate(parsed);
     return { compileId: requireInteger(row, 'snapshots', 'compile_id'), snapshot };
+  }
+
+  saveLedger(compileId: number, ledger: unknown): void {
+    const checkedId = requireCountArgument(compileId, 'compileId');
+    const json = canonicalJson(ledger, 'ledger');
+    this.#mutate((savedAt) => {
+      const db = this.#open();
+      const compile = db.prepare('SELECT id FROM compiles WHERE id = ?').get(checkedId);
+      if (compile === undefined) {
+        throw new ProjectStoreError({ kind: 'unknown-compile', compileId: checkedId });
+      }
+      // One ledger at a time: `slot` is pinned to 0 by the DDL, so replacing the
+      // current one is structural rather than a convention.
+      db.exec('DELETE FROM ledger');
+      db.prepare(
+        'INSERT INTO ledger (slot, compile_id, ledger_json, saved_at) VALUES (0, ?, ?, ?)',
+      ).run(checkedId, json, savedAt);
+    });
+  }
+
+  getLedger<T = unknown>(validate?: (value: unknown) => T): StoredLedger<T> | undefined {
+    const row = this.#open()
+      .prepare('SELECT compile_id, ledger_json FROM ledger WHERE slot = 0')
+      .get();
+    if (row === undefined) {
+      return undefined;
+    }
+    const parsed = parseStoredJson(requireText(row, 'ledger', 'ledger_json'), 'ledger');
+    // As in `getLatestSnapshot`: without a validate hook the caller asked for
+    // `unknown`, which is what `T` defaults to.
+    const ledger = validate === undefined ? (parsed as T) : validate(parsed);
+    return { compileId: requireInteger(row, 'ledger', 'compile_id'), ledger };
   }
 
   saveConfig(key: ConfigKey, value: unknown): void {

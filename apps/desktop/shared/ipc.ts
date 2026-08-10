@@ -19,6 +19,7 @@ import {
   flowRootSchema,
   learnedRuleKindSchema,
   learnedSummarySchema,
+  ledgerEventSchema,
   modelUniverseSchema,
   overrideRowSchema,
   profileSectionSchema,
@@ -232,6 +233,13 @@ const EXAMPLE_COMPILE_SUMMARY = {
   generatedMelRowCount: 34,
   reviewItemCount: 2,
   undecidedReviewItemCount: 2,
+
+  ledgerNewAssetCount: 0,
+  ledgerTagChangedCount: 1,
+  ledgerRematchedByTagCount: 0,
+  ledgerSplitCount: 0,
+  ledgerDisappearedCount: 0,
+  orphanedDecisionCount: 0,
 } as const;
 
 const EXAMPLE_TREE_NODE = {
@@ -875,6 +883,41 @@ export const IPC_CHANNELS = {
             title: 'RIO603-10-01',
             detail: 'PNL603-10-01 became a dependency: System differs.',
             badge: 'system',
+          },
+        ],
+      },
+    },
+  },
+
+  /**
+   * One page of the identity log: what the ledger did this compile (P0-9).
+   *
+   * Its own channel rather than another `compile:issues` kind, because these
+   * rows are not issues. Nothing here needs deciding and most of it is good
+   * news — an id that survived a tag correction is the feature working. The
+   * summary carries the counts; this carries the lines behind them.
+   */
+  'compile:ledger-events': {
+    request: z.object({
+      offset: z.number().int().nonnegative(),
+      limit: z.number().int().positive().max(500),
+    }),
+    response: z.object({
+      total: z.number().int().nonnegative(),
+      rows: z.array(ledgerEventSchema),
+    }),
+    example: {
+      request: { offset: 0, limit: 100 },
+      response: {
+        total: 1,
+        rows: [
+          {
+            kind: 'tag-changed',
+            assetId: 'asset-17',
+            tag: 'MAH002-10-01',
+            previousTag: 'MAH002-10-1',
+            tier: 'instance-guid',
+            detail: 'MAH002-10-1 is now MAH002-10-01; matched on instance-guid.',
           },
         ],
       },

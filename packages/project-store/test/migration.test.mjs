@@ -6,6 +6,7 @@ import test, { after } from 'node:test';
 import {
   createProject,
   deriveSourceId,
+  deserializeLedger,
   openProject,
   PROJECT_SCHEMA_VERSION,
   ProjectStoreError,
@@ -22,7 +23,7 @@ import { dragonProfile, dumpTables, frozenClock, rawExec, tempDirectory } from '
  * the two would drift together and the test would keep passing while real old
  * files stopped opening. Each snapshot below is the DDL as that version actually
  * shipped, frozen here on purpose. None of them may ever be edited to match a
- * later schema — a future v5 adds a v4 snapshot beside them instead.
+ * later schema — a future v6 adds a v5 snapshot beside them instead.
  */
 
 const V1_SCHEMA_SQL = `
@@ -271,6 +272,96 @@ CREATE TABLE config (
 ) WITHOUT ROWID;
 `;
 
+/**
+ * `PROJECT_SCHEMA_SQL` as **v4** shipped, frozen.
+ *
+ * Copied out of `schema.ts` before v5 edited it. It has no `ledger` table, which
+ * is the whole point of the snapshot: a v5 step that failed to create one would
+ * still pass against a file built from today's DDL, and would fail here. A test
+ * below asserts the absence of the word `ledger` in this text, so the fixture
+ * cannot be quietly modernized.
+ */
+const V4_SCHEMA_SQL = `
+CREATE TABLE meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE sources (
+  source_id            TEXT PRIMARY KEY,
+  role                 TEXT NOT NULL CHECK (role IN (
+                         'model', 'easypower', 'cable-schedule', 'pmd', 'mel', 'p6', 'prior-ssm')),
+  logical_name         TEXT NOT NULL,
+  raw_file_name        TEXT NOT NULL,
+  raw_sha256           TEXT NOT NULL,
+  raw_byte_size        INTEGER NOT NULL CHECK (raw_byte_size >= 0),
+  derived_cache_sha256 TEXT,
+  added_at             TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE profile (
+  revision     INTEGER PRIMARY KEY CHECK (revision > 0),
+  profile_json TEXT NOT NULL,
+  note         TEXT,
+  saved_at     TEXT NOT NULL
+);
+
+CREATE TABLE learned (
+  id         INTEGER PRIMARY KEY,
+  kind       TEXT NOT NULL CHECK (kind IN ('nesting', 'item-master', 'wbs')),
+  rules_json TEXT NOT NULL,
+  saved_at   TEXT NOT NULL
+);
+CREATE INDEX idx_learned_kind ON learned(kind, id);
+
+CREATE TABLE overrides (
+  kind         TEXT NOT NULL CHECK (kind IN ('system', 'relationship')),
+  asset_key    TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  updated_at   TEXT NOT NULL,
+  PRIMARY KEY (kind, asset_key)
+) WITHOUT ROWID;
+
+CREATE TABLE compiles (
+  id                INTEGER PRIMARY KEY,
+  input_hashes_json TEXT NOT NULL,
+  profile_revision  INTEGER NOT NULL REFERENCES profile(revision),
+  stats_json        TEXT NOT NULL,
+  started_at        TEXT NOT NULL,
+  finished_at       TEXT NOT NULL,
+  recorded_at       TEXT NOT NULL
+);
+
+CREATE TABLE snapshots (
+  slot          INTEGER PRIMARY KEY CHECK (slot = 0),
+  compile_id    INTEGER NOT NULL REFERENCES compiles(id),
+  snapshot_json TEXT NOT NULL,
+  saved_at      TEXT NOT NULL
+);
+
+CREATE TABLE decisions (
+  id         INTEGER PRIMARY KEY,
+  review_key TEXT NOT NULL,
+  decision   TEXT NOT NULL CHECK (decision IN ('accepted', 'rejected', 'deferred')),
+  note       TEXT,
+  decided_at TEXT NOT NULL
+);
+CREATE INDEX idx_decisions_key ON decisions(review_key, id);
+
+CREATE TABLE migrations (
+  version    INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL
+);
+
+CREATE TABLE config (
+  key         TEXT PRIMARY KEY CHECK (key IN (
+                'hierarchy', 'roleGraph', 'ladder', 'ssmDisciplineProjection',
+                'parentTagProperty', 'extoTemplate')),
+  config_json TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+) WITHOUT ROWID;
+`;
+
 const CREATED_AT = '2026-01-15T09:30:00.000Z';
 const MIGRATED_AT = '2026-02-01T08:00:00.000Z';
 
@@ -454,6 +545,7 @@ test('migrating a v1 project backs it up and keeps every row', () => {
     JSON.stringify({ applied_at: MIGRATED_AT, version: 2 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 3 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 4 }),
+    JSON.stringify({ applied_at: MIGRATED_AT, version: 5 }),
   ]);
 
   // The backup is still the v1 file, which is the whole point of taking it.
@@ -582,6 +674,7 @@ test('migrating a v2 project widens both CHECKs and keeps every row', () => {
     JSON.stringify({ applied_at: CREATED_AT, version: 2 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 3 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 4 }),
+    JSON.stringify({ applied_at: MIGRATED_AT, version: 5 }),
   ]);
 
   // The backup is still the v2 file, which is the whole point of taking it.
@@ -898,6 +991,7 @@ test('migrating a v3 project gives every source an id and keeps every row', () =
   assert.deepEqual(dumpTables(path, ['migrations']).migrations, [
     JSON.stringify({ applied_at: CREATED_AT, version: 3 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 4 }),
+    JSON.stringify({ applied_at: MIGRATED_AT, version: 5 }),
   ]);
 
   // The backup is still the v3 file, which is the whole point of taking it.
@@ -1004,11 +1098,12 @@ test('a v3 project with no sources and no compiles migrates just as well', () =>
   }
 });
 
-test('a project created today is already v4 and needs no migration', () => {
-  const path = temp.file('fresh-v4.matchline');
+test('a project created today is already v5 and needs no migration', () => {
+  const path = temp.file('fresh-v5.matchline');
   const store = createProject(path, { name: 'Dragon', now: frozenClock(CREATED_AT) });
   try {
-    assert.equal(store.meta().schemaVersion, 4);
+    assert.equal(store.meta().schemaVersion, 5);
+    assert.equal(store.getLedger(), undefined, 'and its ledger table starts empty');
     store.upsertSourceV4({
       sourceId: 'model:dragon.nwd',
       role: 'model',
@@ -1037,6 +1132,263 @@ test('a project created today is already v4 and needs no migration', () => {
     'added_at',
   ]);
   assert.equal(openProject(path).migration, null);
+});
+
+/* ------------------------------------------------------- v4 → v5 */
+
+/**
+ * Writes a v4 project file with something in every table, from the frozen DDL.
+ *
+ * The overrides are the point of this fixture. They are keyed the way every
+ * pre-v5 project keyed them — by canonical tag — because that is what the ledger
+ * has to keep working once asset ids stop being derived from tags (P0-9,
+ * "migrate tag-keyed overrides").
+ */
+function writeV4Project(name) {
+  const path = temp.file(name);
+  const db = new DatabaseSync(path);
+  try {
+    db.exec('PRAGMA foreign_keys = ON');
+    db.exec(V4_SCHEMA_SQL);
+
+    const meta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)');
+    meta.run('schema_version', '4');
+    meta.run('app_version', '0.8.1');
+    meta.run('project_name', 'Dragon');
+    meta.run('created_at', CREATED_AT);
+    meta.run('modified_at', CREATED_AT);
+    db.prepare('INSERT INTO migrations (version, applied_at) VALUES (?, ?)').run(4, CREATED_AT);
+
+    db.prepare(
+      `INSERT INTO sources
+         (source_id, role, logical_name, raw_file_name, raw_sha256, raw_byte_size,
+          derived_cache_sha256, added_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'model:dragon-coordination.nwd',
+      'model',
+      'Dragon Coordination',
+      'Dragon-Coordination.nwd',
+      'a'.repeat(64),
+      104857600,
+      'a'.repeat(64),
+      CREATED_AT,
+    );
+
+    db.prepare(
+      'INSERT INTO profile (revision, profile_json, note, saved_at) VALUES (?, ?, ?, ?)',
+    ).run(1, JSON.stringify(dragonProfile()), 'initial import', CREATED_AT);
+
+    db.prepare(
+      'INSERT INTO learned (id, kind, rules_json, saved_at) VALUES (?, ?, ?, ?)',
+    ).run(3, 'nesting', JSON.stringify({ version: 1, classification: [] }), CREATED_AT);
+
+    db.prepare('INSERT INTO config (key, config_json, updated_at) VALUES (?, ?, ?)').run(
+      'ladder',
+      JSON.stringify({ tiers: ['manual'] }),
+      CREATED_AT,
+    );
+
+    const override = db.prepare(
+      'INSERT INTO overrides (kind, asset_key, payload_json, updated_at) VALUES (?, ?, ?, ?)',
+    );
+    override.run('system', 'MAH001-10-01', JSON.stringify({ systemKey: '001' }), CREATED_AT);
+    override.run(
+      'relationship',
+      'tag:TIT001-10-01',
+      JSON.stringify({ childAssetId: 'tag:TIT001-10-01', parentAssetId: 'tag:MAH001-10-01' }),
+      CREATED_AT,
+    );
+
+    db.prepare(
+      `INSERT INTO compiles
+         (id, input_hashes_json, profile_revision, stats_json, started_at, finished_at, recorded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      1,
+      JSON.stringify({ 'model:dragon-coordination.nwd': 'a'.repeat(64) }),
+      1,
+      JSON.stringify({ nodeCount: 34 }),
+      '2026-01-15T10:00:00.000Z',
+      '2026-01-15T10:00:42.000Z',
+      CREATED_AT,
+    );
+
+    db.prepare(
+      'INSERT INTO snapshots (slot, compile_id, snapshot_json, saved_at) VALUES (0, ?, ?, ?)',
+    ).run(1, JSON.stringify({ nodes: [], reviewItems: [], stats: { nodeCount: 34 } }), CREATED_AT);
+
+    db.prepare(
+      'INSERT INTO decisions (review_key, decision, note, decided_at) VALUES (?, ?, ?, ?)',
+    ).run('missing-boundary:tag:MAH001-10-01', 'accepted', 'walked it down on site', CREATED_AT);
+  } finally {
+    db.close();
+  }
+  return path;
+}
+
+/** Every table name in a project file, as SQLite reports them. */
+function tablesOf(path) {
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    return db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+      .all()
+      .map((row) => row.name);
+  } finally {
+    db.close();
+  }
+}
+
+test('the frozen v4 fixture really is pre-v5: it has no ledger table', () => {
+  // The guard on every assertion below, as the v3 fixture's is on its own.
+  assert.equal(V4_SCHEMA_SQL.includes('ledger'), false, 'the frozen DDL names no ledger');
+  const path = writeV4Project('frozen-v4.matchline');
+  assert.equal(tablesOf(path).includes('ledger'), false);
+});
+
+test('a v4 project is refused, by version, until migration is asked for', () => {
+  const path = writeV4Project('refused-v4.matchline');
+
+  const failure = reason(() => openProject(path));
+  assert.equal(failure.kind, 'migration-required');
+  assert.equal(failure.found, 4);
+  assert.equal(failure.supported, PROJECT_SCHEMA_VERSION);
+  assert.equal(existsSync(`${path}.backup-4`), false, 'a refusal touches nothing');
+});
+
+test('migrating a v4 project adds an empty ledger and moves nothing else', () => {
+  const path = writeV4Project('migrate-v4.matchline');
+  const before = dumpTables(path, [
+    'sources',
+    'profile',
+    'learned',
+    'overrides',
+    'compiles',
+    'snapshots',
+    'decisions',
+    'config',
+  ]);
+
+  const store = openProject(path, { migrate: true, now: frozenClock(MIGRATED_AT) });
+  try {
+    assert.deepEqual(store.migration, {
+      fromVersion: 4,
+      toVersion: PROJECT_SCHEMA_VERSION,
+      backupPath: `${path}.backup-4`,
+    });
+    assert.ok(existsSync(`${path}.backup-4`), 'the original was copied before anything ran');
+    assert.equal(store.meta().schemaVersion, PROJECT_SCHEMA_VERSION);
+
+    // The ledger is empty rather than invented: identities come from model
+    // evidence, and the migration reads no model. The next compile mints them.
+    assert.equal(store.getLedger(), undefined);
+
+    // And the decisions that ledger will have to re-address are all still here,
+    // spelled exactly as the v4 file spelled them.
+    assert.deepEqual(
+      store.listOverrides().map((stored) => [stored.kind, stored.assetKey]),
+      [
+        ['relationship', 'tag:TIT001-10-01'],
+        ['system', 'MAH001-10-01'],
+      ],
+    );
+    assert.equal(store.listDecisions().length, 1);
+    assert.equal(store.getLatestSnapshot().compileId, 1);
+    assert.equal(store.listCompiles().length, 1);
+  } finally {
+    store.close();
+  }
+
+  const after_ = dumpTables(path, [
+    'sources',
+    'profile',
+    'learned',
+    'overrides',
+    'compiles',
+    'snapshots',
+    'decisions',
+    'config',
+  ]);
+  assert.deepEqual(after_, before, 'v5 rebuilds nothing, so every table is what it was');
+  assert.deepEqual(dumpTables(path, ['ledger']).ledger, []);
+
+  assert.deepEqual(dumpTables(path, ['migrations']).migrations, [
+    JSON.stringify({ applied_at: CREATED_AT, version: 4 }),
+    JSON.stringify({ applied_at: MIGRATED_AT, version: 5 }),
+  ]);
+
+  // The backup is still the v4 file, which is the whole point of taking it.
+  assert.equal(tablesOf(`${path}.backup-4`).includes('ledger'), false);
+});
+
+test('a migrated v4 project can store and reload a ledger', () => {
+  const path = writeV4Project('ledger-after-v4.matchline');
+  const store = openProject(path, { migrate: true, now: frozenClock(MIGRATED_AT) });
+  try {
+    store.saveLedger(1, {
+      formatVersion: 1,
+      entries: [
+        {
+          assetId: 'asset-1',
+          currentCanonicalTag: 'MAH001-10-01',
+          aliases: ['MAH001-10-1'],
+          modelIdentities: [
+            {
+              logicalSourceId: 'model:dragon-coordination.nwd',
+              stableObjectKey: 'guid/abc',
+              tier: 'instance-guid',
+            },
+          ],
+          status: 'present',
+        },
+      ],
+      nextOrdinal: 2,
+    });
+    const stored = store.getLedger(deserializeLedger);
+    assert.equal(stored.compileId, 1);
+    assert.deepEqual(stored.ledger.entries[0].aliases, ['MAH001-10-1']);
+  } finally {
+    store.close();
+  }
+});
+
+test('a migrated v4 project reopens as current, with no second backup', () => {
+  const path = writeV4Project('reopen-v4.matchline');
+  openProject(path, { migrate: true, now: frozenClock(MIGRATED_AT) }).close();
+
+  const store = openProject(path, { migrate: true });
+  try {
+    assert.equal(store.migration, null, 'nothing to do the second time');
+  } finally {
+    store.close();
+  }
+});
+
+test('a current file whose version was walked back migrates without a second ledger', () => {
+  // The shape the desktop app's own migration test builds: a file that already
+  // has every v5 table but declares an older version. Creating the table again
+  // would throw; the step is a no-op instead.
+  const path = temp.file('walked-back.matchline');
+  createProject(path, { name: 'Dragon', now: frozenClock(CREATED_AT) }).close();
+  rawExec(
+    path,
+    "DELETE FROM migrations WHERE version > 4;" +
+      "UPDATE meta SET value = '4' WHERE key = 'schema_version'",
+  );
+
+  const store = openProject(path, { migrate: true, now: frozenClock(MIGRATED_AT) });
+  try {
+    assert.equal(store.meta().schemaVersion, PROJECT_SCHEMA_VERSION);
+    assert.equal(store.getLedger(), undefined);
+  } finally {
+    store.close();
+  }
+  assert.equal(
+    tablesOf(path).filter((table) => table === 'ledger').length,
+    1,
+    'one ledger table, not two',
+  );
 });
 
 /* ------------------------------------------------------- the config table */
