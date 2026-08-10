@@ -89,13 +89,15 @@ test('a unique tag stays confirmed even when another tag is duplicated', () => {
 
 test('a duplicated tag disambiguates the asset id with the object it came from', () => {
   const { assets } = buildAssetCatalog(cache, TAG_ONLY_MAPPINGS, FILTERS);
+  // An object ordinal only addresses something together with its source, so the
+  // disambiguator is the whole key, not the bare number.
   assert.deepEqual(
     assets.map((asset) => asset.assetId),
     [
-      'tag:MAH001-10-01#2',
-      'tag:MAH001-10-01#3',
+      'tag:MAH001-10-01#model/2',
+      'tag:MAH001-10-01#model/3',
       'tag:MAH002-10-01',
-      'tag:MAH001-10-01#5',
+      'tag:MAH001-10-01#model/5',
     ],
   );
 });
@@ -103,7 +105,12 @@ test('a duplicated tag disambiguates the asset id with the object it came from',
 test('one review item per duplicated tag, listing every object that claims it', () => {
   const { reviewItems, impact } = buildAssetCatalog(cache, TAG_ONLY_MAPPINGS, FILTERS);
   assert.deepEqual(reviewItems, [
-    { kind: 'duplicate-model-tag', canonicalTag: 'MAH001-10-01', objectIds: [2, 3, 5] },
+    {
+      kind: 'duplicate-model-tag',
+      canonicalTag: 'MAH001-10-01',
+      objectIds: [2, 3, 5],
+      sources: [{ sourceId: 'model', objectIds: [2, 3, 5] }],
+    },
   ]);
   assert.equal(impact.duplicateTagCount, 1);
   assert.equal(reviewItemSummary(reviewItems[0]), 'tag MAH001-10-01: 3 model objects share it');
@@ -141,7 +148,7 @@ test('untagged assets are never duplicates of one another', () => {
   assert.ok(untagged.every((asset) => asset.status === 'MODEL_CONFIRMED'));
   assert.deepEqual(
     untagged.map((asset) => asset.assetId),
-    ['object:1', 'object:6'],
+    ['object:model/1', 'object:model/6'],
   );
 });
 
@@ -176,13 +183,16 @@ test('collapsing a duplicate away leaves the survivor confirmed', () => {
 });
 
 /**
- * The `#` that separates a duplicate's object id is also a character a site can
+ * The `#` that separates a duplicate's object key is also a character a site can
  * write in a tag:
  *
- *   2 Equipment  "X"     duplicated with 3, so its id ends `#2`
+ *   2 Equipment  "X"     duplicated with 3, so its id ends `#model/2`
  *   3 Equipment  "X"
- *   4 Equipment  "X#2"   unique, and spelled exactly like object 2's id
+ *   4 Equipment  "X#2"   unique, and the shape a duplicate id used to take
  *   5 Equipment  "X%23"  unique, and spelled exactly like object 4's escape
+ *
+ * Escaping the tag is what keeps all four apart: an unescaped `#` in an id is
+ * always the separator, never part of a tag.
  */
 const HASH_TAGS = {
   objects: [
@@ -207,7 +217,12 @@ test('a literal # in a tag can never collide with a duplicate id suffix', () => 
   try {
     const { assets } = buildAssetCatalog(hashes, TAG_ONLY_MAPPINGS, FILTERS);
     const ids = assets.map((asset) => asset.assetId);
-    assert.deepEqual(ids, ['tag:X#2', 'tag:X#3', 'tag:X%232', 'tag:X%2523']);
+    assert.deepEqual(ids, [
+      'tag:X#model/2',
+      'tag:X#model/3',
+      'tag:X%232',
+      'tag:X%2523',
+    ]);
     assert.equal(new Set(ids).size, ids.length);
   } finally {
     hashes.close();

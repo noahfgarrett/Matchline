@@ -37,6 +37,20 @@ export type {
 
 export type { SegmentExtractor, SegmentName, TagAnatomyConfig } from './anatomy.js';
 
+export {
+  escapeSourceId,
+  modelObjectKeyToString,
+  parseModelObjectKey,
+  SOURCE_ASSIGNMENT_FIELDS,
+  unescapeSourceId,
+} from './model-universe.js';
+export type {
+  ModelObjectKey,
+  ModelSourceRef,
+  SourceAssignmentField,
+  SourceAssignments,
+} from './model-universe.js';
+
 export type {
   AssetFilterConfig,
   PropertyMappings,
@@ -57,6 +71,7 @@ export type {
   AmbiguousSuffixReviewItem,
   DeadClaimRuleReviewItem,
   DuplicateModelTagReviewItem,
+  DuplicateModelTagSource,
   FuzzyIdentityCandidate,
   FuzzyIdentityReviewItem,
   MissingBoundaryReviewItem,

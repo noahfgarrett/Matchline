@@ -1,6 +1,7 @@
 import {
   EVIDENCE_TIER,
   type AttributeClaim,
+  type DuplicateModelTagReviewItem,
   type ReviewItem,
 } from '@matchline/domain';
 
@@ -112,6 +113,32 @@ export const DRAGON_REVIEW_ITEMS = [
     objectId: 57,
   },
 ] as const satisfies ReadonlyArray<ReviewItem>;
+
+/**
+ * The same tag registered by two sources (P0-1).
+ *
+ * Kept out of `DRAGON_REVIEW_ITEMS` because that array holds one item per kind;
+ * this is the second shape the one kind can take, and the flat `objectIds`
+ * repeat `4` on purpose -- two sources really do both number an object 4, which
+ * is why `sources` exists.
+ */
+export const DUPLICATE_ACROSS_SOURCES: DuplicateModelTagReviewItem = {
+  kind: 'duplicate-model-tag',
+  canonicalTag: 'MAH001-10-01',
+  objectIds: [4, 4],
+  sources: [
+    { sourceId: 'dragon-mech-a', objectIds: [4] },
+    { sourceId: 'dragon-mech-b', objectIds: [4] },
+  ],
+};
+
+/** One source claiming a tag twice: a duplicate, but not a cross-source one. */
+export const DUPLICATE_WITHIN_ONE_SOURCE: DuplicateModelTagReviewItem = {
+  kind: 'duplicate-model-tag',
+  canonicalTag: 'MAH001-10-01',
+  objectIds: [4, 57],
+  sources: [{ sourceId: 'dragon-mech-a', objectIds: [4, 57] }],
+};
 
 /**
  * The invariant this fixture exists for: every `ReviewItem` member has a

@@ -149,3 +149,10 @@ export function stageCounts(impact) {
     stage.droppedCount,
   ]);
 }
+
+/** `[tag, assetId, sourceId]` per asset, sorted, for order-free comparison. */
+export function assetShape(catalog) {
+  return catalog.assets
+    .map((asset) => [asset.canonicalTag, asset.assetId, asset.sourceId])
+    .sort((left, right) => (left.join() < right.join() ? -1 : 1));
+}

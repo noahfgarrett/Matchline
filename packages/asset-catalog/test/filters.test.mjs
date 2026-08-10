@@ -84,7 +84,9 @@ test('an untagged asset is identified by its cache ordinal, not by an empty tag'
     requireTagProperty: false,
   });
   const root = assets.find((asset) => asset.objectIds[0] === 1);
-  assert.equal(root.assetId, 'object:1');
+  // The ordinal alone is not an address: the id names the source it belongs to.
+  assert.equal(root.assetId, 'object:model/1');
+  assert.deepEqual(root.objectKeys, [{ sourceId: 'model', objectId: 1 }]);
   assert.equal(root.canonicalTag, '');
   assert.equal(root.provenance.canonicalTag, undefined);
 });

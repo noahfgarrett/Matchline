@@ -171,12 +171,56 @@ interface FixtureWarning {
   readonly objectId: number | null;
 }
 
+interface FixtureSourceModel {
+  readonly id: number;
+  readonly parentId: number | null;
+  readonly fileName: string;
+  readonly displayName: string;
+  readonly guid: string;
+}
+
 interface FixtureContent {
+  readonly sourceModels: readonly FixtureSourceModel[];
   readonly objects: readonly FixtureObject[];
   readonly properties: readonly FixtureProperty[];
   readonly selectionSets: readonly FixtureSelectionSet[];
   readonly warnings: readonly FixtureWarning[];
 }
+
+/** Dragon's three models: two coordination files, one appended inside another. */
+const DRAGON_SOURCE_MODELS: readonly FixtureSourceModel[] = [
+  {
+    id: SOURCE_MODEL_MECHANICAL,
+    parentId: null,
+    fileName: 'Dragon-Mechanical.nwc',
+    displayName: 'Dragon Mechanical',
+    guid: guidFor(1001),
+  },
+  {
+    id: SOURCE_MODEL_CONTROLS,
+    parentId: null,
+    fileName: 'Dragon-Controls.nwc',
+    displayName: 'Dragon Controls',
+    guid: guidFor(1002),
+  },
+  {
+    id: SOURCE_MODEL_CONTROLS_PLC,
+    parentId: SOURCE_MODEL_CONTROLS,
+    fileName: 'Dragon-Controls-PLC.nwc',
+    displayName: 'Dragon Controls PLC',
+    guid: guidFor(1003),
+  },
+];
+
+/** The source model ids, published so a split can name the halves it wants. */
+export const DRAGON_SOURCE_MODEL_IDS = {
+  mechanical: SOURCE_MODEL_MECHANICAL,
+  controls: SOURCE_MODEL_CONTROLS,
+  controlsPlc: SOURCE_MODEL_CONTROLS_PLC,
+} as const;
+
+/** The category and name the fixture writes its equipment tag under. */
+export const DRAGON_TAG_PROPERTY = { category: 'Dragon Data', name: 'Tag' } as const;
 
 function twoDigits(value: number): string {
   return value < 10 ? `0${value}` : String(value);
@@ -457,7 +501,7 @@ function buildDragonContent(): FixtureContent {
     },
   ];
 
-  return { objects, properties, selectionSets, warnings };
+  return { sourceModels: DRAGON_SOURCE_MODELS, objects, properties, selectionSets, warnings };
 }
 
 /**
@@ -467,8 +511,184 @@ function buildDragonContent(): FixtureContent {
  * `meta.object_count` integrity check, so `openExtractionCache` accepts it.
  */
 export function writeDragonFixture(path: string): void {
-  rmSync(path, { force: true });
+  writeFixtureContent(path, buildDragonContent(), null);
+}
+
+/**
+ * Which part of Dragon a split file holds.
+ *
+ * Both selectors are subtractive and independent, and both are optional: an
+ * empty `opts` writes the whole fixture under a different file name.
+ */
+export interface DragonFixtureSubset {
+  /**
+   * Source model ids to keep. Absent keeps all three.
+   *
+   * A kept object whose parent belongs to a dropped model is re-rooted rather
+   * than removed, so partitioning by source model never loses an object: that
+   * is what makes two split files add back up to the federated one.
+   */
+  readonly sourceModels?: ReadonlyArray<number>;
+  /**
+   * Keeps a tagged object only when this returns true.
+   *
+   * Untagged objects (the file and layer nodes) carry no tag to judge and are
+   * kept in every subset -- a split file has its own scaffolding. The subtree
+   * under a rejected tag goes with it, because a solid without its equipment is
+   * a part of nothing.
+   */
+  readonly tagFilter?: (tag: string) => boolean;
+  /** What the split file calls itself. Defaults to the federated name. */
+  readonly inputFileName?: string;
+}
+
+/**
+ * Writes a Dragon cache holding only part of the fixture.
+ *
+ * `writeDragonFixture` stays untouched and every other suite's counts with it.
+ * The invariant this exists for: for a partition of the source models, the
+ * subsets' TAGGED objects partition the federated fixture's exactly -- same
+ * ids, same InstanceGuids, same properties -- so "federated vs split" compares
+ * two representations of one site rather than two sites.
+ *
+ * @throws Error when `sourceModels` names a model Dragon does not have, which
+ * is a typo in a test rather than an empty split.
+ */
+export function writeDragonFixtureSubset(path: string, opts: DragonFixtureSubset): void {
   const content = buildDragonContent();
+  const kept = subsetOfContent(content, opts);
+  writeFixtureContent(path, kept, opts.inputFileName ?? null);
+}
+
+/** The first non-null `Dragon Data > Tag` of each object that carries one. */
+function tagsByObject(content: FixtureContent): ReadonlyMap<number, string> {
+  const tags = new Map<number, string>();
+  for (const property of content.properties) {
+    if (
+      property.category !== DRAGON_TAG_PROPERTY.category ||
+      property.name !== DRAGON_TAG_PROPERTY.name ||
+      property.valueText === null ||
+      tags.has(property.objectId)
+    ) {
+      continue;
+    }
+    tags.set(property.objectId, property.valueText);
+  }
+  return tags;
+}
+
+function subsetOfContent(content: FixtureContent, opts: DragonFixtureSubset): FixtureContent {
+  const keptModelIds = new Set(
+    opts.sourceModels ?? content.sourceModels.map((model) => model.id),
+  );
+  for (const id of keptModelIds) {
+    if (!content.sourceModels.some((model) => model.id === id)) {
+      throw new Error(`the Dragon fixture has no source model ${id}`);
+    }
+  }
+
+  const tags = tagsByObject(content);
+  const tagFilter = opts.tagFilter;
+
+  // Objects are built parents-first, so one ascending pass decides every
+  // object: a tag rejection has already been recorded when its children are
+  // reached.
+  const keptObjectIds = new Set<number>();
+  const tagRejected = new Set<number>();
+  for (const object of content.objects) {
+    const parentRejected = object.parentId !== null && tagRejected.has(object.parentId);
+    const tag = tags.get(object.id);
+    const ownTagRejected = tag !== undefined && tagFilter !== undefined && !tagFilter(tag);
+    if (parentRejected || ownTagRejected) {
+      tagRejected.add(object.id);
+      continue;
+    }
+    if (keptModelIds.has(object.sourceModelId)) {
+      keptObjectIds.add(object.id);
+    }
+  }
+
+  // A kept object whose parent went with another source model becomes a root.
+  let rootSlot = 0;
+  const objects = content.objects
+    .filter((object) => keptObjectIds.has(object.id))
+    .map((object): FixtureObject => {
+      const parentId =
+        object.parentId !== null && keptObjectIds.has(object.parentId) ? object.parentId : null;
+      if (parentId !== null) {
+        return { ...object, parentId };
+      }
+      const pathIndex = rootSlot;
+      rootSlot += 1;
+      return { ...object, parentId: null, pathIndex };
+    });
+
+  const sourceModels = content.sourceModels
+    .filter((model) => keptModelIds.has(model.id))
+    .map((model): FixtureSourceModel => ({
+      ...model,
+      parentId:
+        model.parentId !== null && keptModelIds.has(model.parentId) ? model.parentId : null,
+    }));
+
+  const selectionSets = subsetOfSelectionSets(content.selectionSets, keptObjectIds);
+
+  return {
+    sourceModels,
+    objects,
+    properties: content.properties.filter((property) => keptObjectIds.has(property.objectId)),
+    selectionSets,
+    // A warning about an object this file does not hold would point at nothing.
+    warnings: content.warnings.filter(
+      (warning) => warning.objectId === null || keptObjectIds.has(warning.objectId),
+    ),
+  };
+}
+
+/**
+ * Sets keep the members this file still holds; a set left with nothing anywhere
+ * beneath it is dropped, because a split file does not carry another file's
+ * sets. A folder survives exactly as long as one of its sets does.
+ */
+function subsetOfSelectionSets(
+  sets: readonly FixtureSelectionSet[],
+  keptObjectIds: ReadonlySet<number>,
+): readonly FixtureSelectionSet[] {
+  const trimmed = sets.map((set) => ({
+    ...set,
+    memberObjectIds: set.memberObjectIds.filter((objectId) => keptObjectIds.has(objectId)),
+  }));
+
+  const populated = new Set<number>();
+  // Children are declared after their folders, so one descending pass carries
+  // "has members" up the tree.
+  for (let index = trimmed.length - 1; index >= 0; index -= 1) {
+    const set = trimmed[index];
+    if (set === undefined) {
+      continue;
+    }
+    if (set.memberObjectIds.length > 0 || populated.has(set.id)) {
+      populated.add(set.id);
+      if (set.parentId !== null) {
+        populated.add(set.parentId);
+      }
+    }
+  }
+  return trimmed.filter((set) => populated.has(set.id));
+}
+
+/**
+ * Writes one content set, replacing any file already at `path`.
+ *
+ * `inputFileName` overrides `meta.input_file_name` so two split files can claim
+ * one basename (hard gate 4); `null` keeps the federated name.
+ */
+function writeFixtureContent(
+  path: string,
+  content: FixtureContent,
+  inputFileName: string | null,
+): void {
+  rmSync(path, { force: true });
   const db = new DatabaseSync(path);
   try {
     db.exec(EXTRACTION_CACHE_DDL);
@@ -476,34 +696,25 @@ export function writeDragonFixture(path: string): void {
 
     const insertMeta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)');
     for (const [key, value] of DRAGON_META) {
-      insertMeta.run(key, value);
+      insertMeta.run(
+        key,
+        key === 'input_file_name' && inputFileName !== null ? inputFileName : value,
+      );
     }
     insertMeta.run('object_count', String(content.objects.length));
 
     const insertSourceModel = db.prepare(
       'INSERT INTO source_models (id, parent_id, file_name, display_name, guid) VALUES (?, ?, ?, ?, ?)',
     );
-    insertSourceModel.run(
-      SOURCE_MODEL_MECHANICAL,
-      null,
-      'Dragon-Mechanical.nwc',
-      'Dragon Mechanical',
-      guidFor(1001),
-    );
-    insertSourceModel.run(
-      SOURCE_MODEL_CONTROLS,
-      null,
-      'Dragon-Controls.nwc',
-      'Dragon Controls',
-      guidFor(1002),
-    );
-    insertSourceModel.run(
-      SOURCE_MODEL_CONTROLS_PLC,
-      SOURCE_MODEL_CONTROLS,
-      'Dragon-Controls-PLC.nwc',
-      'Dragon Controls PLC',
-      guidFor(1003),
-    );
+    for (const model of content.sourceModels) {
+      insertSourceModel.run(
+        model.id,
+        model.parentId,
+        model.fileName,
+        model.displayName,
+        model.guid,
+      );
+    }
 
     const insertObject = db.prepare(
       'INSERT INTO objects (id, source_model_id, parent_id, path_index, depth, display_name, class_name, ' +

@@ -53,6 +53,7 @@ test('every populated field records the property it was read from', () => {
 test('field provenance is a domain Provenance addressing the model object', () => {
   const asset = assetFor('MAH001-10-01');
   assert.deepEqual(asset.provenance.building, {
+    origin: 'model-property',
     sourceFile: 'Dragon-Mechanical.nwc',
     sourceRef: { kind: 'model-object', objectId: '3' },
     propertyOrColumn: 'Dragon Data > Building',

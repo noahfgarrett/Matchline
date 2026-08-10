@@ -56,6 +56,26 @@ test('an empty cache produces an empty catalog and zeroed counts', () => {
     finalAssetCount: 0,
     duplicateTagCount: 0,
     untaggedDroppedCount: 0,
+    // A bare cache is a universe of one, read under the id `model`.
+    bySource: new Map([
+      [
+        'model',
+        {
+          sourceId: 'model',
+          totalObjects: 0,
+          candidatesAfterEachFilter: [
+            { stage: 'source-model-files', inCount: 0, droppedCount: 0 },
+            { stage: 'classes', inCount: 0, droppedCount: 0 },
+            { stage: 'selection-sets', inCount: 0, droppedCount: 0 },
+            { stage: 'tag-presence', inCount: 0, droppedCount: 0 },
+            { stage: 'tag-patterns', inCount: 0, droppedCount: 0 },
+          ],
+          collapsedCount: 0,
+          finalAssetCount: 0,
+          untaggedDroppedCount: 0,
+        },
+      ],
+    ]),
   });
 });
 
@@ -68,7 +88,7 @@ test('an empty cache still rejects a selection set it does not have', () => {
           selectionSetNames: ['Air Handling'],
         }),
       ),
-    /the cache has no selection sets/,
+    /no source in this project has any selection sets/,
   );
 });
 

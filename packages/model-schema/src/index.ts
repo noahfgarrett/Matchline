@@ -1,8 +1,19 @@
 export { openExtractionCache } from './cache.js';
 export type { ExtractionCache } from './cache.js';
 
-export { buildPropertyCatalog } from './catalog.js';
-export type { PropertyCatalogEntry, SourceModelCoverage } from './catalog.js';
+export {
+  buildPropertyCatalog,
+  buildSourceModelCoverage,
+  collectPropertyStatistics,
+  comparePropertyCoverage,
+  MAX_EXAMPLE_VALUES,
+} from './catalog.js';
+export type {
+  CachePropertyStatistics,
+  PropertyCatalogEntry,
+  PropertyStatistics,
+  SourceModelCoverage,
+} from './catalog.js';
 
 export { CacheValidationError, describeCacheValidationReason } from './errors.js';
 export type { CacheValidationReason } from './errors.js';

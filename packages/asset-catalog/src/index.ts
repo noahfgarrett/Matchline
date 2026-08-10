@@ -1,6 +1,15 @@
 export { buildAssetCatalog } from './catalog.js';
 export type { AssetCatalog } from './catalog.js';
 
+export { orderCatalogSources } from './sources.js';
+export type { CatalogSource } from './sources.js';
+
+export { buildUniversePropertyCatalog } from './property-catalog.js';
+export type {
+  PropertySourceCoverage,
+  UniversePropertyCatalogEntry,
+} from './property-catalog.js';
+
 export { AssetCatalogConfigError, describeAssetCatalogConfigReason } from './errors.js';
 export type { AssetCatalogConfigReason } from './errors.js';
 
@@ -15,4 +24,7 @@ export type {
   ModelAsset,
   ModelAssetProvenance,
   ModelAssetStatus,
+  ModelPropertyProvenance,
+  SourceAssignmentProvenance,
+  SourceInclusionImpact,
 } from './types.js';

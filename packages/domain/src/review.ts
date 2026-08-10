@@ -17,11 +17,31 @@ export interface SystemConflictReviewItem {
   readonly claims: ReadonlyArray<AttributeClaim>;
 }
 
-/** One tag on more than one model object. Both objects are kept, never merged. */
+/** One source's share of a duplicated tag, addressable within that source. */
+export interface DuplicateModelTagSource {
+  readonly sourceId: string;
+  /** That source's objects carrying the tag, ascending. */
+  readonly objectIds: ReadonlyArray<number>;
+}
+
+/**
+ * One tag on more than one model object. Both objects are kept, never merged.
+ *
+ * P0-1 detects duplicates across the whole universe -- within one cache, across
+ * caches, across source models -- so the objects listed here may belong to
+ * different sources, and an object id alone is then not an address. `sources`
+ * is the addressable form; `objectIds` is the flat list, ordered by source then
+ * by id, and stays the thing a count is taken of.
+ */
 export interface DuplicateModelTagReviewItem {
   readonly kind: 'duplicate-model-tag';
   readonly canonicalTag: string;
   readonly objectIds: ReadonlyArray<number>;
+  /**
+   * Which sources claim the tag. Optional because records written before the
+   * universe existed do not carry it; absent is not "one source".
+   */
+  readonly sources?: ReadonlyArray<DuplicateModelTagSource>;
 }
 
 /** One system key carrying several descriptions in the MEL (PRODUCT.md §5.7). */
@@ -190,8 +210,14 @@ export function reviewItemSummary(item: ReviewItem): string {
   switch (item.kind) {
     case 'system-conflict':
       return `asset ${item.assetId}: ${item.claims.length} competing system claims`;
-    case 'duplicate-model-tag':
-      return `tag ${item.canonicalTag}: ${item.objectIds.length} model objects share it`;
+    case 'duplicate-model-tag': {
+      // Named only when there is more than one: "across sources dragon-mech"
+      // would tell a reviewer nothing they did not already know, and every
+      // single-source item would grow a clause for no reason.
+      const sourceIds = [...new Set((item.sources ?? []).map((source) => source.sourceId))].sort();
+      const across = sourceIds.length > 1 ? ` across sources ${sourceIds.join(', ')}` : '';
+      return `tag ${item.canonicalTag}: ${item.objectIds.length} model objects share it${across}`;
+    }
     case 'system-catalog-conflict':
       return `system ${item.systemKey}: ${item.descriptions.length} conflicting descriptions`;
     case 'fuzzy-identity':

@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { reviewItemSummary } from '../dist/index.js';
-import { DRAGON_REVIEW_ITEMS } from './dist/review.fixture.js';
+import {
+  DRAGON_REVIEW_ITEMS,
+  DUPLICATE_ACROSS_SOURCES,
+  DUPLICATE_WITHIN_ONE_SOURCE,
+} from './dist/review.fixture.js';
 
 test('every review item kind summarizes to a non-empty line', () => {
   assert.equal(DRAGON_REVIEW_ITEMS.length, 12);
@@ -29,6 +33,20 @@ test('a duplicate model tag names both objects rather than merging them', () => 
   assert.deepEqual(duplicate.objectIds, [4, 57]);
   assert.equal(
     reviewItemSummary(duplicate),
+    'tag MAH001-10-01: 2 model objects share it',
+  );
+});
+
+test('a tag claimed by two sources names both of them', () => {
+  assert.equal(
+    reviewItemSummary(DUPLICATE_ACROSS_SOURCES),
+    'tag MAH001-10-01: 2 model objects share it across sources dragon-mech-a, dragon-mech-b',
+  );
+});
+
+test('a duplicate inside one source does not grow a source clause', () => {
+  assert.equal(
+    reviewItemSummary(DUPLICATE_WITHIN_ONE_SOURCE),
     'tag MAH001-10-01: 2 model objects share it',
   );
 });
