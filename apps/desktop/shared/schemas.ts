@@ -631,6 +631,14 @@ export type WireResolverPreview = z.infer<typeof resolverPreviewSchema>;
  * Mirrors `HierarchyConfig` / `HierarchyLevelConfig` in `@matchline/domain`.
  * The wire shape is identical because a level has no "undecided" state: every
  * field is answered the moment the level exists.
+ *
+ * One name differs. The engine calls a level's grouping attribute
+ * `keyAttributeKey` (P0-6); screen 6, the stored project file and this schema
+ * call it `attributeKey`, which is what it has always been called here and what
+ * every project written before 1.0 spells it. `toHierarchyConfig` is the one
+ * place the two meet. A row that arrives spelled the engine's way — an imported
+ * profile package, a config written against the domain type — is lifted rather
+ * than refused, so neither spelling can lose a project's levels.
  */
 
 export const missingValuePolicySchema = z.enum([
@@ -643,14 +651,35 @@ export type WireMissingValuePolicy = z.infer<typeof missingValuePolicySchema>;
 export const levelSortSchema = z.enum(['label', 'key']);
 export type WireLevelSort = z.infer<typeof levelSortSchema>;
 
-export const hierarchyLevelSchema = z.object({
-  levelId: z.string().min(1),
-  displayName: z.string().min(1),
-  attributeKey: z.string().min(1),
-  boundary: z.boolean(),
-  missingValuePolicy: missingValuePolicySchema,
-  sort: levelSortSchema,
-});
+/** Lifts a level that spells its key attribute the engine's way. */
+function liftLevelKeySpelling(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  if (record['attributeKey'] !== undefined || record['keyAttributeKey'] === undefined) {
+    return value;
+  }
+  const { keyAttributeKey, ...rest } = record;
+  return { ...rest, attributeKey: keyAttributeKey };
+}
+
+export const hierarchyLevelSchema = z.preprocess(
+  liftLevelKeySpelling,
+  z.object({
+    levelId: z.string().min(1),
+    displayName: z.string().min(1),
+    /** The level's KEY attribute: what it groups by, and what a boundary compares. */
+    attributeKey: z.string().min(1),
+    /** Optional: which attribute supplies the words. Never moves equipment (P0-6). */
+    displayAttributeKey: z.string().min(1).optional(),
+    /** Optional: which attribute the boundary compares, when it is not the key. */
+    boundaryAttributeKey: z.string().min(1).optional(),
+    boundary: z.boolean(),
+    missingValuePolicy: missingValuePolicySchema,
+    sort: levelSortSchema,
+  }),
+);
 export type WireHierarchyLevel = z.infer<typeof hierarchyLevelSchema>;
 
 export const hierarchyConfigSchema = z.object({

@@ -7,7 +7,7 @@
  * pipeline order owned by `@matchline/compiler`.
  */
 import type {
-  HierarchyConfig,
+  HierarchyConfigInput,
   ParentDecision,
   ParentLadderConfig,
   ResolvedDependency,
@@ -62,7 +62,14 @@ export interface CompileInput {
   readonly claims: CompileClaims;
   /** Walk order. Defaults to `LADDER_SOURCE_ORDER`; omitting a rung disables it. */
   readonly ladder?: ParentLadderConfig;
-  readonly hierarchy: HierarchyConfig;
+  /**
+   * The level stack, in either spelling.
+   *
+   * A level written before P0-6 split key from display carries one
+   * `attributeKey`; it is migrated at the entry point, so a stored project
+   * config keeps compiling without being rewritten first.
+   */
+  readonly hierarchy: HierarchyConfigInput;
 }
 
 /** One asset in the projected tree, with its structural children nested. */
@@ -81,11 +88,28 @@ export interface HierarchyAssetNode {
 export interface HierarchyLevelNode {
   readonly levelId: string;
   /**
-   * The level value, or a sentinel: `(unassigned)` where the site asked for a
-   * grouping, `(no value)` where a `review` / `provisional-root` policy refused
-   * to state one. Never the empty string.
+   * The grouping identity: the level's key attribute for the assets filed here,
+   * or a sentinel -- `(unassigned)` where the site asked for a grouping,
+   * `(no value)` where a `review` / `provisional-root` policy refused to state
+   * one. Never the empty string.
+   *
+   * This is what a node is addressed and compared by (P0-6). Two compiles of
+   * one site produce the same keys however the site re-words itself.
+   */
+  readonly key: string;
+  /**
+   * The same string as {@link key}, under the name every reader before P0-6
+   * used. Kept because a level's value and its identity were one thing then and
+   * still are; new code should read `key`, and anything shown to a person
+   * should read {@link label}.
    */
   readonly value: string;
+  /**
+   * What this group is called: the level's display attribute where it names one
+   * and an asset stated it, the key otherwise. Never load-bearing -- rewording
+   * a system changes this and nothing else.
+   */
+  readonly label: string;
   /** The next configured level down. Empty at the innermost level. */
   readonly levels: ReadonlyArray<HierarchyLevelNode>;
   /** Top-of-grouping assets, present only at the innermost level. */

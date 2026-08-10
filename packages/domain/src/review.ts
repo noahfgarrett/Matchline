@@ -128,6 +128,30 @@ export interface MissingBoundaryReviewItem {
 }
 
 /**
+ * A person's parent decision that an enabled boundary refused (P0-4).
+ *
+ * Manual is still the strongest rung: it wins the ladder competition outright.
+ * What it no longer does is skip the fold — "cross-boundary manual → dependency
+ * + provenance records manual origin + boundary demotion + visible review item".
+ * This is that visible item, and it is the only demotion that raises one,
+ * because it is the only one where the compiler is contradicting a person
+ * rather than a rule.
+ *
+ * Nothing is discarded to produce it: the refused claim stays on the node's
+ * losing claims, and the parent stays on the node as a `DEPENDENCY` carrying
+ * the person's own words.
+ */
+export interface ManualBoundaryDemotionReviewItem {
+  readonly kind: 'manual-boundary-demotion';
+  /** The asset somebody re-parented. */
+  readonly assetId: string;
+  /** The parent they chose, now a dependency. */
+  readonly parentAssetId: string;
+  /** The enabled level whose value differs between the two. */
+  readonly boundaryLevelId: string;
+}
+
+/**
  * A learned rule that has not earned claim grade (ENGINE.md E3, DECISIONS.md #3).
  *
  * Proposal-grade description rules never write hierarchy and never become
@@ -237,6 +261,7 @@ export type ReviewItem =
   | AmbiguousParentReviewItem
   | StructuralCycleReviewItem
   | MissingBoundaryReviewItem
+  | ManualBoundaryDemotionReviewItem
   | NestingProposalReviewItem
   | DeadClaimRuleReviewItem
   | UnresolvableAliasReviewItem
@@ -273,6 +298,11 @@ export function reviewItemSummary(item: ReviewItem): string {
       return `structural cycle across ${item.assetIds.length} assets`;
     case 'missing-boundary':
       return `asset ${item.assetId}: boundary level ${item.levelId} has no value`;
+    case 'manual-boundary-demotion':
+      return (
+        `asset ${item.assetId}: the manual parent ${item.parentAssetId} crosses boundary level ` +
+        `${item.boundaryLevelId}, so it is a dependency rather than a parent`
+      );
     case 'nesting-proposal':
       return `asset ${item.assetId}: proposed parent ${item.proposedParentId} (${item.ruleDetail})`;
     case 'dead-claim-rule':

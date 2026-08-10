@@ -21,12 +21,22 @@
  *    differs and another is missing, the parent is wrong regardless of what the
  *    missing one would have said, so the fold demotes. This is the order
  *    §11.3's own pseudocode states the two clauses in.
+ * 5. **No rung is exempt, manual included** (P0-4). A person's parent wins the
+ *    ladder competition and is then folded like any other winner. The fold does
+ *    not know which rung selected the parent it is comparing, and that is the
+ *    point: "cross-boundary manual → dependency", not a second set of rules.
  *
- * The manual bypass (§11.5) is not implemented here on purpose -- the walk never
- * calls the fold for a manual claim, which keeps "manual outranks everything"
- * one readable branch instead of a special case buried in the comparison.
+ * What a boundary compares is the level's boundary attribute, which defaults to
+ * its key (P0-6). Never its display attribute: a level that compared the words
+ * would demote a parent every time somebody re-typed a description.
  */
-import type { HierarchyConfig, HierarchyLevelConfig } from '@matchline/domain';
+import {
+  boundaryAttributeOf,
+  displayAttributeOf,
+  type HierarchyConfig,
+  type HierarchyLevelConfig,
+  type ResolvedLevelPathEntry,
+} from '@matchline/domain';
 
 import { compareText } from './order.js';
 import type { CompileSubject } from './types.js';
@@ -103,16 +113,18 @@ export function foldBoundaries(
   const levels = boundaryLevels(hierarchy);
 
   for (const level of levels) {
-    const childValue = explicitValue(child, level.attributeKey);
-    const parentValue = explicitValue(parent, level.attributeKey);
+    const attributeKey = boundaryAttributeOf(level);
+    const childValue = explicitValue(child, attributeKey);
+    const parentValue = explicitValue(parent, attributeKey);
     if (childValue !== null && parentValue !== null && childValue !== parentValue) {
       return { kind: 'demote', levelId: level.levelId };
     }
   }
 
   for (const level of levels) {
-    const childValue = explicitValue(child, level.attributeKey);
-    const parentValue = explicitValue(parent, level.attributeKey);
+    const attributeKey = boundaryAttributeOf(level);
+    const childValue = explicitValue(child, attributeKey);
+    const parentValue = explicitValue(parent, attributeKey);
     if (childValue !== null && parentValue !== null) {
       continue;
     }
@@ -144,19 +156,30 @@ export function foldBoundaries(
  * Under `review` and `provisional-root` the value is the empty string: those
  * policies refuse to bucket the asset, and the missing-boundary review item the
  * fold raised is what a person acts on.
+ *
+ * `label` (P0-6) is carried only where a level names a display attribute and
+ * the asset states one. An asset that states the key but not the words is
+ * labelled by its key rather than by a blank, and an asset with no key at all
+ * is labelled by its sentinel -- in both cases by leaving `label` off, so the
+ * one string that decides anything stays the one string a reader compares.
  */
 export function levelPathOf(
   subject: CompileSubject,
   hierarchy: HierarchyConfig,
-): ReadonlyArray<{ readonly levelId: string; readonly value: string }> {
-  return hierarchy.levels.map((level) => {
-    const value = explicitValue(subject, level.attributeKey);
-    if (value !== null) {
+): ReadonlyArray<ResolvedLevelPathEntry> {
+  return hierarchy.levels.map((level): ResolvedLevelPathEntry => {
+    const value = explicitValue(subject, level.keyAttributeKey);
+    if (value === null) {
+      return {
+        levelId: level.levelId,
+        value: level.missingValuePolicy === 'unassigned-group' ? UNASSIGNED_GROUP : '',
+      };
+    }
+    const displayKey = displayAttributeOf(level);
+    const label = displayKey === null ? null : explicitValue(subject, displayKey);
+    if (label === null || label === value) {
       return { levelId: level.levelId, value };
     }
-    return {
-      levelId: level.levelId,
-      value: level.missingValuePolicy === 'unassigned-group' ? UNASSIGNED_GROUP : '',
-    };
+    return { levelId: level.levelId, value, label };
   });
 }

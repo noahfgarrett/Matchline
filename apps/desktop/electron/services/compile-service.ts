@@ -272,6 +272,11 @@ function assetIdsOf(item: ReviewItem): readonly string[] {
       return [item.assetId];
     case 'nesting-proposal':
       return [item.assetId, item.proposedParentId];
+    // Both ends carry the flag: the child is where the decision was made, and
+    // the parent is where a reviewer looking for their missing child looks
+    // (P0-4).
+    case 'manual-boundary-demotion':
+      return [item.assetId, item.parentAssetId];
     case 'ambiguous-suffix':
       return item.candidateAssetIds;
     case 'fuzzy-identity':
@@ -379,8 +384,14 @@ export function createCompileView(
   const boundaryLevels = new Set(
     config.hierarchy.levels.filter((level) => level.boundary).map((level) => level.levelId),
   );
+  // What a boundary compares, which is the key unless the level names another
+  // attribute for it (P0-6) — never the display attribute, or a re-worded
+  // system would read as a crossing.
   const attributeOfLevel = new Map(
-    config.hierarchy.levels.map((level) => [level.levelId, level.attributeKey]),
+    config.hierarchy.levels.map((level) => [
+      level.levelId,
+      level.boundaryAttributeKey ?? level.attributeKey,
+    ]),
   );
   const subjectOf = new Map(project.compileSubjects.map((subject) => [subject.assetId, subject]));
 
@@ -432,9 +443,11 @@ export function createCompileView(
     node: HierarchyLevelNode,
     parentPath: ReadonlyArray<readonly [string, string]>,
   ): WireTreeNode => {
+    // Addressed by key, never by label: a re-worded system must not orphan the
+    // row a person had expanded (P0-6).
     const path: ReadonlyArray<readonly [string, string]> = [
       ...parentPath,
-      [node.levelId, node.value] as const,
+      [node.levelId, node.key] as const,
     ];
     const key = levelKey(path);
     const rows = [
@@ -454,7 +467,7 @@ export function createCompileView(
     return {
       nodeKey: key,
       kind: 'level',
-      label: node.value,
+      label: node.label,
       detail: levelName.get(node.levelId) ?? node.levelId,
       childCount: rows.length,
       assetId: '',
@@ -844,12 +857,15 @@ export function createCompileView(
     },
 
     /**
-     * What a drag would do (PRODUCT.md §11.5, §11.3).
+     * What a drag would do (PRODUCT.md §11.5, §11.3, P0-4).
      *
      * This is a *preview* of the boundary fold, not a second implementation of
-     * it: the fold itself still runs in the compiler on the next compile, and
-     * a manual override deliberately bypasses it. What the sentence has to
-     * convey is which of those two is about to happen.
+     * it: the fold itself runs in the compiler on the next compile. What the
+     * sentence has to convey is what that compile will decide — and since P0-4
+     * a manual parent across an enabled boundary is not kept. The drag is still
+     * allowed, because the override is worth recording and the dependency it
+     * produces is a real relationship; what it is not is a nesting, and saying
+     * so before the write is the whole point of a preview.
      */
     reparentPreview(childAssetId: string, parentAssetId: string | null): WireReparentPreview {
       if (!project.snapshot.nodes.has(childAssetId)) {
@@ -908,14 +924,26 @@ export function createCompileView(
         const attributeKey = attributeOfLevel.get(levelId) ?? levelId;
         const childValue = childAttributes?.get(attributeKey);
         const parentValue = parentAttributes?.get(attributeKey);
-        if (childValue === undefined || parentValue === undefined || childValue !== parentValue) {
+        if (childValue === undefined || parentValue === undefined) {
+          return {
+            allowed: true,
+            explanation:
+              `${levelName.get(levelId) ?? levelId} is not stated for ` +
+              `${childValue === undefined ? tagOf(childAssetId) : tagOf(parentAssetId)}, so this ` +
+              `boundary cannot be checked. ${tagOf(childAssetId)} will not nest until somebody ` +
+              'states it — the override is recorded, and the compile raises a review item.',
+            boundaryLevelId: levelId,
+            wouldDemote: true,
+          };
+        }
+        if (childValue !== parentValue) {
           return {
             allowed: true,
             explanation:
               `${tagOf(childAssetId)} and ${tagOf(parentAssetId)} differ at ${levelName.get(levelId) ?? levelId}` +
-              ` (${childValue ?? 'not stated'} against ${parentValue ?? 'not stated'}). ` +
-              'A stated parent is kept across a boundary, so this nests and nothing is demoted — ' +
-              'which is exactly what you are overruling.',
+              ` (${childValue} against ${parentValue}), and that boundary is enabled. ` +
+              `${tagOf(parentAssetId)} becomes a dependency of ${tagOf(childAssetId)} rather than ` +
+              'its parent, and the crossing is explained in Review.',
             boundaryLevelId: levelId,
             wouldDemote: true,
           };

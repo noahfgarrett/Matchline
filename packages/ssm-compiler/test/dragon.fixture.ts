@@ -119,7 +119,7 @@ export const DRAGON_HIERARCHY: HierarchyConfig = {
     {
       levelId: 'building',
       displayName: 'Building',
-      attributeKey: BUILDING,
+      keyAttributeKey: BUILDING,
       boundary: true,
       missingValuePolicy: 'review',
       sort: 'label',
@@ -127,7 +127,7 @@ export const DRAGON_HIERARCHY: HierarchyConfig = {
     {
       levelId: 'discipline',
       displayName: 'SSM Discipline',
-      attributeKey: DISCIPLINE,
+      keyAttributeKey: DISCIPLINE,
       boundary: false,
       missingValuePolicy: 'unassigned-group',
       sort: 'label',
@@ -135,7 +135,7 @@ export const DRAGON_HIERARCHY: HierarchyConfig = {
     {
       levelId: 'system',
       displayName: 'System',
-      attributeKey: SYSTEM,
+      keyAttributeKey: SYSTEM,
       boundary: true,
       missingValuePolicy: 'review',
       sort: 'key',
@@ -159,7 +159,7 @@ export function buildingOnlyHierarchy(
       {
         levelId: 'building',
         displayName: 'Building',
-        attributeKey: BUILDING,
+        keyAttributeKey: BUILDING,
         boundary: true,
         missingValuePolicy,
         sort: 'label',

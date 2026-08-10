@@ -141,11 +141,32 @@ function newService() {
   return createProjectService({ userDataDir, appVersion: '0.8.1' });
 }
 
+/**
+ * The model's own UPN decides the System Key.
+ *
+ * Load-bearing since P0-4: a manual parent is folded like any other winner, and
+ * "unknown never equals unknown" applies to it too — so the hand-picked parent
+ * below only nests because both ends actually *state* System 002. Without a
+ * resolver the System Key is unknown on both sides, and an unproven boundary is
+ * not a boundary somebody may nest across.
+ */
+const DRAGON_RESOLVER = {
+  keyChain: [{ kind: 'model-field', property: { category: 'Dragon Data', name: 'UPN' } }],
+  descriptionChain: [],
+  normalization: [{ kind: 'trim' }],
+  conflictPolicy: 'review',
+  labelTemplate: '',
+};
+
 /** A project registered against the cache and mapped far enough to compile. */
 function configure(service, projectPath) {
   service.create(projectPath, 'Dragon');
   service.addSources([cachePath]);
-  service.updateDraft({ propertyMappings: PROPERTY_MAPPINGS, assetFilters: ASSET_FILTERS });
+  service.updateDraft({
+    propertyMappings: PROPERTY_MAPPINGS,
+    assetFilters: ASSET_FILTERS,
+    systemResolver: DRAGON_RESOLVER,
+  });
 }
 
 test('the ledger is written, reloaded and honoured across a tag correction', (t) => {

@@ -306,6 +306,17 @@ export function reviewKey(item: ReviewItem): string {
       return composeKey(item.kind, fieldList(item.assetIds));
     case 'missing-boundary':
       return composeKey(item.kind, field(item.assetId), field(item.levelId));
+    case 'manual-boundary-demotion':
+      // Both ends and the level: one asset can have a manual parent refused at
+      // two different levels only if the config changed, but two children
+      // refused the same parent are two decisions to settle, and a decision
+      // recorded against one must never silently answer for the other.
+      return composeKey(
+        item.kind,
+        field(item.assetId),
+        field(item.parentAssetId),
+        field(item.boundaryLevelId),
+      );
     case 'nesting-proposal':
       return composeKey(
         item.kind,

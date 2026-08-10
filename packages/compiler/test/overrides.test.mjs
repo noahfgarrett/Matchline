@@ -5,8 +5,10 @@
  * The invariant under all of them is the same one: what a rule may *do* depends
  * on what it has earned. A proposal-grade learned rule reaches the review queue
  * and stops there (DECISIONS.md #3); a claim-grade one competes on the ladder
- * like any other evidence; a person outranks both and bypasses the boundary
- * fold entirely (PRODUCT.md §11.5).
+ * like any other evidence; a person outranks both (PRODUCT.md §11.5) -- and
+ * since P0-4 even a person's parent is folded at an enabled boundary, which is
+ * the one thing on this list that is about the *site's* rules rather than the
+ * evidence's grade.
  */
 import assert from 'node:assert/strict';
 import test, { after, before } from 'node:test';
@@ -142,7 +144,39 @@ test('claim-grade learned rules compete on the ladder and place the same eight a
   assert.equal(vfd.parent.ladderSource, 'learned-description');
 });
 
-test('a manual parent outranks the ladder and is kept across a hard building boundary', () => {
+test('a manual parent inside the boundaries wins the ladder and reaches the MEL', () => {
+  // Both units are in D1 and System 001, so nothing is crossed: this is the
+  // half of §11.5 P0-4 leaves untouched -- a person's decision is the parent.
+  const project = compileProject(
+    fullInput(handle.cache, {
+      manualRelationshipOverrides: [
+        {
+          childAssetId: idOf('MAH001-10-02'),
+          parentAssetId: idOf('MAH001-10-01'),
+          note: 'One air handling train.',
+        },
+      ],
+    }),
+  );
+
+  const child = project.snapshot.nodes.get(idOf('MAH001-10-02'));
+  assert.equal(child.parent.status, 'resolved');
+  assert.equal(child.parent.parentAssetId, idOf('MAH001-10-01'));
+  assert.equal(child.parent.ladderSource, 'manual');
+  assert.equal(child.parent.demotedFrom, undefined);
+  assert.equal(child.parent.winningClaim.provenance.manualDecision, 'One air handling train.');
+
+  // The decision reaches the generated MEL as a parent tag.
+  const row = project.generatedMel.rows.find((entry) => entry.equipmentTag === 'MAH001-10-02');
+  assert.equal(row.systemParentEquipmentTag, 'MAH001-10-01');
+  assert.equal(row.parentEvidence, 'manual');
+});
+
+test('P0-4: a manual parent across the building boundary becomes a dependency', () => {
+  // The scenario this test used to prove the opposite of: MAH001-20-01 is in
+  // D2, MAH001-10-01 in D1, and `building` is a hard boundary. Nothing about
+  // the decision is discarded -- it is a dependency carrying the person's own
+  // words, a retained claim, and a review item.
   const project = compileProject(
     fullInput(handle.cache, {
       manualRelationshipOverrides: [
@@ -156,22 +190,36 @@ test('a manual parent outranks the ladder and is kept across a hard building bou
   );
 
   const child = project.snapshot.nodes.get(idOf('MAH001-20-01'));
-  assert.equal(child.parent.status, 'resolved');
-  assert.equal(child.parent.parentAssetId, idOf('MAH001-10-01'));
-  assert.equal(child.parent.ladderSource, 'manual');
-  // §11.5: the fold is not consulted for a manual claim, so a D2 asset really
-  // does nest under a D1 one even though `building` is a hard boundary.
-  assert.equal(child.parent.demotedFrom, undefined);
-  assert.equal(project.snapshot.stats.demotedToDependencyCount, 0);
-  assert.equal(
-    child.parent.winningClaim.provenance.manualDecision,
-    'Commissioned together with the D1 unit.',
+  assert.notEqual(child.parent.status, 'resolved');
+  assert.equal(child.parent.parentAssetId, null);
+  assert.deepEqual(child.parent.demotedFrom, {
+    parentAssetId: idOf('MAH001-10-01'),
+    boundaryLevelId: 'building',
+    manual: true,
+  });
+
+  const dependency = child.dependencies.find(
+    (entry) => entry.parentAssetId === idOf('MAH001-10-01'),
+  );
+  assert.equal(dependency.relationshipType, 'DEPENDENCY');
+  assert.equal(dependency.provenance.manualDecision, 'Commissioned together with the D1 unit.');
+
+  assert.deepEqual(
+    project.reviewItems.filter((item) => item.kind === 'manual-boundary-demotion'),
+    [
+      {
+        kind: 'manual-boundary-demotion',
+        assetId: idOf('MAH001-20-01'),
+        parentAssetId: idOf('MAH001-10-01'),
+        boundaryLevelId: 'building',
+      },
+    ],
   );
 
-  // The decision reaches the generated MEL as a parent tag.
+  // The delivered MEL prints it as a dependency, never as a System Parent.
   const row = project.generatedMel.rows.find((entry) => entry.equipmentTag === 'MAH001-20-01');
-  assert.equal(row.systemParentEquipmentTag, 'MAH001-10-01');
-  assert.equal(row.parentEvidence, 'manual');
+  assert.equal(row.systemParentEquipmentTag, '');
+  assert.ok(row.dependencies.includes('MAH001-10-01'));
 });
 
 test('a manual make-root roots an asset the flow had already nested, and the losing claim is retained', () => {

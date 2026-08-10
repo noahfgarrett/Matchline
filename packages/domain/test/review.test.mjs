@@ -9,7 +9,7 @@ import {
 } from './dist/review.fixture.js';
 
 test('every review item kind summarizes to a non-empty line', () => {
-  assert.equal(DRAGON_REVIEW_ITEMS.length, 13);
+  assert.equal(DRAGON_REVIEW_ITEMS.length, 14);
   const kinds = new Set();
   for (const item of DRAGON_REVIEW_ITEMS) {
     kinds.add(item.kind);
@@ -102,8 +102,20 @@ test('a missing boundary value names the level that could not be compared', () =
   );
 });
 
+test('a refused manual parent names both ends and the boundary it crossed', () => {
+  const refused = DRAGON_REVIEW_ITEMS[8];
+  assert.equal(refused.kind, 'manual-boundary-demotion');
+  // P0-4: the item a person reads when their own decision did not nest. It has
+  // to say what they chose, not only that something was refused.
+  assert.equal(
+    reviewItemSummary(refused),
+    'asset asset-0650: the manual parent asset-0603 crosses boundary level system, ' +
+      'so it is a dependency rather than a parent',
+  );
+});
+
 test('a proposal-grade learned rule arrives as review, carrying its confidence', () => {
-  const proposal = DRAGON_REVIEW_ITEMS[8];
+  const proposal = DRAGON_REVIEW_ITEMS[9];
   assert.equal(proposal.kind, 'nesting-proposal');
   assert.equal(proposal.confidence, 0.875);
   assert.equal(
@@ -113,7 +125,7 @@ test('a proposal-grade learned rule arrives as review, carrying its confidence',
 });
 
 test('a dead claim rule names the rule that produced nothing, and why', () => {
-  const dead = DRAGON_REVIEW_ITEMS[9];
+  const dead = DRAGON_REVIEW_ITEMS[10];
   assert.equal(dead.kind, 'dead-claim-rule');
   assert.equal(
     reviewItemSummary(dead),
@@ -122,7 +134,7 @@ test('a dead claim rule names the rule that produced nothing, and why', () => {
 });
 
 test('an unresolvable alias names the spelling and the target no asset carries', () => {
-  const alias = DRAGON_REVIEW_ITEMS[10];
+  const alias = DRAGON_REVIEW_ITEMS[11];
   assert.equal(alias.kind, 'unresolvable-alias');
   assert.equal(
     reviewItemSummary(alias),
@@ -131,7 +143,7 @@ test('an unresolvable alias names the spelling and the target no asset carries',
 });
 
 test('an absorbed tagged component names the tag that stopped naming an asset', () => {
-  const absorbed = DRAGON_REVIEW_ITEMS[11];
+  const absorbed = DRAGON_REVIEW_ITEMS[12];
   assert.equal(absorbed.kind, 'absorbed-tagged-component');
   assert.equal(
     reviewItemSummary(absorbed),
@@ -140,7 +152,7 @@ test('an absorbed tagged component names the tag that stopped naming an asset', 
 });
 
 test('an orphaned decision names the stored decision that no longer resolves', () => {
-  const orphaned = DRAGON_REVIEW_ITEMS[12];
+  const orphaned = DRAGON_REVIEW_ITEMS[13];
   assert.equal(orphaned.kind, 'orphaned-decision');
   assert.equal(
     reviewItemSummary(orphaned),

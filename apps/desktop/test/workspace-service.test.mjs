@@ -50,6 +50,16 @@ const DRAGON_ASSET_COUNT = 36;
 const PNL = 'tag:PNL603-10-01';
 const RIO = 'tag:RIO603-10-01';
 
+/**
+ * Two air handlers in one building and one system.
+ *
+ * The other half of P0-4: a manual parent that crosses nothing is kept, so this
+ * pair is what a *moved parent* looks like in the register — and what the
+ * revision diff below compares two compiles over.
+ */
+const MAH_PARENT = 'tag:MAH001-10-01';
+const MAH_CHILD = 'tag:MAH001-10-02';
+
 /* ------------------------------------------------------- profile sections */
 
 /** Dragon's real anatomy: `MAH001-10-01` -> MAH / 001 / 10 / 01. */
@@ -337,9 +347,16 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
       ['building', 'ssmDiscipline', 'systemKey'],
       'the default preset is Building / SSM Discipline / System',
     );
-    assert.ok(
-      config.hierarchy.levels.every((level) => level.boundary),
-      'all three default levels are hard boundaries (DECISIONS.md #1)',
+    assert.deepEqual(
+      config.hierarchy.levels.map((level) => level.boundary),
+      [true, false, true],
+      'P0-5: Building and System are structural, SSM Discipline is a grouping only — ' +
+        'a startup family crosses disciplines and must not be cut into four roots',
+    );
+    assert.equal(
+      config.hierarchy.levels[2].displayAttributeKey,
+      'systemLabel',
+      'P0-6: the System level is keyed on the System Key and labelled by the words',
     );
     assert.deepEqual(config.roleGraph.rules, []);
     assert.equal(config.parentTagProperty, null);
@@ -368,6 +385,39 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     const second = newService();
     second.open(join(workDir, 'Reopen.matchline'));
     assert.deepEqual(second.config().roleGraph.rules, [{ parentRole: 'PNL', childRole: 'RIO' }]);
+    second.close();
+  });
+
+  await t.test('a level spelled the engine\'s way is read, lifted and kept (P0-6)', () => {
+    // A profile package or a config written against `HierarchyLevelConfig`
+    // names the grouping attribute `keyAttributeKey`; screen 6 and the project
+    // file call the same field `attributeKey`. Refusing either spelling would
+    // lose a project's levels, so the read lifts one onto the other.
+    const path = join(workDir, 'KeySpelling.matchline');
+    const first = newService();
+    first.create(path, 'Key spelling');
+    first.updateConfig({
+      hierarchy: {
+        levels: [
+          {
+            levelId: 'system',
+            displayName: 'System',
+            keyAttributeKey: 'systemKey',
+            displayAttributeKey: 'systemLabel',
+            boundary: true,
+            missingValuePolicy: 'unassigned-group',
+            sort: 'key',
+          },
+        ],
+      },
+    });
+    first.close();
+
+    const second = newService();
+    second.open(path);
+    const [level] = second.config().hierarchy.levels;
+    assert.equal(level.attributeKey, 'systemKey', 'the key survived the round trip');
+    assert.equal(level.displayAttributeKey, 'systemLabel', 'and so did the display attribute');
     second.close();
   });
 
@@ -537,12 +587,22 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     assert.equal(service.treeSearch('MAH', 3).length, 3, 'the limit is respected');
   });
 
-  await t.test('a reparent preview explains itself before anything is written', () => {
+  await t.test('a reparent preview warns before anything is written', () => {
     const across = service.reparentPreview(RIO, PNL);
+    // Allowed, because the override is worth recording and the dependency it
+    // produces is a real relationship. What it is not, since P0-4, is a nesting
+    // — and the sentence has to say so before the drag is written.
     assert.equal(across.allowed, true);
     assert.equal(across.wouldDemote, true);
     assert.equal(across.boundaryLevelId, 'system');
     assert.match(across.explanation, /650 against 603/);
+    assert.match(across.explanation, /becomes a dependency/);
+
+    const inside = service.reparentPreview(MAH_CHILD, MAH_PARENT);
+    assert.equal(inside.allowed, true);
+    assert.equal(inside.wouldDemote, false);
+    assert.equal(inside.boundaryLevelId, '');
+    assert.match(inside.explanation, /nests cleanly/);
 
     const asRoot = service.reparentPreview(RIO, null);
     assert.equal(asRoot.allowed, true);
@@ -556,7 +616,7 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     assert.equal(unknown.allowed, false);
   });
 
-  await t.test('a drag writes an override, and the recompile respects it', () => {
+  await t.test('a drag across a boundary is recorded, and the fold still applies (P0-4)', () => {
     const overrides = service.setRelationshipOverride(RIO, PNL, 'One panel, one skid.');
     assert.equal(overrides.length, 1);
     assert.equal(overrides[0].childTag, 'RIO603-10-01');
@@ -567,31 +627,52 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     assert.equal(status.state, 'done', status.state === 'failed' ? status.reason : '');
     assert.equal(status.summary.compileId, 2);
 
-    // Manual bypasses the fold (§11.5): the stated parent is kept across the
-    // System boundary the previous compile demoted it over.
-    assert.equal(status.summary.demotionCount, 0);
-    assert.equal(status.summary.rootCount, DRAGON_ASSET_COUNT - 1);
+    // P0-4: the manual claim wins the ladder and is then folded like any other
+    // winner. The System boundary is enabled and the two disagree at it, so the
+    // panel is a dependency and the RIO stays a root of System 650.
+    assert.equal(status.summary.demotionCount, 1);
+    assert.equal(status.summary.rootCount, DRAGON_ASSET_COUNT);
 
     const hits = service.treeSearch('RIO603', 5);
-    assert.equal(hits[0].overridden, true);
-    assert.equal(hits[0].demoted, false);
-    assert.equal(hits[0].parentStatus, 'resolved');
+    assert.equal(hits[0].overridden, false, 'no manual parent survived the fold');
+    assert.equal(hits[0].demoted, true);
+    assert.equal(hits[0].parentStatus, 'root');
 
     const panel = service.treeSearch('PNL603', 5)[0];
-    assert.equal(panel.childCount, 1, 'the RIO now nests under the panel');
+    assert.equal(panel.childCount, 0, 'nothing nests across the System boundary');
+
+    // And the person is told, by name, which decision the boundary refused.
+    const crossing = service
+      .reviewPage('manual-boundary-demotion', 0, 10)
+      .rows.find((row) => row.detail.includes('RIO603-10-01'));
+    assert.ok(crossing, 'the refused manual parent is a visible review item');
+    assert.ok(crossing.detail.includes('PNL603-10-01'), 'and it names the parent that was chosen');
   });
 
-  await t.test('removing the override and recompiling is the undo', () => {
+  await t.test('a drag inside the boundaries nests, and removing it is the undo', () => {
     assert.equal(service.removeRelationshipOverride(RIO), true);
     assert.deepEqual(service.listRelationshipOverrides(), []);
 
     const status = service.compile();
     assert.equal(status.state, 'done');
-    assert.equal(status.summary.demotionCount, 1, 'the boundary demotion is back');
+    assert.equal(
+      status.summary.demotionCount,
+      1,
+      'the demotion was never the override’s doing: the cable schedule proposes the same parent',
+    );
+    assert.equal(
+      service.reviewPage('manual-boundary-demotion', 0, 10).total,
+      0,
+      'with no manual decision to refuse, there is nothing to explain',
+    );
 
-    // Put it back for the revision-diff test, which needs a real change.
-    service.setRelationshipOverride(RIO, PNL, 'One panel, one skid.');
+    // The other half of §11.5, which P0-4 leaves untouched — and the parent move
+    // the revision-diff test below compares two compiles over.
+    service.setRelationshipOverride(MAH_CHILD, MAH_PARENT, 'One air handling train.');
     assert.equal(service.compile().state, 'done');
+    const child = service.treeSearch('MAH001-10-02', 5)[0];
+    assert.equal(child.overridden, true, 'nothing is crossed, so the stated parent is the parent');
+    assert.equal(child.demoted, false);
   });
 
   /* ---------------------------------------------------------- the flow */
@@ -699,7 +780,20 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     assert.ok(rio, 'the RIO has a row');
     assert.equal(rio[keyColumn], '650', 'the model UPN, not the tag segment');
     assert.equal(rio[disciplineColumn], 'Electrical', 'the I&C -> Electrical projection landed');
-    assert.equal(rio[parentColumn], 'PNL603-10-01', 'the manual override is what is exported');
+    assert.equal(
+      rio[parentColumn],
+      '',
+      'P0-4: a cross-boundary manual parent is not printed as a System Parent',
+    );
+    const dependencyColumn = header.indexOf('Dependencies');
+    assert.ok(rio[dependencyColumn].includes('PNL603-10-01'), 'it is printed as a dependency');
+
+    const mahChild = aoa.find((row) => row[tagColumn] === 'MAH001-10-02');
+    assert.equal(
+      mahChild[parentColumn],
+      'MAH001-10-01',
+      'a manual parent inside the boundaries is exported as the parent',
+    );
 
     const mah = aoa.find((row) => row[tagColumn] === 'MAH001-10-01');
     assert.equal(mah[keyColumn], '001', "'001' survives as text, not as the number 1");
@@ -788,8 +882,16 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     assert.equal(rio[upnColumn], '650');
     assert.equal(
       rio[parentColumn],
-      'PNL603-10-01',
-      'the manual override is what the register hands over',
+      '650 Remote IO',
+      'P0-4: nothing nests across the System boundary, so the RIO is a root and its ' +
+        'Closest Parent is its own system',
+    );
+
+    const mahChild = aoa.find((row) => row[idColumn] === 'MAH001-10-02');
+    assert.equal(
+      mahChild[parentColumn],
+      'MAH001-10-01',
+      'the manual parent that crossed nothing is what the register hands over',
     );
 
     const untrained = aoa.find((row) => row[idColumn] === 'MAH001-10-01');
@@ -797,8 +899,11 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
   });
 
   await t.test('the predecessor matrix carries the boundary dependency', () => {
-    // Drop the override first: the predecessor edge comes from the demotion.
-    service.removeRelationshipOverride(RIO);
+    // Drop the air-handler override: it is the one manual parent that actually
+    // nests, so removing it is a real parent move for the revision diff below.
+    // The 603 -> 650 predecessor edge comes from the boundary demotion and is
+    // there either way.
+    service.removeRelationshipOverride(MAH_CHILD);
     assert.equal(service.compile().state, 'done');
 
     const target = join(workDir, 'out-predecessors.xlsx');
@@ -827,8 +932,8 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     assert.equal(history[0].compileId > history[1].compileId, true, 'newest first');
     assert.equal(history[0].assetCount, DRAGON_ASSET_COUNT);
 
-    // The compile before this one had the manual override applied; this one does
-    // not, so the RIO's parent moved back.
+    // The compile before this one had the air handler's manual parent applied;
+    // this one does not, so MAH001-10-02's parent moved back.
     const target = join(workDir, 'out-diff.xlsx');
     const result = service.exportRevisionDiff(target, history[1].compileId);
     assert.equal(result.written, true);
@@ -842,7 +947,11 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     };
     assert.equal(countOf('Added Assets'), 0);
     assert.equal(countOf('Removed Assets'), 0);
-    assert.equal(countOf('Moved Parents'), 1, 'the RIO moved out from under the panel');
+    assert.equal(
+      countOf('Moved Parents'),
+      1,
+      'MAH001-10-02 moved out from under MAH001-10-01',
+    );
 
     const failure = service.exportRevisionDiff(target, 9999);
     assert.equal(failure.written, false);

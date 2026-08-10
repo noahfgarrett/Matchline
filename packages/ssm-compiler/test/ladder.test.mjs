@@ -128,7 +128,11 @@ test('a missing boundary stops the walk: no weaker rung is asked to resolve an u
   ]);
 });
 
-test('§11.5: a manual parent is kept across a boundary the fold would have broken', () => {
+test('P0-4: a manual parent across an enabled boundary is demoted, not kept', () => {
+  // The rule this file used to assert the opposite of. §11.5's "manual
+  // outranks" survives -- it still wins the competition, which is why the
+  // demotion below is recorded against the manual rung -- but P0-4 replaces
+  // "bypasses the fold" with "folds like any other winner".
   const snapshot = compileSnapshot({
     subjects: [
       subject(CHILD, { [BUILDING]: 'D1', [SYSTEM]: '001' }),
@@ -139,23 +143,92 @@ test('§11.5: a manual parent is kept across a boundary the fold would have brok
   });
 
   const child = snapshot.nodes.get(CHILD);
-  assert.equal(child.parent.status, 'resolved');
-  assert.equal(child.parent.parentAssetId, LEFT);
-  assert.equal(child.parent.ladderSource, 'manual');
-  assert.equal(child.parent.demotedFrom, undefined);
-  assert.deepEqual(child.dependencies, []);
-  assert.equal(snapshot.stats.demotedToDependencyCount, 0);
-  assert.deepEqual(snapshot.reviewItems, []);
+  assert.equal(child.parent.status, 'root', 'no weaker rung named a parent inside the boundary');
+  assert.equal(child.parent.parentAssetId, null);
+  assert.equal(child.parent.ladderSource, null);
+  // Both halves of the provenance: which parent, which boundary, and that a
+  // person is who chose it.
+  assert.deepEqual(child.parent.demotedFrom, {
+    parentAssetId: LEFT,
+    boundaryLevelId: BUILDING,
+    manual: true,
+  });
+  // The relationship stays real, and the claim stays on the node.
+  assert.deepEqual(
+    child.dependencies.map((entry) => `${entry.parentAssetId}:${entry.relationshipType}`),
+    [`${LEFT}:DEPENDENCY`],
+  );
+  assert.equal(child.losingClaims.length, 1);
+  assert.equal(child.losingClaims[0].ladderSource, 'manual');
+  assert.equal(snapshot.stats.demotedToDependencyCount, 1);
+  // And the crossing is visible, naming both ends and the level.
+  assert.deepEqual(snapshot.reviewItems, [
+    {
+      kind: 'manual-boundary-demotion',
+      assetId: CHILD,
+      parentAssetId: LEFT,
+      boundaryLevelId: BUILDING,
+    },
+  ]);
 });
 
-test('§11.5: a manual parent is kept even when a boundary value is unknown', () => {
+test('P0-4: a demoted manual parent still lets a weaker rung inside the boundary win', () => {
+  const snapshot = compileSnapshot({
+    subjects: [
+      subject(CHILD, IN_SYSTEM),
+      subject(LEFT, OTHER_SYSTEM),
+      subject(FALLBACK, IN_SYSTEM),
+    ],
+    claims: claims({
+      structural: [claim('manual', CHILD, LEFT), claim('family-role', CHILD, FALLBACK, 2)],
+    }),
+    hierarchy: DRAGON_HIERARCHY,
+  });
+
+  const child = snapshot.nodes.get(CHILD);
+  assert.equal(child.parent.status, 'resolved');
+  assert.equal(child.parent.parentAssetId, FALLBACK);
+  assert.equal(child.parent.ladderSource, 'family-role');
+  assert.equal(child.parent.demotedFrom.parentAssetId, LEFT);
+  assert.equal(child.parent.demotedFrom.manual, true);
+});
+
+test('P0-4: a manual parent whose boundary value nobody stated resolves nothing', () => {
+  // "Manual is the strongest rung" is about winning a competition, not about
+  // proving a boundary: an asset nobody located has not been shown to be on the
+  // right side of one. Same missing-boundary item and same per-level policy any
+  // other rung would have got -- `building` is `review` in DRAGON_HIERARCHY.
   const snapshot = compileSnapshot({
     subjects: [subject(CHILD, IN_SYSTEM), subject(LEFT, {})],
     claims: claims({ structural: [claim('manual', CHILD, LEFT)] }),
     hierarchy: DRAGON_HIERARCHY,
   });
 
-  assert.equal(snapshot.nodes.get(CHILD).parent.parentAssetId, LEFT);
+  const child = snapshot.nodes.get(CHILD);
+  assert.equal(child.parent.status, 'unresolved');
+  assert.equal(child.parent.parentAssetId, null);
+  // Not a demotion: the fold never established the two are related.
+  assert.equal(child.parent.demotedFrom, undefined);
+  assert.deepEqual(child.dependencies, []);
+  assert.deepEqual(snapshot.reviewItems, [
+    { kind: 'missing-boundary', assetId: LEFT, levelId: BUILDING },
+  ]);
+});
+
+test('§11.5 survives: a manual parent inside the boundary beats every weaker rung', () => {
+  const snapshot = compileSnapshot({
+    subjects: [subject(CHILD, IN_SYSTEM), subject(LEFT, IN_SYSTEM), subject(FALLBACK, IN_SYSTEM)],
+    claims: claims({
+      structural: [claim('manual', CHILD, LEFT), claim('flow-family', CHILD, FALLBACK, 2)],
+    }),
+    hierarchy: DRAGON_HIERARCHY,
+  });
+
+  const child = snapshot.nodes.get(CHILD);
+  assert.equal(child.parent.status, 'resolved');
+  assert.equal(child.parent.parentAssetId, LEFT);
+  assert.equal(child.parent.ladderSource, 'manual');
+  assert.equal(child.parent.demotedFrom, undefined, 'nothing was crossed, so nothing folds');
   assert.deepEqual(snapshot.reviewItems, []);
 });
 

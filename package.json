@@ -23,7 +23,7 @@
     "test:legacy": "npm test --prefix packages/legacy-parity",
     "test:integration": "node --test tests/integration/*.test.mjs",
     "test:acceptance10": "node --test tests/acceptance-1.0/*.test.mjs",
-    "test:acceptance10:green": "node --test tests/acceptance-1.0/multi-model.test.mjs tests/acceptance-1.0/stable-identity.test.mjs"
+    "test:acceptance10:green": "node --test tests/acceptance-1.0/multi-model.test.mjs tests/acceptance-1.0/stable-identity.test.mjs tests/acceptance-1.0/manual-parent-boundaries.test.mjs tests/acceptance-1.0/default-hierarchy.test.mjs tests/acceptance-1.0/level-key-display.test.mjs"
   },
   "devDependencies": {
     "electron-builder": "26.15.3",

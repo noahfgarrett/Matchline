@@ -63,6 +63,7 @@ function diffCategories(diff: MelRevisionDiff): ReadonlyArray<SheetInput> {
     { name: 'Removed Assets', aoa: assetSheet(diff.removed) },
     { name: 'Changed Tags', aoa: changeSheet(diff.changedTags) },
     { name: 'Changed Descriptions', aoa: changeSheet(diff.changedDescriptions) },
+    { name: 'Changed System Descriptions', aoa: changeSheet(diff.changedSystemDescriptions) },
     { name: 'Changed System Keys', aoa: changeSheet(diff.changedSystemKeys) },
     { name: 'Changed Hierarchy Levels', aoa: hierarchySheet(diff.changedHierarchyLevels) },
     { name: 'Moved Parents', aoa: changeSheet(diff.movedParents) },

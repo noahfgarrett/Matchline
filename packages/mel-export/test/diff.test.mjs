@@ -167,12 +167,36 @@ test('an added asset that arrives already conflicted is a new conflict item', ()
   ]);
 });
 
+test('a re-worded system is a description change and not a system move (P0-6)', () => {
+  const result = diff();
+  assert.deepEqual([...result.changedSystemDescriptions], [
+    { canonicalTag: 'BLR004-01-01', before: 'System 004', after: 'System 004 (Zone 1)' },
+  ]);
+  // The words moved and nothing else did: same key, same parent, same levels.
+  assert.ok(!result.changedSystemKeys.some((change) => change.canonicalTag === 'BLR004-01-01'));
+  assert.ok(!result.movedParents.some((change) => change.canonicalTag === 'BLR004-01-01'));
+  assert.ok(
+    !result.changedHierarchyLevels.some((change) => change.canonicalTag === 'BLR004-01-01'),
+  );
+});
+
+test('an asset that moved system is not also reported as a re-wording', () => {
+  // CHW001-01-01 moved 001 -> 002, so its System Description cell differs
+  // because it is in another system. That is the move, reported once.
+  const result = diff();
+  assert.ok(result.changedSystemKeys.some((change) => change.canonicalTag === 'CHW001-01-01'));
+  assert.ok(
+    !result.changedSystemDescriptions.some((change) => change.canonicalTag === 'CHW001-01-01'),
+  );
+});
+
 test('the summary counts one of every §12.4 category', () => {
   assert.deepEqual(diff().summary, {
     added: 1,
     removed: 1,
     changedTags: 1,
     changedDescriptions: 1,
+    changedSystemDescriptions: 1,
     changedSystemKeys: 1,
     changedHierarchyLevels: 2,
     movedParents: 1,
@@ -190,6 +214,7 @@ test('a revision that changed nothing diffs to empty lists and a summary of zero
   assert.deepEqual(unchanged.removed, []);
   assert.deepEqual(unchanged.changedTags, []);
   assert.deepEqual(unchanged.changedDescriptions, []);
+  assert.deepEqual(unchanged.changedSystemDescriptions, []);
   assert.deepEqual(unchanged.changedSystemKeys, []);
   assert.deepEqual(unchanged.changedHierarchyLevels, []);
   assert.deepEqual(unchanged.movedParents, []);
@@ -197,14 +222,14 @@ test('a revision that changed nothing diffs to empty lists and a summary of zero
   assert.deepEqual(unchanged.newConflicts, []);
   assert.deepEqual(
     Object.values(unchanged.summary),
-    Array.from({ length: 10 }, () => 0),
+    Array.from({ length: 11 }, () => 0),
   );
 });
 
 test('two empty revisions diff to nothing rather than failing', () => {
   assert.deepEqual(diffMelRevisions([], []).summary.added, 0);
-  assert.equal(diffMelRevisions([], DRAGON_REVISION_A).summary.added, 9);
-  assert.equal(diffMelRevisions(DRAGON_REVISION_A, []).summary.removed, 9);
+  assert.equal(diffMelRevisions([], DRAGON_REVISION_A).summary.added, 10);
+  assert.equal(diffMelRevisions(DRAGON_REVISION_A, []).summary.removed, 10);
 });
 
 test('the diff does not depend on the order the assets arrive in', () => {
@@ -374,6 +399,7 @@ test('the workbook holds a Summary and one sheet per non-empty category', () => 
     'Removed Assets',
     'Changed Tags',
     'Changed Descriptions',
+    'Changed System Descriptions',
     'Changed System Keys',
     'Changed Hierarchy Levels',
     'Moved Parents',
@@ -391,6 +417,7 @@ test('the Summary lists every §12.4 category with its count', () => {
     ['Removed Assets', '1'],
     ['Changed Tags', '1'],
     ['Changed Descriptions', '1'],
+    ['Changed System Descriptions', '1'],
     ['Changed System Keys', '1'],
     ['Changed Hierarchy Levels', '2'],
     ['Moved Parents', '1'],
@@ -433,7 +460,7 @@ test('an empty diff still writes a Summary of zeros, and nothing else', () => {
   assert.deepEqual(Object.keys(written), [DIFF_SUMMARY_SHEET_NAME]);
   assert.deepEqual(
     written[DIFF_SUMMARY_SHEET_NAME].slice(1).map((row) => row[1]),
-    Array.from({ length: 10 }, () => '0'),
+    Array.from({ length: 11 }, () => '0'),
   );
 });
 

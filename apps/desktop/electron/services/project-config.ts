@@ -53,8 +53,20 @@ import {
  */
 
 /**
- * The default preset: Building / SSM Discipline / System, boundary on all three
- * (DECISIONS.md #1 — hard boundaries, no feed-chain exception).
+ * The default preset: Building / SSM Discipline / System, with Building and
+ * System as boundaries and SSM Discipline as a visible grouping only (P0-5).
+ *
+ * Two different questions used to get the same answer here. DECISIONS.md #1
+ * says a boundary that IS enabled is hard, with no feed-chain exception — that
+ * is about what a boundary *means*. P0-5 is about which levels a new project
+ * should *enable*, and a commissioning discipline is not one of them: a startup
+ * family is a mechanical unit, its controls panel, its drive and its instrument
+ * (MAH/PLC/VFD/TIT), and a structural discipline cuts that one family into four
+ * roots. Discipline stays a level, so the tree still groups by it; it just does
+ * not break parents.
+ *
+ * The System boundary compares the System Key and never the wording (P0-6):
+ * `attributeKey` here is the level's *key* attribute.
  *
  * `missingValuePolicy: 'unassigned-group'` on all three is deliberate. `review`
  * would open the wizard with a queue of items about equipment nobody has
@@ -74,7 +86,7 @@ export const DEFAULT_HIERARCHY_LEVELS: readonly WireHierarchyLevel[] = [
     levelId: 'ssm-discipline',
     displayName: 'SSM Discipline',
     attributeKey: 'ssmDiscipline',
-    boundary: true,
+    boundary: false,
     missingValuePolicy: 'unassigned-group',
     sort: 'label',
   },
@@ -82,6 +94,7 @@ export const DEFAULT_HIERARCHY_LEVELS: readonly WireHierarchyLevel[] = [
     levelId: 'system',
     displayName: 'System',
     attributeKey: 'systemKey',
+    displayAttributeKey: 'systemLabel',
     boundary: true,
     missingValuePolicy: 'unassigned-group',
     sort: 'key',
@@ -170,11 +183,26 @@ export function writeProjectConfig(store: ProjectStore, config: WireProjectConfi
 
 /* ------------------------------------------------------------ wire -> domain */
 
+/**
+ * The wire levels as the engine's own shape (P0-6).
+ *
+ * `WireHierarchyLevel.attributeKey` is the level's KEY attribute — the name
+ * screen 6 and the stored project file have always used for it — and it becomes
+ * `keyAttributeKey` here. The two optional keys are passed through only when the
+ * project states them, so a level that names neither collapses to exactly what
+ * it was before the split: one attribute, grouping and comparing and labelling.
+ */
 export function toHierarchyConfig(config: WireProjectConfig): HierarchyConfig {
   const levels: HierarchyLevelConfig[] = config.hierarchy.levels.map((level) => ({
     levelId: level.levelId,
     displayName: level.displayName,
-    attributeKey: level.attributeKey,
+    keyAttributeKey: level.attributeKey,
+    ...(level.displayAttributeKey === undefined
+      ? {}
+      : { displayAttributeKey: level.displayAttributeKey }),
+    ...(level.boundaryAttributeKey === undefined
+      ? {}
+      : { boundaryAttributeKey: level.boundaryAttributeKey }),
     boundary: level.boundary,
     missingValuePolicy: level.missingValuePolicy,
     sort: level.sort,

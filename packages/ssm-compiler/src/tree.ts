@@ -12,7 +12,12 @@
  * parent, as long as discipline is not an enabled boundary. Only assets with no
  * structural parent are filed by their own level path.
  */
-import type { ResolvedAssetNode, ResolvedSnapshot } from '@matchline/domain';
+import {
+  migrateHierarchyConfig,
+  type HierarchyLevelConfig,
+  type ResolvedAssetNode,
+  type ResolvedSnapshot,
+} from '@matchline/domain';
 
 import { NO_VALUE_GROUP } from './fold.js';
 import { compareText } from './order.js';
@@ -27,13 +32,15 @@ import type {
 /** A level node under construction, before its children are frozen. */
 interface LevelBucket {
   readonly levelId: string;
-  readonly value: string;
+  readonly key: string;
+  /** The words for this group. The key itself unless a display attribute said otherwise. */
+  label: string;
   readonly levels: Map<string, LevelBucket>;
   readonly assets: string[];
 }
 
-function newBucket(levelId: string, value: string): LevelBucket {
-  return { levelId, value, levels: new Map(), assets: [] };
+function newBucket(levelId: string, key: string, label: string): LevelBucket {
+  return { levelId, key, label, levels: new Map(), assets: [] };
 }
 
 /**
@@ -72,13 +79,38 @@ function assetNode(
   };
 }
 
-function freeze(bucket: LevelBucket, assets: ReadonlyMap<string, HierarchyAssetNode>): HierarchyLevelNode {
+/**
+ * Sibling order for one level's buckets (PRODUCT.md §2.4's `sort`).
+ *
+ * `key` orders by the grouping identity, `label` by the words -- which are the
+ * same string until a level configures a display attribute, so this only starts
+ * to matter under P0-6. Ties break on the key, because two groups can share a
+ * label (two systems described identically) but never a key.
+ */
+function bucketOrder(
+  sort: HierarchyLevelConfig['sort'],
+): (left: LevelBucket, right: LevelBucket) => number {
+  if (sort === 'key') {
+    return (left, right) => compareText(left.key, right.key);
+  }
+  return (left, right) => compareText(left.label, right.label) || compareText(left.key, right.key);
+}
+
+function freeze(
+  bucket: LevelBucket,
+  assets: ReadonlyMap<string, HierarchyAssetNode>,
+  levelById: ReadonlyMap<string, HierarchyLevelConfig>,
+): HierarchyLevelNode {
+  const children = [...bucket.levels.values()];
+  // Every sibling bucket is the same configured level -- one step down the one
+  // level stack -- so any of them names the `sort` that orders all of them.
+  const childSort = levelById.get(children[0]?.levelId ?? '')?.sort ?? 'label';
   return {
     levelId: bucket.levelId,
-    value: bucket.value,
-    levels: [...bucket.levels.values()]
-      .sort((left, right) => compareText(left.value, right.value))
-      .map((child) => freeze(child, assets)),
+    key: bucket.key,
+    value: bucket.key,
+    label: bucket.label,
+    levels: children.sort(bucketOrder(childSort)).map((child) => freeze(child, assets, levelById)),
     assets: bucket.assets
       .map((assetId) => assets.get(assetId))
       .filter((asset): asset is HierarchyAssetNode => asset !== undefined),
@@ -92,16 +124,18 @@ function freeze(bucket: LevelBucket, assets: ReadonlyMap<string, HierarchyAssetN
  * asset the snapshot has no node for is not placed, which keeps a tree built
  * from mismatched inputs honest rather than half-invented.
  *
- * Level values sort in code-unit order under both `sort` settings. `label` and
- * `key` differ only once the Site Profile supplies display labels, which is a
- * later phase; until then the level value *is* the label, and pretending
- * otherwise would be a difference with nothing behind it.
+ * Level values sort in code-unit order under both `sort` settings; which string
+ * is compared is the level's own `sort` (P0-6). A level with no display
+ * attribute has label = key, so the two settings agree and the order is what it
+ * has always been.
  */
 export function hierarchyTree(
   snapshot: ResolvedSnapshot,
-  hierarchy: CompileInput['hierarchy'],
+  hierarchyInput: CompileInput['hierarchy'],
   subjects: ReadonlyArray<CompileSubject>,
 ): HierarchyTree {
+  const hierarchy = migrateHierarchyConfig(hierarchyInput);
+  const levelById = new Map(hierarchy.levels.map((level) => [level.levelId, level] as const));
   const placeable: string[] = [];
   const seen = new Set<string>();
   for (const subject of subjects) {
@@ -170,13 +204,20 @@ export function hierarchyTree(
       // rendering bug to look at, and indistinguishable from a level the tree
       // failed to label. Only the projection's label changes; `levelPath` still
       // reads empty, so the fold and the boundary comparisons are untouched.
-      const value = step.value === '' ? NO_VALUE_GROUP : step.value;
-      const existing = level.get(value);
+      const key = step.value === '' ? NO_VALUE_GROUP : step.value;
+      const existing = level.get(key);
       if (existing === undefined) {
-        bucket = newBucket(step.levelId, value);
-        level.set(value, bucket);
+        // The key is the bucket's identity; the label is only what it is called.
+        // Assets arrive in asset-id order, so the first stated label wins and a
+        // group whose members disagree about the wording still reads the same
+        // way on every compile (ENGINE.md binding rule 3).
+        bucket = newBucket(step.levelId, key, step.label ?? key);
+        level.set(key, bucket);
       } else {
         bucket = existing;
+        if (bucket.label === bucket.key && step.label !== undefined) {
+          bucket.label = step.label;
+        }
       }
       level = bucket.levels;
     }
@@ -185,8 +226,8 @@ export function hierarchyTree(
 
   return {
     levels: [...top.values()]
-      .sort((left, right) => compareText(left.value, right.value))
-      .map((bucket) => freeze(bucket, built)),
+      .sort(bucketOrder(hierarchy.levels[0]?.sort ?? 'label'))
+      .map((bucket) => freeze(bucket, built, levelById)),
     assets: [],
   };
 }

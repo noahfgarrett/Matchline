@@ -81,6 +81,66 @@ test('a snapshot survives serialize, canonical JSON, parse and deserialize', () 
   assert.equal(canonicalJson(serializeSnapshot(restored)), text, 'and re-serialize identically');
 });
 
+test('the P0-4 and P0-6 additions survive the round trip', () => {
+  // A snapshot a 1.0 compile produces and a 0.8.1 one could not: a manual
+  // parent the boundary refused, the review item that explains it, and a level
+  // path carrying a display label beside its key. Anything the reader drops
+  // here is a decision or an explanation the project silently loses overnight.
+  const snapshot = {
+    nodes: new Map([
+      [
+        'RIO603-10-01',
+        {
+          assetId: 'RIO603-10-01',
+          parent: {
+            parentAssetId: null,
+            ladderSource: null,
+            status: 'root',
+            demotedFrom: {
+              parentAssetId: 'PNL603-10-01',
+              boundaryLevelId: 'system',
+              manual: true,
+            },
+          },
+          dependencies: [],
+          levelPath: [
+            { levelId: 'building', value: 'D1' },
+            { levelId: 'system', value: '650', label: '650 Remote IO' },
+          ],
+          losingClaims: [],
+        },
+      ],
+    ]),
+    reviewItems: [
+      {
+        kind: 'manual-boundary-demotion',
+        assetId: 'RIO603-10-01',
+        parentAssetId: 'PNL603-10-01',
+        boundaryLevelId: 'system',
+      },
+    ],
+    stats: {
+      nodeCount: 1,
+      rootCount: 1,
+      demotedToDependencyCount: 1,
+      unresolvedCount: 0,
+      cycleCount: 0,
+      ambiguousCount: 0,
+    },
+  };
+
+  const restored = deserializeSnapshot(JSON.parse(canonicalJson(serializeSnapshot(snapshot))));
+  assert.deepEqual(restored, snapshot);
+});
+
+test('a level path written before P0-6 comes back without inventing a label', () => {
+  const snapshot = dragonSnapshot();
+  const restored = deserializeSnapshot(JSON.parse(canonicalJson(serializeSnapshot(snapshot))));
+  const entry = restored.nodes.get('MCC-D1-01').levelPath[0];
+  assert.deepEqual(entry, { levelId: 'building', value: 'D1' });
+  assert.equal('label' in entry, false, 'absent stays absent; the key is what it is called');
+});
+
 test('a snapshot round-trips through a project file', () => {
   const store = createProject(temp.file('snapshot.matchline'), {
     name: 'Dragon',

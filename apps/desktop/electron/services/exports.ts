@@ -513,6 +513,7 @@ export function exportRevisionDiff(
     summary.removed === 0 &&
     summary.changedTags === 0 &&
     summary.changedDescriptions === 0 &&
+    summary.changedSystemDescriptions === 0 &&
     summary.changedSystemKeys === 0 &&
     summary.changedHierarchyLevels === 0 &&
     summary.movedParents === 0 &&

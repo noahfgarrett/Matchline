@@ -106,17 +106,33 @@ observations + identity + anatomy + role graph + learned rules
      model → prior SSM example → model-tree suggestion → root of grouping. First tier with
      exactly one candidate wins; a tier with >1 equal candidates = ambiguous-parent review
      item and the ladder STOPS (no fall-through guessing — same rule as identity).
-  2. **Boundary fold** (§11.3, DECISIONS.md #1 — hard boundaries, NO feed-chain exception):
+  2. **Boundary fold** (§11.3, DECISIONS.md #1 — hard boundaries, NO feed-chain exception;
+     RELEASE-1.0-PLAN P0-4 — NO manual exception either):
      for the selected parent, all enabled boundary keys known and equal → structural parent;
      any enabled boundary differs → parent removed, demoted to dependency of the child,
      child re-resolves in its own grouping or roots; any REQUIRED boundary value missing →
      no structural decision — review or provisional-root per profile policy. Explicit
      attributes only: a profile fallback value never feeds a boundary comparison.
+     **Manual outranks, and still folds.** A manual override is the top rung and wins the
+     competition; it is then folded like any other winner. A cross-boundary manual parent
+     becomes a `DEPENDENCY` carrying the person's own words, `ParentDecision.demotedFrom`
+     records the parent, the boundary level and `manual: true`, the refused claim stays in
+     `losingClaims`, and a `manual-boundary-demotion` review item names child, parent and
+     level. A manual parent whose boundary value nobody stated takes the missing-boundary
+     path unchanged: manual is the strongest evidence about who the parent is, never
+     evidence about where either asset sits. A manual make-root is still final — it is not
+     a claim about a pair, so there is nothing to fold.
   3. **Projection**: configured hierarchy levels (any raw/derived field, per-level
      boundary toggle) → level tree → system grouping → one structural parent + additive
-     dependencies per asset. nativeDiscipline and ssmDiscipline are separate fields; ssm
-     discipline comes from profile projection rules / top-parent inheritance / manual, and
-     only acts as a boundary if enabled.
+     dependencies per asset. A level names its attributes separately (P0-6):
+     `keyAttributeKey` is the grouping identity, `displayAttributeKey?` supplies the words
+     and `boundaryAttributeKey?` is what the fold compares, both defaulting to the key —
+     so re-describing a system re-labels a level node and moves nothing. A level written
+     before the split carries one `attributeKey` and is migrated at the entry point
+     (`migrateHierarchyConfig`). nativeDiscipline and ssmDiscipline are separate fields;
+     ssm discipline comes from profile projection rules / top-parent inheritance / manual,
+     and only acts as a boundary if enabled — the default preset leaves it off (P0-5), so a
+     startup family that crosses native disciplines stays one branch.
   4. **Snapshot**: immutable ResolvedSnapshot — deterministic (same inputs + profile →
      identical snapshot), cycle detection (structural cycles broken to review items, never
      silently), every decision provenance'd, losing claims retained.

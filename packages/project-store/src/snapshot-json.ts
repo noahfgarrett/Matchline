@@ -26,6 +26,7 @@ import {
   type RelationshipClaim,
   type ResolvedAssetNode,
   type ResolvedDependency,
+  type ResolvedLevelPathEntry,
   type ResolvedSnapshot,
   type ReviewItem,
   type SnapshotStats,
@@ -82,6 +83,7 @@ const REVIEW_KINDS = [
   'ambiguous-parent',
   'structural-cycle',
   'missing-boundary',
+  'manual-boundary-demotion',
   'nesting-proposal',
 ] as const satisfies ReadonlyArray<ReviewItem['kind']>;
 
@@ -206,10 +208,21 @@ function readSsmClaim(value: unknown, field: string): SsmRelationshipClaim {
 
 function readDemotion(value: unknown, field: string): ParentDemotion {
   const record = requireRecordAt(value, field, fail);
-  return {
+  const demotion: ParentDemotion = {
     parentAssetId: requireStringAt(record['parentAssetId'], `${field}.parentAssetId`, fail),
     boundaryLevelId: requireStringAt(record['boundaryLevelId'], `${field}.boundaryLevelId`, fail),
   };
+  // Absent on every demotion of rule-derived evidence, and on every snapshot
+  // written before P0-4; absent means "not a person's decision", which is the
+  // right reading of both.
+  if (record['manual'] === undefined) {
+    return demotion;
+  }
+  const manual = record['manual'];
+  if (typeof manual !== 'boolean') {
+    return fail(`${field}.manual`, 'expected a boolean');
+  }
+  return { ...demotion, manual };
 }
 
 function readParentDecision(value: unknown, field: string): ParentDecision {
@@ -271,15 +284,25 @@ function readNode(value: unknown, field: string): ResolvedAssetNode {
       (item, index) => readDependency(item, `${field}.dependencies[${index}]`),
     ),
     levelPath: requireArrayAt(record['levelPath'], `${field}.levelPath`, fail).map(
-      (item, index) => {
+      (item, index): ResolvedLevelPathEntry => {
         const level = requireRecordAt(item, `${field}.levelPath[${index}]`, fail);
-        return {
+        const entry: ResolvedLevelPathEntry = {
           levelId: requireStringAt(
             level['levelId'],
             `${field}.levelPath[${index}].levelId`,
             fail,
           ),
           value: requireStringAt(level['value'], `${field}.levelPath[${index}].value`, fail),
+        };
+        // `label` is only present where a level configures a display attribute
+        // and the asset states one (P0-6). Absent stays absent: a reader falls
+        // back to the key, which is what an unlabelled group is called.
+        if (level['label'] === undefined) {
+          return entry;
+        }
+        return {
+          ...entry,
+          label: requireStringAt(level['label'], `${field}.levelPath[${index}].label`, fail),
         };
       },
     ),
@@ -403,6 +426,17 @@ function readReviewItem(value: unknown, field: string): ReviewItem {
         kind,
         assetId: requireStringAt(record['assetId'], `${field}.assetId`, fail),
         levelId: requireStringAt(record['levelId'], `${field}.levelId`, fail),
+      };
+    case 'manual-boundary-demotion':
+      return {
+        kind,
+        assetId: requireStringAt(record['assetId'], `${field}.assetId`, fail),
+        parentAssetId: requireStringAt(record['parentAssetId'], `${field}.parentAssetId`, fail),
+        boundaryLevelId: requireStringAt(
+          record['boundaryLevelId'],
+          `${field}.boundaryLevelId`,
+          fail,
+        ),
       };
     case 'nesting-proposal':
       return {

@@ -1,11 +1,15 @@
 /**
- * `HierarchyLevelConfig.attributeKey` -> a value on a compiled asset
+ * A `HierarchyLevelConfig` attribute key -> a value on a compiled asset
  * (ENGINE.md E3 step 3).
  *
- * A hierarchy level names the field it groups by as a plain string, which keeps
- * levels composed rather than hardcoded -- and leaves somebody to say what those
- * strings mean. That is this file, and the mapping is deliberately a closed,
- * documented table rather than a lookup that would silently accept a typo.
+ * A hierarchy level names the fields it groups by, labels itself with and
+ * compares at a boundary as plain strings -- `keyAttributeKey`,
+ * `displayAttributeKey` and `boundaryAttributeKey` (P0-6) -- which keeps levels
+ * composed rather than hardcoded, and leaves somebody to say what those strings
+ * mean. That is this file, and the mapping is deliberately a closed, documented
+ * table rather than a lookup that would silently accept a typo. All three read
+ * the same table: a level may display `systemLabel` while grouping on
+ * `systemKey`, and both are populated on every subject.
  *
  * ## The attribute keys
  *

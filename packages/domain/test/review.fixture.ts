@@ -88,6 +88,16 @@ export const DRAGON_REVIEW_ITEMS = [
     levelId: 'building',
   },
   {
+    // PRODUCT.md §2.5 in review form (P0-4): somebody parented the RIO in
+    // System 650 under the panel in System 603, and the System boundary refused
+    // it. The relationship is not lost — the panel is a dependency — so what a
+    // person settles here is which of the two was wrong.
+    kind: 'manual-boundary-demotion',
+    assetId: 'asset-0650',
+    parentAssetId: 'asset-0603',
+    boundaryLevelId: 'system',
+  },
+  {
     kind: 'nesting-proposal',
     assetId: 'asset-0004',
     proposedParentId: 'asset-0003',

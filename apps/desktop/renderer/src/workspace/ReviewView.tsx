@@ -33,6 +33,10 @@ const KIND_LABELS: Readonly<Record<string, string>> = {
   'ambiguous-parent': 'Two equally good parents',
   'structural-cycle': 'Equipment parenting each other',
   'missing-boundary': 'Boundary value not stated',
+  // P0-4: somebody stated this parent and an enabled boundary refused it. The
+  // relationship is kept as a dependency; what needs a person is whether the
+  // boundary or the decision is the thing that is wrong.
+  'manual-boundary-demotion': 'Manual parent crosses a boundary',
   'nesting-proposal': 'Learned suggestion',
   'dead-claim-rule': 'A rule produced nothing',
   'unresolvable-alias': 'Alias points at no asset',

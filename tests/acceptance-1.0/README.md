@@ -32,7 +32,7 @@ file passes in full:
    `test:acceptance10:green` in the root `package.json`, e.g.
 
    ```json
-   "test:acceptance10:green": "node --test tests/acceptance-1.0/multi-model.test.mjs tests/acceptance-1.0/stable-identity.test.mjs"
+   "test:acceptance10:green": "node --test tests/acceptance-1.0/multi-model.test.mjs tests/acceptance-1.0/stable-identity.test.mjs tests/acceptance-1.0/manual-parent-boundaries.test.mjs"
    ```
 
    `test` already runs that script, and `test:acceptance10` stays pointed at the
@@ -54,9 +54,9 @@ required above. Never discard provenance or review items to make tests pass."
 |------|-----------|------------|-------------------------------|
 | `multi-model.test.mjs` | P0-1 Multi-model universe | 2, 3, 4 | 2 — Multi-model domain+storage — **green, wired into `npm test`** |
 | `stable-identity.test.mjs` | P0-9 Stable asset identity | 12 | 3 — Stable identity — **green, wired into `npm test`** |
-| `manual-parent-boundaries.test.mjs` | P0-4 Manual parents honor boundaries | 9, 10 | 4 — Hierarchy+profile semantics |
-| `default-hierarchy.test.mjs` | P0-5 Default hierarchy | 11 | 4 — Hierarchy+profile semantics |
-| `level-key-display.test.mjs` | P0-6 Level key vs display | 8 | 4 — Hierarchy+profile semantics |
+| `manual-parent-boundaries.test.mjs` | P0-4 Manual parents honor boundaries | 9, 10 | 4 — Hierarchy+profile semantics — **green, wired into `npm test`** |
+| `default-hierarchy.test.mjs` | P0-5 Default hierarchy | 11 | 4 — Hierarchy+profile semantics — **green, wired into `npm test`** |
+| `level-key-display.test.mjs` | P0-6 Level key vs display | 8 | 4 — Hierarchy+profile semantics — **green, wired into `npm test`** |
 | `profile-v2.test.mjs` | SiteProfileV2 | 13 (partly) | 4 — Hierarchy+profile semantics |
 
 `support.mjs` is not a test file. It holds the Dragon fixtures and the failure

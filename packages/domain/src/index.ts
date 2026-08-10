@@ -74,6 +74,7 @@ export type {
   DuplicateModelTagSource,
   FuzzyIdentityCandidate,
   FuzzyIdentityReviewItem,
+  ManualBoundaryDemotionReviewItem,
   MissingBoundaryReviewItem,
   NestingProposalReviewItem,
   OrphanedDecisionKind,
@@ -86,11 +87,20 @@ export type {
   UnresolvableAliasReviewItem,
 } from './review.js';
 
-export { LADDER_SOURCE_ORDER } from './hierarchy-config.js';
+export {
+  boundaryAttributeOf,
+  displayAttributeOf,
+  LADDER_SOURCE_ORDER,
+  migrateHierarchyConfig,
+  migrateHierarchyLevel,
+} from './hierarchy-config.js';
 export type {
   HierarchyConfig,
+  HierarchyConfigInput,
   HierarchyLevelConfig,
+  HierarchyLevelConfigInput,
   LadderSourceKind,
+  LegacyHierarchyLevelConfig,
   ManualRelationshipOverride,
   ParentLadderConfig,
   RoleGraphConfig,
@@ -104,6 +114,7 @@ export type {
   ParentDemotion,
   ResolvedAssetNode,
   ResolvedDependency,
+  ResolvedLevelPathEntry,
   ResolvedSnapshot,
   SnapshotStats,
 } from './snapshot.js';

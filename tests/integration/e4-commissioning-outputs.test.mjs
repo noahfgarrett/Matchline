@@ -1111,6 +1111,7 @@ test('6. revision diff: added, removed, changed description, moved parent; uncha
 
     // Nothing else moved.
     assert.deepEqual(diff.changedTags, []);
+    assert.deepEqual(diff.changedSystemDescriptions, []);
     assert.deepEqual(diff.changedSystemKeys, []);
     assert.deepEqual(diff.changedHierarchyLevels, []);
     assert.deepEqual(diff.dependencyChanges.added, []);
@@ -1122,6 +1123,7 @@ test('6. revision diff: added, removed, changed description, moved parent; uncha
       removed: 1,
       changedTags: 0,
       changedDescriptions: 1,
+      changedSystemDescriptions: 0,
       changedSystemKeys: 0,
       changedHierarchyLevels: 0,
       movedParents: 1,
@@ -1143,6 +1145,10 @@ test('6. revision diff: added, removed, changed description, moved parent; uncha
     assert.equal(countOf('Removed Assets'), diff.summary.removed);
     assert.equal(countOf('Changed Tags'), diff.summary.changedTags);
     assert.equal(countOf('Changed Descriptions'), diff.summary.changedDescriptions);
+    assert.equal(
+      countOf('Changed System Descriptions'),
+      diff.summary.changedSystemDescriptions,
+    );
     assert.equal(countOf('Changed System Keys'), diff.summary.changedSystemKeys);
     assert.equal(countOf('Changed Hierarchy Levels'), diff.summary.changedHierarchyLevels);
     assert.equal(countOf('Moved Parents'), diff.summary.movedParents);
@@ -1166,6 +1172,7 @@ test('6. revision diff: added, removed, changed description, moved parent; uncha
     assert.deepEqual(rerunDiff.removed, []);
     assert.deepEqual(rerunDiff.changedTags, []);
     assert.deepEqual(rerunDiff.changedDescriptions, []);
+    assert.deepEqual(rerunDiff.changedSystemDescriptions, []);
     assert.deepEqual(rerunDiff.changedSystemKeys, []);
     assert.deepEqual(rerunDiff.changedHierarchyLevels, []);
     assert.deepEqual(rerunDiff.movedParents, []);
@@ -1176,6 +1183,7 @@ test('6. revision diff: added, removed, changed description, moved parent; uncha
       removed: 0,
       changedTags: 0,
       changedDescriptions: 0,
+      changedSystemDescriptions: 0,
       changedSystemKeys: 0,
       changedHierarchyLevels: 0,
       movedParents: 0,

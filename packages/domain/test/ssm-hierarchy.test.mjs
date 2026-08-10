@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { LADDER_SOURCE_ORDER, relationshipKindOf } from '../dist/index.js';
+import {
+  boundaryAttributeOf,
+  displayAttributeOf,
+  LADDER_SOURCE_ORDER,
+  migrateHierarchyConfig,
+  relationshipKindOf,
+} from '../dist/index.js';
 import {
   DRAGON_HIERARCHY,
   DRAGON_LADDER,
@@ -57,6 +63,69 @@ test('every hierarchy level states its own boundary and missing-value policy', (
     DRAGON_HIERARCHY.levels.map((level) => level.missingValuePolicy),
     ['review', 'unassigned-group', 'provisional-root'],
   );
+});
+
+/* ---- P0-6: one key became three, and the old spelling still reads ---- */
+
+test('a level written before P0-6 migrates to a key that does all three jobs', () => {
+  const migrated = migrateHierarchyConfig({
+    levels: [
+      {
+        levelId: 'building',
+        displayName: 'Building',
+        attributeKey: 'building',
+        boundary: true,
+        missingValuePolicy: 'review',
+        sort: 'label',
+      },
+    ],
+  });
+
+  const [level] = migrated.levels;
+  assert.equal(level.keyAttributeKey, 'building');
+  assert.equal('attributeKey' in level, false, 'the old field is replaced, not carried alongside');
+  // The defaults reproduce exactly what the single key used to mean.
+  assert.equal(boundaryAttributeOf(level), 'building');
+  assert.equal(displayAttributeOf(level), null, 'no display attribute is not the key by another name');
+});
+
+test('a stack may mix both spellings, and a migrated level is returned as it is', () => {
+  const current = {
+    levelId: 'system',
+    displayName: 'System',
+    keyAttributeKey: 'systemKey',
+    displayAttributeKey: 'systemLabel',
+    boundary: true,
+    missingValuePolicy: 'review',
+    sort: 'key',
+  };
+  const migrated = migrateHierarchyConfig({
+    levels: [
+      {
+        levelId: 'building',
+        displayName: 'Building',
+        attributeKey: 'building',
+        boundary: true,
+        missingValuePolicy: 'review',
+        sort: 'label',
+      },
+      current,
+    ],
+  });
+
+  assert.deepEqual(
+    migrated.levels.map((level) => level.keyAttributeKey),
+    ['building', 'systemKey'],
+  );
+  assert.equal(migrated.levels[1], current, 'nothing to migrate, nothing copied');
+  assert.equal(displayAttributeOf(migrated.levels[1]), 'systemLabel');
+});
+
+test('the standard System level compares the key and displays the words', () => {
+  const [, , system] = DRAGON_HIERARCHY.levels;
+  assert.equal(system.keyAttributeKey, 'system.systemKey');
+  assert.equal(boundaryAttributeOf(system), 'system.systemKey', 'never the wording');
+  assert.equal(displayAttributeOf(system), 'system.systemLabel');
 });
 
 test('a resolved parent carries the claim and the rung that won the slot', () => {

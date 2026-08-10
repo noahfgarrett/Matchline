@@ -253,9 +253,10 @@ export function Screen6Hierarchy({ context }: { readonly context: WizardContext 
           </Field>
 
           <Callout tone="info">
-            The default stack is Building / SSM Discipline / System with all three structural.
-            That is the arrangement commissioning teams sign off against; change it only when
-            this site really does hand over differently.
+            The default stack is Building / SSM Discipline / System, with Building and System
+            structural and SSM Discipline a grouping only. A startup family is a unit, its panel,
+            its drive and its instrument — making discipline structural would cut that one family
+            into four roots. Change it only when this site really does hand over differently.
           </Callout>
         </Panel>
       </div>
@@ -316,7 +317,20 @@ function LevelCard({
             data-testid={`level-attribute-${level.levelId}`}
             value={level.attributeKey}
             onChange={(event): void => {
-              onChange({ ...level, attributeKey: event.target.value });
+              // The display and boundary attributes were chosen for the key
+              // this level used to group by (P0-6) — "System Label beside
+              // System Key". Carrying them onto a different key would label a
+              // Building group with a system's words, so changing what the
+              // level groups by drops them and the level collapses back to one
+              // attribute doing all three jobs.
+              onChange({
+                levelId: level.levelId,
+                displayName: level.displayName,
+                attributeKey: event.target.value,
+                boundary: level.boundary,
+                missingValuePolicy: level.missingValuePolicy,
+                sort: level.sort,
+              });
             }}
           >
             {attributes.map((entry: WireAttributeChoice): JSX.Element => (

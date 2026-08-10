@@ -25,6 +25,16 @@ export interface ParentDemotion {
   readonly parentAssetId: string;
   /** The configured level whose value differed. */
   readonly boundaryLevelId: string;
+  /**
+   * Whether the demoted parent was a person's own decision (P0-4).
+   *
+   * Present only when it was, so a demotion of rule-derived evidence stays the
+   * two fields it has always been. A manual demotion is a different thing to
+   * read -- somebody stated this parent and the boundary refused it -- and it
+   * is the one demotion that also raises a review item of its own
+   * (`manual-boundary-demotion`).
+   */
+  readonly manual?: boolean;
 }
 
 /**
@@ -62,6 +72,22 @@ export interface ResolvedDependency {
   readonly provenance: Provenance;
 }
 
+/**
+ * One configured level's value for one asset (P0-6).
+ *
+ * `value` is the grouping identity -- the level's key attribute, and the only
+ * field anything compares. `label` is present only when the level configures a
+ * display attribute *and* the asset states one; a reader with no interest in
+ * wording reads `value` and is unaffected by every re-description.
+ */
+export interface ResolvedLevelPathEntry {
+  readonly levelId: string;
+  /** The key attribute's value, or the level's missing-value sentinel. */
+  readonly value: string;
+  /** The display attribute's value, when the level names one and it is stated. */
+  readonly label?: string;
+}
+
 /** One asset's place in the compiled hierarchy. */
 export interface ResolvedAssetNode {
   readonly assetId: string;
@@ -69,7 +95,7 @@ export interface ResolvedAssetNode {
   /** Everything the asset depends on, including boundary-demoted parents. */
   readonly dependencies: ReadonlyArray<ResolvedDependency>;
   /** The configured level values that placed this asset, outermost first. */
-  readonly levelPath: ReadonlyArray<{ readonly levelId: string; readonly value: string }>;
+  readonly levelPath: ReadonlyArray<ResolvedLevelPathEntry>;
   /** Every claim that lost the parent slot. Retained, never discarded. */
   readonly losingClaims: ReadonlyArray<SsmRelationshipClaim>;
 }

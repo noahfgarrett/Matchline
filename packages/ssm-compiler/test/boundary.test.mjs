@@ -137,6 +137,74 @@ test('§11.4: the same difference demotes once discipline is an enabled boundary
   assert.equal(snapshot.stats.demotedToDependencyCount, 1);
 });
 
+/* ---- P0-6: what a boundary compares ---- */
+
+test('a boundary compares the key, so re-wording a system never demotes anything', () => {
+  // The two agree on the System Key and disagree on the words, which is exactly
+  // the state a re-typed description leaves a project in halfway through a
+  // model revision. A boundary that compared the words would break the nesting.
+  const subjects = [
+    subject(MAH, { [SYSTEM]: '001', systemLabel: '001 Mechanical Dry Air Handling' }),
+    subject(PLC, { [SYSTEM]: '001', systemLabel: '001 Mechanical Dry Air Handling (Zone 1)' }),
+  ];
+  const hierarchy = {
+    levels: [
+      {
+        levelId: 'system',
+        displayName: 'System',
+        keyAttributeKey: SYSTEM,
+        displayAttributeKey: 'systemLabel',
+        boundary: true,
+        missingValuePolicy: 'review',
+        sort: 'key',
+      },
+    ],
+  };
+
+  const snapshot = compileSnapshot({
+    subjects,
+    claims: claims({ structural: [claim('flow-family', PLC, MAH)] }),
+    hierarchy,
+  });
+  const plc = snapshot.nodes.get(PLC);
+  assert.equal(plc.parent.status, 'resolved');
+  assert.equal(plc.parent.parentAssetId, MAH);
+  assert.deepEqual(snapshot.reviewItems, []);
+});
+
+test('boundaryAttributeKey is what the fold compares when a level names one', () => {
+  // A site whose structural rule is the building, grouped and displayed by
+  // something else. The two agree on the grouping key and differ on the
+  // boundary attribute, and the boundary attribute is what decides.
+  const subjects = [
+    subject(MAH, { [SYSTEM]: '001', [BUILDING]: 'D1' }),
+    subject(PLC, { [SYSTEM]: '001', [BUILDING]: 'D2' }),
+  ];
+  const hierarchy = {
+    levels: [
+      {
+        levelId: 'system',
+        displayName: 'System',
+        keyAttributeKey: SYSTEM,
+        boundaryAttributeKey: BUILDING,
+        boundary: true,
+        missingValuePolicy: 'review',
+        sort: 'key',
+      },
+    ],
+  };
+
+  const snapshot = compileSnapshot({
+    subjects,
+    claims: claims({ structural: [claim('flow-family', PLC, MAH)] }),
+    hierarchy,
+  });
+  const plc = snapshot.nodes.get(PLC);
+  assert.deepEqual(plc.parent.demotedFrom, { parentAssetId: MAH, boundaryLevelId: 'system' });
+  // Grouped by the key it was told to group by, all the same.
+  assert.equal(plc.levelPath[0].value, '001');
+});
+
 const CHILD = 'asset-child';
 const PARENT = 'asset-parent';
 

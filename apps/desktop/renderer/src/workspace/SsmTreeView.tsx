@@ -317,7 +317,7 @@ export function SsmTreeView({
               ? `Make ${pending.childTag} a root`
               : `Move ${pending.childTag} under ${pending.parentTag}`
           }
-          description="This writes a manual override. It outranks every rule, and it is kept across boundaries."
+          description="This writes a manual override. It outranks every rule on the ladder — and an enabled boundary still applies to it: a parent on the other side of one becomes a dependency instead."
         >
           <Callout tone={pending.preview.allowed ? 'info' : 'error'}>
             {pending.preview.explanation}

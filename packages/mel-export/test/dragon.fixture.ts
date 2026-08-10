@@ -255,6 +255,10 @@ export const DRAGON_REVISION_A: ReadonlyArray<GeneratedMelAsset> = [
   revisionAsset('EPB002-01-01', '002', { building: 'D-200', ssmDiscipline: 'Electrical' }),
   /* Single here; duplicated in B. */
   revisionAsset('ESB002-01', '002', { ssmDiscipline: 'Electrical' }),
+  /* Its system is re-worded in B under the same key: P0-6's "a label change is
+     never a system move". Own asset, own system key, so the re-wording cannot
+     be confused with CHW001-01-01's move. */
+  revisionAsset('BLR004-01-01', '004'),
   /* Gone in B. */
   revisionAsset('FCU-SPARE-09', '001'),
 ];
@@ -284,6 +288,9 @@ export const DRAGON_REVISION_B: ReadonlyArray<GeneratedMelAsset> = [
     ssmDiscipline: 'Electrical',
     inclusionStatus: 'DUPLICATE_MODEL_TAG',
     modelObjectIds: [2],
+  }),
+  revisionAsset('BLR004-01-01', '004', {
+    system: dragonSystem('004', 'Dragon System 004 (Zone 1)', 'System 004 (Zone 1)'),
   }),
   /* New in B. */
   revisionAsset('PMP003-01-01', '003'),

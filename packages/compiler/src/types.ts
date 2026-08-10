@@ -17,7 +17,7 @@
  */
 import type {
   ConnectivityObservation,
-  HierarchyConfig,
+  HierarchyConfigInput,
   ManualRelationshipOverride,
   ParentLadderConfig,
   PropertyRef,
@@ -129,7 +129,14 @@ export interface CompileProjectInput {
    */
   readonly sources: ReadonlyArray<ModelSourceInput>;
   readonly profile: SiteProfile;
-  readonly hierarchy: HierarchyConfig;
+  /**
+   * The level stack, in either spelling.
+   *
+   * A level written before P0-6 split the grouping key from the display
+   * attribute carries a single `attributeKey`; it is migrated inside the SSM
+   * compiler, so a stored project config compiles unchanged.
+   */
+  readonly hierarchy: HierarchyConfigInput;
   /**
    * Whether to build {@link CompiledProject.propertyCatalog}. Off by default.
    *

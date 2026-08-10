@@ -18,10 +18,10 @@ hard gates are mandatory; if code-complete but hardware-blocked, produce
 | 5 | Global / per-source / ordered-fallback metadata mapping | open |
 | 6 | Source-level Building/Discipline/custom assignments | open |
 | 7 | Arbitrary model-derived hierarchy levels | open |
-| 8 | System level: Key = identity/boundary, Label = display | open |
-| 9 | Manual parent cannot violate an enabled boundary | open |
-| 10 | Cross-System parents become dependencies | open (holds today for claims; manual pending) |
-| 11 | Default SSM Discipline level nonstructural | open |
+| 8 | System level: Key = identity/boundary, Label = display | GREEN (M4: HierarchyLevelConfig key/display/boundary + tree key/label + diff category; `level-key-display.test.mjs` wired into `npm test`) |
+| 9 | Manual parent cannot violate an enabled boundary | GREEN (M4: the manual bypass is gone — manual wins the ladder and folds; `manual-parent-boundaries.test.mjs` wired into `npm test`) |
+| 10 | Cross-System parents become dependencies | GREEN (M4: holds for every rung, manual included — dependency + provenance + `manual-boundary-demotion` review item) |
+| 11 | Default SSM Discipline level nonstructural | GREEN (M4: `DEFAULT_HIERARCHY_LEVELS` ships boundary=false on SSM Discipline; `default-hierarchy.test.mjs` wired into `npm test`) |
 | 12 | Stable asset identity survives tag correction | GREEN (M3: ledger engine + store v5 + desktop lifecycle; tier-1 stable-id property arrives with SiteProfileV2 in M4) |
 | 13 | 0.8.1 projects migrate with backup, no silent decision loss | partial: v3->v4->v5 chain opt-in+backup proven; tag-keyed decisions resolve via ledger; final 0.8.1 end-to-end migration test in M10 |
 | 14 | Real Navisworks Manage 2025 extraction proof | BLOCKED: needs Noah's Windows box |

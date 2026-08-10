@@ -222,6 +222,109 @@ test("'(no value)' and '(unassigned)' are different buckets under different poli
   );
 });
 
+/* ---- P0-6: the key groups, the label only reads ---- */
+
+const SYSTEM_LABEL = 'systemLabel';
+
+/** One System level spelled P0-6's way: key `systemKey`, display `systemLabel`. */
+const KEY_AND_LABEL_HIERARCHY = {
+  levels: [
+    {
+      levelId: 'system',
+      displayName: 'System',
+      keyAttributeKey: SYSTEM,
+      displayAttributeKey: SYSTEM_LABEL,
+      boundary: true,
+      missingValuePolicy: 'unassigned-group',
+      sort: 'key',
+    },
+  ],
+};
+
+function systemLevelTree(labelOfB) {
+  const subjects = [
+    subject('asset-a', { [SYSTEM]: '001', [SYSTEM_LABEL]: '001 Mechanical Dry Air Handling' }),
+    subject('asset-b', { [SYSTEM]: '001', [SYSTEM_LABEL]: labelOfB }),
+  ];
+  const snapshot = compileSnapshot({
+    subjects,
+    claims: claims({}),
+    hierarchy: KEY_AND_LABEL_HIERARCHY,
+  });
+  return hierarchyTree(snapshot, KEY_AND_LABEL_HIERARCHY, subjects);
+}
+
+test('a level node publishes its key and its label separately', () => {
+  const [node] = systemLevelTree('001 Mechanical Dry Air Handling').levels;
+  assert.equal(node.key, '001');
+  assert.equal(node.value, node.key, 'the old field name is the key, unchanged');
+  assert.equal(node.label, '001 Mechanical Dry Air Handling');
+});
+
+test('re-wording a system changes the label and nothing else', () => {
+  const before = systemLevelTree('001 Mechanical Dry Air Handling').levels[0];
+  const after = systemLevelTree('001 Mechanical Dry Air Handling (Zone 1)').levels[0];
+
+  assert.equal(after.key, before.key, 'the grouping identity is untouched');
+  assert.deepEqual(
+    after.assets.map((asset) => asset.assetId),
+    before.assets.map((asset) => asset.assetId),
+    'nothing was re-bucketed',
+  );
+  // First stated wins, deterministically: assets are walked in asset-id order,
+  // so a group whose members disagree still reads the same way every compile.
+  assert.equal(before.label, '001 Mechanical Dry Air Handling');
+  assert.equal(after.label, '001 Mechanical Dry Air Handling');
+});
+
+test('a level with no display attribute is labelled by its key', () => {
+  const subjects = [subject('asset-a', { [SYSTEM]: '001' })];
+  const hierarchy = {
+    levels: [
+      {
+        levelId: 'system',
+        displayName: 'System',
+        keyAttributeKey: SYSTEM,
+        boundary: true,
+        missingValuePolicy: 'unassigned-group',
+        sort: 'key',
+      },
+    ],
+  };
+  const snapshot = compileSnapshot({ subjects, claims: claims({}), hierarchy });
+  const [node] = hierarchyTree(snapshot, hierarchy, subjects).levels;
+  assert.equal(node.label, '001');
+  assert.equal(node.key, '001');
+});
+
+test("sort 'label' orders by the words, sort 'key' by the identity", () => {
+  const subjects = [
+    subject('asset-a', { [SYSTEM]: '001', [SYSTEM_LABEL]: 'Zebra' }),
+    subject('asset-b', { [SYSTEM]: '002', [SYSTEM_LABEL]: 'Aardvark' }),
+  ];
+  const level = {
+    levelId: 'system',
+    displayName: 'System',
+    keyAttributeKey: SYSTEM,
+    displayAttributeKey: SYSTEM_LABEL,
+    boundary: true,
+    missingValuePolicy: 'unassigned-group',
+  };
+
+  const byKey = { levels: [{ ...level, sort: 'key' }] };
+  const byLabel = { levels: [{ ...level, sort: 'label' }] };
+  const snapshot = compileSnapshot({ subjects, claims: claims({}), hierarchy: byKey });
+
+  assert.deepEqual(
+    hierarchyTree(snapshot, byKey, subjects).levels.map((node) => node.key),
+    ['001', '002'],
+  );
+  assert.deepEqual(
+    hierarchyTree(snapshot, byLabel, subjects).levels.map((node) => node.label),
+    ['Aardvark', 'Zebra'],
+  );
+});
+
 test('a hierarchy with no levels puts every root asset at the top', () => {
   const subjects = [subject('asset-b', {}), subject('asset-a', {})];
   const snapshot = compileSnapshot({ subjects, claims: claims({}), hierarchy: { levels: [] } });

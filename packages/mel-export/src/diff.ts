@@ -12,6 +12,7 @@
  * | Removed assets              | {@link MelRevisionDiff.removed}               |
  * | Changed tags/aliases        | {@link MelRevisionDiff.changedTags}           |
  * | Changed descriptions        | {@link MelRevisionDiff.changedDescriptions}   |
+ * |                             | {@link MelRevisionDiff.changedSystemDescriptions} |
  * | Changed System Keys         | {@link MelRevisionDiff.changedSystemKeys}     |
  * | Changed hierarchy levels    | {@link MelRevisionDiff.changedHierarchyLevels}|
  * | Moved parents               | {@link MelRevisionDiff.movedParents}          |
@@ -112,6 +113,7 @@ export interface MelRevisionDiffSummary {
   readonly removed: number;
   readonly changedTags: number;
   readonly changedDescriptions: number;
+  readonly changedSystemDescriptions: number;
   readonly changedSystemKeys: number;
   readonly changedHierarchyLevels: number;
   readonly movedParents: number;
@@ -127,6 +129,24 @@ export interface MelRevisionDiff {
   /** `before` is the old tag, `after` the new one. Only hinted renames appear. */
   readonly changedTags: ReadonlyArray<MelFieldChange>;
   readonly changedDescriptions: ReadonlyArray<MelFieldChange>;
+  /**
+   * A system re-worded under the same key (P0-6).
+   *
+   * Its own list rather than a row in {@link changedSystemKeys}, because those
+   * are two different events and only one of them moves equipment: a changed
+   * key IS a system move, a changed description is the register saying the same
+   * thing in better words. "Description/label edits never move equipment" is
+   * only checkable if the diff can say which of the two happened.
+   *
+   * `before`/`after` are the System Description cell. The System Label is
+   * key + description, so a label change with an unchanged key is this change
+   * seen from one column over, not a second one.
+   *
+   * Reported only where the System Key is unchanged: an asset that moved to a
+   * different system is in {@link changedSystemKeys}, and its new description
+   * is a consequence of the move rather than a re-wording of anything.
+   */
+  readonly changedSystemDescriptions: ReadonlyArray<MelFieldChange>;
   readonly changedSystemKeys: ReadonlyArray<MelFieldChange>;
   readonly changedHierarchyLevels: ReadonlyArray<MelHierarchyLevelChange>;
   /** System Parent Equipment Tag changed. Independent of the System Key. */
@@ -199,6 +219,7 @@ export function diffMelRevisions(
   const removed: MelAssetChange[] = [];
   const changedTags: MelFieldChange[] = [];
   const changedDescriptions: MelFieldChange[] = [];
+  const changedSystemDescriptions: MelFieldChange[] = [];
   const changedSystemKeys: MelFieldChange[] = [];
   const changedHierarchyLevels: MelHierarchyLevelChange[] = [];
   const movedParents: MelFieldChange[] = [];
@@ -233,6 +254,18 @@ export function diffMelRevisions(
       previousRow.equipmentDescription,
       currentRow.equipmentDescription,
     );
+    // Only under an unchanged key. An asset that moved to another system has a
+    // different description because it is in a different system, and reporting
+    // that as a re-wording would put the same event in two categories and make
+    // "a label change is never a system move" uncheckable from the output.
+    if (previousRow.systemKey === currentRow.systemKey) {
+      pushIfChanged(
+        changedSystemDescriptions,
+        canonicalTag,
+        previousRow.systemDescription,
+        currentRow.systemDescription,
+      );
+    }
     pushIfChanged(changedSystemKeys, canonicalTag, previousRow.systemKey, currentRow.systemKey);
     for (const level of HIERARCHY_LEVELS) {
       if (previousRow[level] !== currentRow[level]) {
@@ -292,6 +325,7 @@ export function diffMelRevisions(
   removed.sort(byTag);
   changedTags.sort(byTag);
   changedDescriptions.sort(byTag);
+  changedSystemDescriptions.sort(byTag);
   changedSystemKeys.sort(byTag);
   changedHierarchyLevels.sort(
     (a, b) => byTag(a, b) || compareCodeUnits(a.level, b.level),
@@ -308,6 +342,7 @@ export function diffMelRevisions(
     removed,
     changedTags,
     changedDescriptions,
+    changedSystemDescriptions,
     changedSystemKeys,
     changedHierarchyLevels,
     movedParents,
@@ -318,6 +353,7 @@ export function diffMelRevisions(
       removed: removed.length,
       changedTags: changedTags.length,
       changedDescriptions: changedDescriptions.length,
+      changedSystemDescriptions: changedSystemDescriptions.length,
       changedSystemKeys: changedSystemKeys.length,
       changedHierarchyLevels: changedHierarchyLevels.length,
       movedParents: movedParents.length,

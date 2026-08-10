@@ -30,7 +30,7 @@ import type { WizardContext } from './Wizard';
 const LADDER_RUNGS: ReadonlyArray<
   readonly [WireLadderSource, string, string]
 > = [
-  ['manual', 'Somebody said so', 'A parent a person set by hand. Always wins, and it is kept even across a boundary.'],
+  ['manual', 'Somebody said so', 'A parent a person set by hand. Beats every rung below it. A boundary still applies: a parent across one becomes a dependency, and the crossing is explained in Review.'],
   ['explicit-model', 'The model says so', 'A model property naming the parent outright. Needs the property mapped below.'],
   ['profile-lookup', 'An accepted lookup table', 'Parent/child pairs this site wrote down and accepted.'],
   ['flow-family', 'Connected and same family', 'The two are electrically connected and share a tag family, with compatible roles.'],

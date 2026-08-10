@@ -16,10 +16,19 @@
  * 3. **Nothing is invented.** No fallback value feeds a comparison, no cycle is
  *    snapped silently, and every claim that lost the slot is retained on the
  *    node that rejected it.
+ *
+ * Rule 2 has no exception for the manual rung (P0-4). Manual is still the top
+ * of the ladder -- it wins the competition against every other rung, and a
+ * manual make-root still ends the walk before it starts -- but a manual parent
+ * that crosses an enabled boundary is demoted like any other, with the person's
+ * decision retained twice over: on the dependency it became, and in a
+ * `manual-boundary-demotion` review item naming the boundary it crossed.
  */
 import {
   assertNever,
   LADDER_SOURCE_ORDER,
+  migrateHierarchyConfig,
+  type HierarchyConfig,
   type LadderSourceKind,
   type ParentDecision,
   type ParentDemotion,
@@ -136,7 +145,8 @@ interface SubjectResolution {
 interface WalkContext {
   readonly subjectById: ReadonlyMap<string, CompileSubject>;
   readonly ladder: ParentLadderConfig;
-  readonly hierarchy: CompileInput['hierarchy'];
+  /** Already migrated: the walk never sees a pre-P0-6 level spelling. */
+  readonly hierarchy: HierarchyConfig;
   readonly structuralBySubject: ReadonlyMap<string, ReadonlyArray<SsmRelationshipClaim>>;
   readonly dependenciesBySubject: ReadonlyMap<string, ReadonlyArray<SsmRelationshipClaim>>;
   readonly makeRootIds: ReadonlySet<string>;
@@ -273,17 +283,6 @@ function resolveSubject(subject: CompileSubject, ctx: WalkContext): SubjectResol
         continue;
       }
 
-      // §11.5: a manual parent bypasses the fold entirely. A person who reparents
-      // across a building boundary has said something the rules may not overrule
-      // -- manual outranks, and outranking means the fold is not consulted at all.
-      if (tier === 'manual') {
-        status = 'resolved';
-        parentAssetId = selectedParentId;
-        winningSource = tier;
-        winningClaim = selectedClaim;
-        break;
-      }
-
       const parentSubject = ctx.subjectById.get(selectedParentId);
       if (parentSubject === undefined) {
         continue;
@@ -307,7 +306,21 @@ function resolveSubject(subject: CompileSubject, ctx: WalkContext): SubjectResol
           firstDemotion = {
             parentAssetId: selectedParentId,
             boundaryLevelId: outcome.levelId,
+            ...(tier === 'manual' ? { manual: true } : {}),
           };
+        }
+
+        // P0-4's visible item. Only the manual rung raises one: a demoted rule
+        // is the fold doing its job and is counted in the demotion stat, while a
+        // demoted person is the compiler declining to do what somebody asked
+        // for, and that is owed an explanation naming both ends and the level.
+        if (tier === 'manual') {
+          reviewItems.push({
+            kind: 'manual-boundary-demotion',
+            assetId: subject.assetId,
+            parentAssetId: selectedParentId,
+            boundaryLevelId: outcome.levelId,
+          });
         }
         // The relationship remains real; it just stops nesting (§2.5).
         //
@@ -333,6 +346,14 @@ function resolveSubject(subject: CompileSubject, ctx: WalkContext): SubjectResol
       // better rung could not, which is the guess §11.3 forbids. Nor does the
       // parent become a dependency -- the fold never established that the two
       // are related the way a demotion establishes it. The claim is retained.
+      //
+      // Manual is not special here either (P0-4). "Manual is the strongest
+      // rung" is about winning a competition, not about proving a boundary: an
+      // asset whose building nobody stated has not been shown to be on the
+      // right side of one, and nesting it on the strength of that would be the
+      // fold agreeing that unknown equals unknown. So a manual parent with an
+      // unstated boundary value takes the same missing-boundary review item and
+      // the same per-level policy as any other rung's would.
       for (const assetId of outcome.missingOn) {
         reviewItems.push({ kind: 'missing-boundary', assetId, levelId: outcome.levelId });
       }
@@ -519,7 +540,10 @@ export function compileSnapshot(input: CompileInput): ResolvedSnapshot {
   const ctx: WalkContext = {
     subjectById,
     ladder,
-    hierarchy: input.hierarchy,
+    // Migrated once, at the edge: a config written before P0-6 split the level
+    // key from its display is lifted here and nowhere else, so no comparison
+    // downstream has to know which spelling it was handed.
+    hierarchy: migrateHierarchyConfig(input.hierarchy),
     structuralBySubject,
     dependenciesBySubject,
     makeRootIds,
