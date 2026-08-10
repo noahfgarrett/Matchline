@@ -39,11 +39,13 @@ import type {
 } from '../../shared/schemas.js';
 
 import {
+  toDerivedAttributes,
   toDisciplineProjection,
   toHierarchyConfig,
   toLadder,
   toParentTagProperty,
   toRoleGraph,
+  toSourceAssignmentRules,
 } from './project-config.js';
 
 /**
@@ -124,6 +126,8 @@ export function buildCompileInput(request: CompileRequest): CompileProjectInput 
     parentTagProperty?: NonNullable<CompileProjectInput['parentTagProperty']>;
     ssmDisciplineProjection?: NonNullable<CompileProjectInput['ssmDisciplineProjection']>;
     identityLedger?: AssetLedger;
+    derivedAttributes?: NonNullable<CompileProjectInput['derivedAttributes']>;
+    sourceAssignmentRules?: NonNullable<CompileProjectInput['sourceAssignmentRules']>;
   } = {
     // Every ready model source, not the first one: a project is a universe
     // (P0-1). `compileProject` reorders by `sourceId` itself, so registering
@@ -171,6 +175,14 @@ export function buildCompileInput(request: CompileRequest): CompileProjectInput 
   }
   if (request.previousLedger !== null) {
     input.identityLedger = request.previousLedger;
+  }
+  const derivedAttributes = toDerivedAttributes(request.config);
+  if (derivedAttributes !== null) {
+    input.derivedAttributes = derivedAttributes;
+  }
+  const sourceAssignmentRules = toSourceAssignmentRules(request.config);
+  if (sourceAssignmentRules !== null) {
+    input.sourceAssignmentRules = sourceAssignmentRules;
   }
 
   return input;

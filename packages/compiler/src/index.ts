@@ -25,12 +25,22 @@ export type {
   CompileProjectInput,
   CompileStats,
   ConnectivityWorkbookInput,
+  DerivedAssetAttributes,
+  DerivedAttributeValue,
   GeneratedMel,
   MelWorkbookInput,
   ModelSourceInput,
   SourceAssetCount,
   SsmDisciplineProjection,
 } from './types.js';
+
+export { derivedRuleIdOf, validateDerivedAttributes } from './derived.js';
+
+export {
+  DerivedAttributeConfigError,
+  describeDerivedAttributeConfigReason,
+} from './errors.js';
+export type { DerivedAttributeConfigReason } from './errors.js';
 
 export { subjectPropertiesFor } from './properties.js';
 export type { SubjectProperties } from './properties.js';

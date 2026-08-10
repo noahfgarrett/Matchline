@@ -25,6 +25,7 @@ export {
   MIGRATION_STEPS,
   migrateSourcesToV4,
   WIDEN_CHECKS_SQL,
+  WIDEN_CONFIG_KEYS_SQL,
 } from './migrations.js';
 export type { MigrationStep } from './migrations.js';
 

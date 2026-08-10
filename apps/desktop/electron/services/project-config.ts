@@ -1,22 +1,29 @@
 import { ATTRIBUTE_KEYS, type AttributeKey, type SsmDisciplineProjection } from '@matchline/compiler';
 import {
   LADDER_SOURCE_ORDER,
+  type AttributeResolver,
+  type DerivedAttributeDefinition,
   type HierarchyConfig,
   type HierarchyLevelConfig,
   type LadderSourceKind,
   type ParentLadderConfig,
   type PropertyRef,
   type RoleGraphConfig,
+  type SourceAssignmentRule,
+  type SourceAssignments,
 } from '@matchline/domain';
 import { CONFIG_KEYS, type ConfigEntry, type ProjectStore } from '@matchline/project-store';
 
 import {
   projectConfigSchema,
   type WireAttributeChoice,
+  type WireAttributeResolver,
   type WireConfigPatch,
+  type WireDerivedAttribute,
   type WireHierarchyLevel,
   type WireLadderSource,
   type WireProjectConfig,
+  type WireSourceAssignmentRule,
 } from '../../shared/schemas.js';
 
 /**
@@ -112,6 +119,11 @@ export function defaultProjectConfig(): WireProjectConfig {
     // No captured layout: the EXTO export uses the engine's generic Rev21 map
     // until the site supplies a workbook of its own.
     extoTemplate: null,
+    // A new project defines no attributes of its own and no assignment rules.
+    // Empty is the truth, not a placeholder: the built-in attribute keys and an
+    // object's own properties are what a project starts with.
+    derivedAttributes: [],
+    sourceAssignmentRules: [],
   };
 }
 
@@ -128,13 +140,15 @@ export function applyConfigPatch(
     parentTagProperty:
       patch.parentTagProperty === undefined ? config.parentTagProperty : patch.parentTagProperty,
     extoTemplate: patch.extoTemplate === undefined ? config.extoTemplate : patch.extoTemplate,
+    derivedAttributes: patch.derivedAttributes ?? config.derivedAttributes,
+    sourceAssignmentRules: patch.sourceAssignmentRules ?? config.sourceAssignmentRules,
   };
 }
 
 /* ---------------------------------------------------------- the config table */
 
 /**
- * The six sections as one object, or `null` when the project has none.
+ * Every section as one object, or `null` when the project has none.
  *
  * `null` covers both "never configured" and "configured by something this build
  * cannot read": the caller treats them the same way, because the honest
@@ -162,16 +176,22 @@ export function readProjectConfig(store: ProjectStore): WireProjectConfig | null
     ssmDisciplineProjection: byKey.get('ssmDisciplineProjection'),
     parentTagProperty: byKey.get('parentTagProperty') ?? null,
     extoTemplate: byKey.get('extoTemplate') ?? null,
+    // No `?? []`: the schema's own `.default([])` is what turns an absent key
+    // into an empty list, and it is the one place that decision is made. A file
+    // written before schema v6 has no row for either, which means the project
+    // defines none.
+    derivedAttributes: byKey.get('derivedAttributes'),
+    sourceAssignmentRules: byKey.get('sourceAssignmentRules'),
   });
   return parsed.success ? parsed.data : null;
 }
 
 /**
- * Writes all six sections in one transaction.
+ * Writes every section in one transaction.
  *
- * All six every time, rather than only the ones a patch named: the table's
+ * All of them every time, rather than only the ones a patch named: the table's
  * meaning is "what this project is configured to", and a half-written table
- * would let a later read pick up four current sections and one stale one.
+ * would let a later read pick up six current sections and one stale one.
  */
 export function writeProjectConfig(store: ProjectStore, config: WireProjectConfig): void {
   store.withTransaction((): void => {
@@ -249,6 +269,93 @@ export function toParentTagProperty(config: WireProjectConfig): PropertyRef | nu
   return ref === null ? null : { category: ref.category, name: ref.name };
 }
 
+/** One wire resolver rung as the engine's own (P0-7). */
+function toAttributeResolver(wire: WireAttributeResolver): AttributeResolver {
+  switch (wire.kind) {
+    case 'model-property':
+      return { kind: 'model-property', chain: wire.chain.map((ref) => ({ ...ref })) };
+    case 'tag-segment':
+      return { kind: 'tag-segment', segment: wire.segment };
+    case 'source-assignment':
+      return { kind: 'source-assignment', key: wire.key };
+    case 'system-field':
+      return { kind: 'system-field', field: wire.field };
+    case 'composite':
+      return { kind: 'composite', template: wire.template };
+    case 'mel-lookup':
+      return { kind: 'mel-lookup', joinBy: wire.joinBy, returnField: wire.returnField };
+    case 'manual':
+      // The pairs become the map the engine reads. A later pair for one asset
+      // loses to the earlier one, so the order the list was written in decides,
+      // which is the same rule every other list on the wire follows.
+      return {
+        kind: 'manual',
+        assignments: new Map(
+          wire.assignments.map((entry) => [entry.assetId, entry.value] as const).reverse(),
+        ),
+      };
+    default: {
+      const exhaustive: never = wire;
+      throw new Error(`unhandled attribute resolver: ${JSON.stringify(exhaustive)}`);
+    }
+  }
+}
+
+/**
+ * The project's derived attribute registry, or `null` when it defines none.
+ *
+ * `null` rather than `[]` so the caller leaves the key off `CompileProjectInput`
+ * entirely — under `exactOptionalPropertyTypes` a present `undefined` is not an
+ * absent key, and the compiler's other optional sections are all read that way.
+ */
+export function toDerivedAttributes(
+  config: WireProjectConfig,
+): ReadonlyArray<DerivedAttributeDefinition> | null {
+  if (config.derivedAttributes.length === 0) {
+    return null;
+  }
+  return config.derivedAttributes.map((definition) => ({
+    attributeId: definition.attributeId,
+    displayName: definition.displayName,
+    resolverChain: definition.resolverChain.map(toAttributeResolver),
+  }));
+}
+
+/** One rule's `assign`, with blanks left off rather than assigned as empty. */
+function toAssignments(wire: WireSourceAssignmentRule['assign']): SourceAssignments {
+  const assignments: {
+    building?: string;
+    nativeDiscipline?: string;
+    custom?: ReadonlyMap<string, string>;
+  } = {};
+  if (wire.building !== '') {
+    assignments.building = wire.building;
+  }
+  if (wire.nativeDiscipline !== '') {
+    assignments.nativeDiscipline = wire.nativeDiscipline;
+  }
+  if (wire.custom.length > 0) {
+    assignments.custom = new Map(
+      wire.custom.map((entry) => [entry.key, entry.value] as const).reverse(),
+    );
+  }
+  return assignments;
+}
+
+/** The profile-level assignment rules, or `null` when the project has none. */
+export function toSourceAssignmentRules(
+  config: WireProjectConfig,
+): ReadonlyArray<SourceAssignmentRule> | null {
+  if (config.sourceAssignmentRules.length === 0) {
+    return null;
+  }
+  return config.sourceAssignmentRules.map((rule) => ({
+    scope: rule.scope,
+    match: rule.match,
+    assign: toAssignments(rule.assign),
+  }));
+}
+
 /* ------------------------------------------------------------- attributes */
 
 interface AttributeDescription {
@@ -313,22 +420,87 @@ const ATTRIBUTE_DESCRIPTIONS: Readonly<Record<AttributeKey, AttributeDescription
 };
 
 /**
+ * What one derived rung reads, in a sentence fragment (P0-7).
+ *
+ * The Composer shows a derived attribute beside the built-ins, and a row whose
+ * only description is "derived" tells a person nothing about whether it is the
+ * field they want. Naming the first rung's evidence is the shortest honest
+ * answer to "where does this come from?".
+ */
+function describeResolver(resolver: WireAttributeResolver): string {
+  switch (resolver.kind) {
+    case 'model-property': {
+      const first = resolver.chain[0];
+      return first === undefined
+        ? 'a model property (none chosen yet)'
+        : `the model property ${first.category} > ${first.name}`;
+    }
+    case 'tag-segment':
+      return `the tag's ${resolver.segment} segment`;
+    case 'source-assignment':
+      return `the source assignment "${resolver.key}"`;
+    case 'system-field':
+      return `the resolved ${resolver.field}`;
+    case 'composite':
+      return `the template ${resolver.template}`;
+    case 'mel-lookup':
+      return `the MEL's ${resolver.returnField}, joined by equipment tag`;
+    case 'manual':
+      return 'a table somebody filled in by hand';
+    default: {
+      const exhaustive: never = resolver;
+      throw new Error(`unhandled attribute resolver: ${JSON.stringify(exhaustive)}`);
+    }
+  }
+}
+
+/**
  * The level-attribute menu, with how many distinct values each one actually has.
+ *
+ * Built-ins first, in `ATTRIBUTE_KEYS` order, then the project's own derived
+ * attributes in the order it defines them (P0-7). Both are addressable by a
+ * level in exactly the same way, so both belong in one menu — a derived
+ * attribute a person cannot pick is a registry nobody can use.
  *
  * `distinctValueCount` is `null` when nothing has been compiled yet — a count
  * of zero would read as "this attribute is empty", which is a different claim.
  */
 export function attributeChoices(
   distinctValues: ReadonlyMap<string, number> | null,
+  derived: ReadonlyArray<WireDerivedAttribute> = [],
 ): readonly WireAttributeChoice[] {
-  return ATTRIBUTE_KEYS.map((attributeKey: AttributeKey): WireAttributeChoice => {
+  const countOf = (key: string): number | null =>
+    distinctValues === null ? null : (distinctValues.get(key) ?? 0);
+
+  const builtIn = ATTRIBUTE_KEYS.map((attributeKey: AttributeKey): WireAttributeChoice => {
     const description = ATTRIBUTE_DESCRIPTIONS[attributeKey];
     return {
       attributeKey,
       label: description.label,
       what: description.what,
       example: description.example,
-      distinctValueCount: distinctValues === null ? null : (distinctValues.get(attributeKey) ?? 0),
+      distinctValueCount: countOf(attributeKey),
     };
   });
+
+  const siteDefined = derived.map((definition): WireAttributeChoice => {
+    const first = definition.resolverChain[0];
+    return {
+      attributeKey: definition.attributeId,
+      label: definition.displayName,
+      what:
+        'An attribute this project derives. The first rung of its chain that ' +
+        'states a value wins; an asset no rung answers for simply has none.',
+      // Reads as a phrase on its own in the chip hint, and after the level
+      // card's "Example: " prefix. Once something has been compiled the chip
+      // shows the distinct-value count instead.
+      example:
+        first === undefined
+          ? 'no rungs configured yet, so this resolves for nobody'
+          : `resolved from ${describeResolver(first)}`,
+      distinctValueCount: countOf(definition.attributeId),
+    };
+  });
+
+  return [...builtIn, ...siteDefined];
 }

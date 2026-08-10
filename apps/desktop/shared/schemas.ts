@@ -780,6 +780,90 @@ export const extoTemplateSchema = z.object({
 });
 export type WireExtoTemplate = z.infer<typeof extoTemplateSchema>;
 
+/* ============================================ derived attributes (P0-7) */
+
+/**
+ * Mirrors `PropertyChain`: an ordered fallback list of addresses (P0-8).
+ *
+ * A list, never a single ref, wherever a chain is what the engine takes. Screen
+ * 3's own mappings stay single-ref on the wire — a `PropertyRef` is a legal
+ * mapping input and the engine lifts it to one rung — but a derived attribute's
+ * `model-property` rung IS a chain, so the wire spells it as one.
+ */
+export const propertyChainSchema = z.array(propertyRefSchema);
+export type WirePropertyChain = z.infer<typeof propertyChainSchema>;
+
+/**
+ * Mirrors `AttributeResolver` (P0-7).
+ *
+ * `manual` carries a list of `{assetId, value}` pairs rather than the engine's
+ * map: structured clone does not carry a `Map` reliably across IPC, and the
+ * config table stores canonical JSON, which refuses one outright.
+ */
+export const attributeResolverSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('model-property'), chain: propertyChainSchema }),
+  z.object({ kind: z.literal('tag-segment'), segment: segmentNameSchema }),
+  z.object({ kind: z.literal('source-assignment'), key: z.string().min(1) }),
+  z.object({
+    kind: z.literal('system-field'),
+    field: z.enum(['systemKey', 'systemDescription', 'systemLabel']),
+  }),
+  z.object({ kind: z.literal('composite'), template: z.string().min(1) }),
+  z.object({
+    kind: z.literal('mel-lookup'),
+    joinBy: z.literal('equipmentTag'),
+    returnField: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal('manual'),
+    assignments: z.array(z.object({ assetId: z.string().min(1), value: z.string() })),
+  }),
+]);
+export type WireAttributeResolver = z.infer<typeof attributeResolverSchema>;
+
+/**
+ * Mirrors `DerivedAttributeDefinition` (P0-7).
+ *
+ * `attributeId` is only shape-checked here. Uniqueness and the collision with a
+ * built-in attribute key are the compiler's `validateDerivedAttributes` to
+ * refuse, because it is the one place that knows what the built-in keys are.
+ */
+export const derivedAttributeSchema = z.object({
+  attributeId: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  displayName: z.string().min(1),
+  resolverChain: z.array(attributeResolverSchema),
+});
+export type WireDerivedAttribute = z.infer<typeof derivedAttributeSchema>;
+
+/* ======================================= source assignment rules (P0-8) */
+
+/** Mirrors `SourceAssignmentScope`. */
+export const sourceAssignmentScopeSchema = z.enum([
+  'source-model',
+  'logical-source',
+  'filename-pattern',
+]);
+export type WireSourceAssignmentScope = z.infer<typeof sourceAssignmentScopeSchema>;
+
+/**
+ * Mirrors `SourceAssignmentRule` (P0-8).
+ *
+ * `custom` is a list of pairs rather than the engine's map, for the reason
+ * `attributeResolverSchema`'s `manual` is. `''` is a legal assigned value on
+ * the wire and the engine drops it as blank, so a half-typed row cannot assign
+ * an empty building to a whole file.
+ */
+export const sourceAssignmentRuleSchema = z.object({
+  scope: sourceAssignmentScopeSchema,
+  match: z.string().min(1),
+  assign: z.object({
+    building: z.string(),
+    nativeDiscipline: z.string(),
+    custom: z.array(z.object({ key: z.string().min(1), value: z.string() })),
+  }),
+});
+export type WireSourceAssignmentRule = z.infer<typeof sourceAssignmentRuleSchema>;
+
 export const projectConfigSchema = z.object({
   hierarchy: hierarchyConfigSchema,
   roleGraph: roleGraphSchema,
@@ -795,6 +879,16 @@ export const projectConfigSchema = z.object({
    * "no template", not "unreadable".
    */
   extoTemplate: extoTemplateSchema.nullable().default(null),
+  /**
+   * The site's own attribute registry (P0-7) and assignment rules (P0-8).
+   *
+   * Defaulted to `[]` for the same reason `extoTemplate` is defaulted to `null`:
+   * a config written by a build that predates schema v6 has no row for either
+   * key, and an absent key means "this project defines none", not "this file is
+   * unreadable".
+   */
+  derivedAttributes: z.array(derivedAttributeSchema).default([]),
+  sourceAssignmentRules: z.array(sourceAssignmentRuleSchema).default([]),
 });
 export type WireProjectConfig = z.infer<typeof projectConfigSchema>;
 
@@ -806,6 +900,8 @@ export const configPatchSchema = z.object({
   ssmDisciplineProjection: z.array(disciplineRewriteSchema).optional(),
   parentTagProperty: propertyRefSchema.nullable().optional(),
   extoTemplate: extoTemplateSchema.nullable().optional(),
+  derivedAttributes: z.array(derivedAttributeSchema).optional(),
+  sourceAssignmentRules: z.array(sourceAssignmentRuleSchema).optional(),
 });
 export type WireConfigPatch = z.infer<typeof configPatchSchema>;
 

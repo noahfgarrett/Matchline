@@ -20,9 +20,12 @@
  * other order is the same compile; every per-asset cache read goes through the
  * asset's own source, because an object ordinal addresses nothing without one.
  */
+import { chainFor, migratePropertyMappings } from '@matchline/domain';
 import type {
   DeadClaimRuleReviewItem,
   ManualRelationshipOverride,
+  PropertyChain,
+  PropertyMappings,
   Provenance,
   ResolvedAssetNode,
   ReviewItem,
@@ -70,6 +73,14 @@ import { applyAnatomy } from '@matchline/tag-anatomy';
 
 import { attributesFor, ssmDisciplineOf } from './attributes.js';
 import {
+  anatomyResultOf,
+  derivedAttributesFor,
+  derivedNeedsAnatomy,
+  validateDerivedAttributes,
+  NO_MEL_JOIN,
+} from './derived.js';
+import type { MelJoinIndex, MelRecord } from './derived.js';
+import {
   applyLedgerMapping,
   decisionResolverOf,
   ledgerCandidateOf,
@@ -91,6 +102,8 @@ import type {
   CompiledProject,
   CompileProjectInput,
   CompileStats,
+  DerivedAssetAttributes,
+  DerivedAttributeValue,
   MelWorkbookInput,
   ModelSourceInput,
   SourceAssetCount,
@@ -164,24 +177,53 @@ function readMel(mel: MelWorkbookInput | undefined): {
   readonly rows: ReadonlyArray<MelCatalogRow>;
   readonly catalog: SystemCatalog;
   readonly reviewItems: ReadonlyArray<ReviewItem>;
+  /**
+   * The workbook's own records, grouped by tag, for the derived `mel-lookup`
+   * rung (P0-7).
+   *
+   * `MelCatalogRow` carries only the three fields the System Resolver joins on;
+   * a derived attribute may return any column the project mapped -- `building`,
+   * `discipline`, `projectPhase` -- so the records are kept as read rather than
+   * projected down and then re-read.
+   */
+  readonly join: MelJoinIndex;
 } {
   if (mel === undefined) {
-    return { rows: [], catalog: new Map(), reviewItems: [] };
+    return { rows: [], catalog: new Map(), reviewItems: [], join: NO_MEL_JOIN };
   }
 
   const sheet = mel.sheetName ?? DEFAULT_MEL_SHEET;
   const table = readMelTable(mel.bytes, sheet, mel.mapping, mel.headerRow ?? 0);
 
   const rows: MelCatalogRow[] = [];
+  const byTag = new Map<string, MelRecord[]>();
   for (const record of table.rows) {
     const row = melCatalogRow(record, mel.sourceFile, sheet);
     if (row !== null) {
       rows.push(row);
     }
+    const tag = stated(record['equipmentTag']);
+    if (tag === undefined) {
+      continue;
+    }
+    // Every row stating the tag, in workbook order: the rung takes the first one
+    // that also states the field it asked for, exactly as the resolver's own tag
+    // join does.
+    const bucket = byTag.get(tag);
+    if (bucket === undefined) {
+      byTag.set(tag, [record]);
+    } else {
+      bucket.push(record);
+    }
   }
 
   const built: SystemCatalogResult = buildSystemCatalog(rows);
-  return { rows, catalog: built.catalog, reviewItems: built.reviewItems };
+  return {
+    rows,
+    catalog: built.catalog,
+    reviewItems: built.reviewItems,
+    join: { byTag, sourceFile: mel.sourceFile, sheet },
+  };
 }
 
 /** Anatomy segments for one tag, or nothing when the site taught no anatomy. */
@@ -226,6 +268,18 @@ interface SourceContext {
 export function compileProject(input: CompileProjectInput): CompiledProject {
   const { profile } = input;
   const anatomy = profile.tagAnatomy;
+  // The mappings in the one shape the pipeline reads them in (P0-8). A profile
+  // written before chains spells each field as a single `PropertyRef`; it is
+  // lifted here, once, so nothing below has two shapes to handle -- and the
+  // asset catalog is handed the profile's own value so the two entry points
+  // cannot disagree about what a lifted mapping means.
+  const mappings: PropertyMappings = migratePropertyMappings(profile.propertyMappings);
+  /** The tag chain one source reads through, per-source overrides included. */
+  const tagChainOf = (sourceId: string): PropertyChain =>
+    chainFor(mappings.equipmentTag, sourceId);
+  // Refused before a single cache is read: a definition that shadowed a built-in
+  // attribute key would change where equipment is filed without saying so.
+  const derivedDefinitions = validateDerivedAttributes(input.derivedAttributes ?? []);
 
   // The universe, in the one order every stage reads it in. `orderCatalogSources`
   // is `@matchline/asset-catalog`'s own ordering and validation, borrowed rather
@@ -235,7 +289,12 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   const sources = orderCatalogSources(input.sources);
 
   // --- 1. the model-first asset universe -----------------------------------
-  const modelCatalog = buildAssetCatalog(sources, profile.propertyMappings, profile.assetFilters);
+  const modelCatalog = buildAssetCatalog(
+    sources,
+    profile.propertyMappings,
+    profile.assetFilters,
+    input.sourceAssignmentRules ?? [],
+  );
   // One streaming pass per cache, for a value only a property picker reads. Not
   // run unless it was asked for (see `includePropertyCatalog`).
   const propertyCatalog =
@@ -289,7 +348,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
           const bag = readAssetProperties(
             contextOf(asset).source.cache,
             asset,
-            profile.propertyMappings.equipmentTag,
+            tagChainOf(asset.sourceId),
           );
           return propertyFrom(bag, stableIdProperty)?.value;
         });
@@ -306,11 +365,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   const claimSubjects: ClaimSubject[] = [];
   for (const asset of catalog.assets) {
     const context = contextOf(asset);
-    const bag = readAssetProperties(
-      context.source.cache,
-      asset,
-      profile.propertyMappings.equipmentTag,
-    );
+    const bag = readAssetProperties(context.source.cache, asset, tagChainOf(asset.sourceId));
     const sourceFile = sourceFileOf(asset, context.fileNames, context.inputFileName);
     sourceFiles.set(asset.assetId, sourceFile);
     subjects.push(resolverSubjectOf(asset, bag, sourceFile));
@@ -472,6 +527,42 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     ...(soleInputFileName === null ? {} : { modelSourceFile: soleInputFileName }),
   });
 
+  // --- 8b. derived attributes (P0-7) -------------------------------------------
+  // After systems, because a `system-field` rung reads what the resolver settled
+  // on; before the snapshot, because a level may group, label or bound on a
+  // derived key and the fold has to see it. The subjects built in stage 2 still
+  // carry every asset's property bag, so no cache is read a second time.
+  const derivedByAsset = new Map<string, ReadonlyArray<DerivedAttributeValue>>();
+  // Asked once rather than per asset: a registry that reads only properties and
+  // the MEL should not pay for 40,000 tag parses to find that out.
+  const derivedAnatomy = derivedNeedsAnatomy(derivedDefinitions) ? anatomy : undefined;
+  // A project that defines none publishes nothing rather than one empty row per
+  // asset: "this project derives no attributes" and "every asset resolved to
+  // nothing" are different statements, and only the second needs 40,000 rows.
+  const derivedAttributes: ReadonlyArray<DerivedAssetAttributes> =
+    derivedDefinitions.length === 0
+      ? []
+      : catalog.assets.map((asset, index): DerivedAssetAttributes => {
+          const subject = subjects[index];
+          const values =
+            subject === undefined
+              ? []
+              : derivedAttributesFor(
+                  derivedDefinitions,
+                  {
+                    asset,
+                    subject,
+                    resolution: resolutionOf(asset.assetId),
+                    anatomy: anatomyResultOf(derivedAnatomy, asset.canonicalTag),
+                  },
+                  mel.join,
+                );
+          if (values.length > 0) {
+            derivedByAsset.set(asset.assetId, values);
+          }
+          return { assetId: asset.assetId, values };
+        });
+
   // --- 9. the resolved snapshot ------------------------------------------------
   // The model tree is the one ladder rung assembled here rather than in
   // `@matchline/relationship-claims`: it is a fact about the extraction caches,
@@ -482,7 +573,12 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     const modelTreeParentId = treeParents.get(asset.assetId);
     return {
       assetId: asset.assetId,
-      attributes: attributesFor(asset, resolutionOf(asset.assetId), input.ssmDisciplineProjection),
+      attributes: attributesFor(
+        asset,
+        resolutionOf(asset.assetId),
+        input.ssmDisciplineProjection,
+        derivedByAsset.get(asset.assetId),
+      ),
       ...(modelTreeParentId === undefined ? {} : { modelTreeParentId }),
     };
   });
@@ -559,6 +655,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     melRows: mel.rows,
     systemCatalog: mel.catalog,
     systems,
+    derivedAttributes,
     identityIndex,
     connectivityReports,
     observations,

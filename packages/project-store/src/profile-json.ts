@@ -7,17 +7,22 @@
  * validates before publication, so `saveProfile` runs this same function on the
  * way in: a profile that cannot be read back is never written.
  */
-import type {
-  AssetFilterConfig,
-  NormalizationStep,
-  PropertyMappings,
-  PropertyRef,
-  SegmentExtractor,
-  SegmentName,
-  SiteProfile,
-  SystemComponentConfig,
-  SystemResolverConfig,
-  TagAnatomyConfig,
+import {
+  MAPPED_PROPERTY_FIELDS,
+  type AssetFilterConfig,
+  type MappedPropertyField,
+  type MappedPropertyInput,
+  type NormalizationStep,
+  type PropertyChain,
+  type PropertyMappingsInput,
+  type PropertyRef,
+  type SegmentExtractor,
+  type SegmentName,
+  type SiteProfile,
+  type SourcePropertyChain,
+  type SystemComponentConfig,
+  type SystemResolverConfig,
+  type TagAnatomyConfig,
 } from '@matchline/domain';
 
 import { ProjectStoreError } from './errors.js';
@@ -78,40 +83,73 @@ function readPropertyRef(value: unknown, field: string): PropertyRef {
   };
 }
 
-function readOptionalPropertyRef(value: unknown, field: string): PropertyRef | undefined {
-  return value === undefined ? undefined : readPropertyRef(value, field);
+function readPropertyChain(value: unknown, field: string): PropertyChain {
+  return requireArrayAt(value, field, fail).map((item, index) =>
+    readPropertyRef(item, `${field}[${index}]`),
+  );
 }
 
-function readPropertyMappings(value: unknown, field: string): PropertyMappings {
+/**
+ * One mapped field, in whichever spelling the stored profile carries (P0-8).
+ *
+ * A record with a `chain` is a P0-8 mapping; anything else is read as the single
+ * `PropertyRef` every profile before P0-8 wrote, and `migratePropertyMappings`
+ * lifts it to a one-rung chain when an engine reads it. This function does NOT
+ * lift: `saveProfile` stores what this returns, and rewriting a site's profile
+ * into a spelling nobody asked for is not a validator's business.
+ *
+ * `bySource` is a list of `{sourceId, chain}` rather than an object, so the
+ * order a profile author wrote survives and two sources cannot collide onto one
+ * JSON key. The engine's own shape is a map; `migrateMappedProperty` converts.
+ */
+function readMappedProperty(value: unknown, field: string): MappedPropertyInput {
   const record = requireRecordAt(value, field, fail);
-  const description = readOptionalPropertyRef(record['description'], `${field}.description`);
-  const equipmentType = readOptionalPropertyRef(record['equipmentType'], `${field}.equipmentType`);
-  const building = readOptionalPropertyRef(record['building'], `${field}.building`);
-  const nativeDiscipline = readOptionalPropertyRef(
-    record['nativeDiscipline'],
-    `${field}.nativeDiscipline`,
-  );
+  if (record['chain'] === undefined) {
+    return readPropertyRef(value, field);
+  }
 
-  const mappings: {
-    equipmentTag: PropertyRef;
-    description?: PropertyRef;
-    equipmentType?: PropertyRef;
-    building?: PropertyRef;
-    nativeDiscipline?: PropertyRef;
-  } = { equipmentTag: readPropertyRef(record['equipmentTag'], `${field}.equipmentTag`) };
-  if (description !== undefined) {
-    mappings.description = description;
+  const chain = readPropertyChain(record['chain'], `${field}.chain`);
+  const overrides = record['bySource'];
+  if (overrides === undefined) {
+    return { chain };
   }
-  if (equipmentType !== undefined) {
-    mappings.equipmentType = equipmentType;
+  const bySource: ReadonlyArray<SourcePropertyChain> = requireArrayAt(
+    overrides,
+    `${field}.bySource`,
+    fail,
+  ).map((item, index) => {
+    const at = `${field}.bySource[${index}]`;
+    const entry = requireRecordAt(item, at, fail);
+    return {
+      sourceId: requireFilledStringAt(entry['sourceId'], `${at}.sourceId`, fail),
+      chain: readPropertyChain(entry['chain'], `${at}.chain`),
+    };
+  });
+  return { chain, bySource };
+}
+
+function readPropertyMappings(value: unknown, field: string): PropertyMappingsInput {
+  const record = requireRecordAt(value, field, fail);
+
+  const mappings: { -readonly [Field in MappedPropertyField]?: MappedPropertyInput } = {};
+  // Walked from the domain's own list rather than restated field by field: a
+  // mapping this function forgot would be validated away on the way in and
+  // silently absent from every profile the store wrote back out.
+  for (const key of MAPPED_PROPERTY_FIELDS) {
+    const stored = record[key];
+    if (stored !== undefined) {
+      mappings[key] = readMappedProperty(stored, `${field}.${key}`);
+    }
   }
-  if (building !== undefined) {
-    mappings.building = building;
-  }
-  if (nativeDiscipline !== undefined) {
-    mappings.nativeDiscipline = nativeDiscipline;
-  }
-  return mappings;
+
+  return {
+    ...mappings,
+    // The only mapping with no default: without a tag there is no identity, so
+    // its absence is a failure rather than an omission.
+    equipmentTag:
+      mappings.equipmentTag ??
+      readMappedProperty(record['equipmentTag'], `${field}.equipmentTag`),
+  };
 }
 
 function optionalStringArray(
@@ -359,7 +397,7 @@ export function validateSiteProfile(value: unknown): SiteProfile {
     profileId: string;
     name: string;
     version: number;
-    propertyMappings: PropertyMappings;
+    propertyMappings: PropertyMappingsInput;
     assetFilters: AssetFilterConfig;
     tagAnatomy?: TagAnatomyConfig;
     systemResolver?: SystemResolverConfig;

@@ -23,6 +23,17 @@ export type AssetCatalogConfigReason =
     }
   | {
       readonly kind: 'blank-source-id';
+    }
+  /**
+   * A `filename-pattern` assignment rule whose `match` does not carry exactly
+   * one `*` (P0-8). Refused rather than run: zero stars makes the rule an exact
+   * match in disguise, and two make `$1` ambiguous.
+   */
+  | {
+      readonly kind: 'invalid-assignment-pattern';
+      /** Position in the rule list, so a profile author can find the row. */
+      readonly ruleIndex: number;
+      readonly pattern: string;
     };
 
 /** Thrown by `buildAssetCatalog` when the inputs do not fit the universe. */
@@ -50,6 +61,11 @@ export function describeAssetCatalogConfigReason(reason: AssetCatalogConfigReaso
       return `two model sources share the id '${reason.sourceId}'; ids identify sources`;
     case 'blank-source-id':
       return 'a model source has a blank id; ids identify sources';
+    case 'invalid-assignment-pattern':
+      return (
+        `assignment rule ${String(reason.ruleIndex)} matches on '${reason.pattern}', ` +
+        "which is not a filename pattern: exactly one '*' is required, and it is the capture"
+      );
     default: {
       const exhaustive: never = reason;
       throw new Error(`unhandled AssetCatalogConfigReason: ${JSON.stringify(exhaustive)}`);

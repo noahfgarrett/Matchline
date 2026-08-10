@@ -16,16 +16,20 @@
  *    section would eventually hold.
  */
 import type {
+  AttributeResolverKind,
   ConnectivityObservation,
+  DerivedAttributeDefinition,
   HierarchyConfigInput,
   ManualRelationshipOverride,
   ParentLadderConfig,
   PropertyRef,
+  Provenance,
   ResolvedSnapshot,
   ReviewItem,
   RoleGraphConfig,
   SiteProfile,
   SnapshotStats,
+  SourceAssignmentRule,
   SourceAssignments,
 } from '@matchline/domain';
 import type { AssetCatalog, UniversePropertyCatalogEntry } from '@matchline/asset-catalog';
@@ -63,6 +67,30 @@ import type {
  * {@link ssmDisciplineOf}.
  */
 export type SsmDisciplineProjection = ReadonlyMap<string, string>;
+
+/**
+ * One derived attribute, resolved for one asset (P0-7).
+ *
+ * Present only when a rung answered: there is no entry meaning "resolved to
+ * nothing", because missing has to stay missing all the way to the boundary
+ * fold. `rungIndex` and `kind` say which rung answered, so a value that reaches
+ * a register can be traced to the line of the profile that produced it without
+ * re-running the chain.
+ */
+export interface DerivedAttributeValue {
+  readonly attributeId: string;
+  readonly value: string;
+  /** Position in the definition's `resolverChain`, counted from 0. */
+  readonly rungIndex: number;
+  readonly kind: AttributeResolverKind;
+  readonly provenance: Provenance;
+}
+
+/** Every derived attribute one asset resolved, in definition order. */
+export interface DerivedAssetAttributes {
+  readonly assetId: string;
+  readonly values: ReadonlyArray<DerivedAttributeValue>;
+}
 
 /** One connectivity workbook to import (EasyPower / Cable Schedule / PMD). */
 export interface ConnectivityWorkbookInput {
@@ -214,6 +242,28 @@ export interface CompileProjectInput {
    * authoring id.
    */
   readonly stableIdProperty?: PropertyRef;
+  /**
+   * The site's own attribute registry (P0-7).
+   *
+   * Each definition is evaluated once per asset after systems resolve, and its
+   * `attributeId` joins the level-attribute namespace: a hierarchy level may
+   * name one as its key, its display or its boundary comparison, exactly as it
+   * names a built-in. Absent means the site defined none, which is the state
+   * every project starts in.
+   *
+   * @throws DerivedAttributeConfigError when an id is malformed, repeated, or
+   * collides with one of the compiler's own `ATTRIBUTE_KEYS`.
+   */
+  readonly derivedAttributes?: ReadonlyArray<DerivedAttributeDefinition>;
+  /**
+   * Profile-level assignment rules (P0-8).
+   *
+   * The three weaker tiers of the assignment precedence -- source model, logical
+   * source, confirmed filename pattern -- as a portable list a profile carries.
+   * The strongest tier is not here and never could be: an object property is
+   * what the model says, and the model outranks what the project says about it.
+   */
+  readonly sourceAssignmentRules?: ReadonlyArray<SourceAssignmentRule>;
 }
 
 /** The canonical generated MEL, as rows and as bytes. */
@@ -338,6 +388,21 @@ export interface CompiledProject {
   readonly systemCatalog: SystemCatalog;
   /** Stage 4: per-asset system resolution, with every losing claim retained. */
   readonly systems: ResolveSystemsResult;
+  /**
+   * Stage 8b: every derived attribute this project defines, resolved per asset
+   * in catalog order (P0-7).
+   *
+   * One entry per asset in catalog order, with an empty `values` for an asset no
+   * chain answered for -- which is a different statement from the asset being
+   * absent. Published rather than folded away into `compileSubjects.attributes`
+   * alone: the Composer shows which rung answered, and an export has to be able
+   * to say where a site-defined column came from.
+   *
+   * Empty in full when the project defines no derived attributes: "this project
+   * derives none" and "every asset resolved to nothing" are different answers,
+   * and only the second needs a row per asset.
+   */
+  readonly derivedAttributes: ReadonlyArray<DerivedAssetAttributes>;
   /** Stage 5: the reusable identity lookup for foreign tag spellings. */
   readonly identityIndex: IdentityIndex;
   /** Stage 6: one report per supplied connectivity workbook, in input order. */

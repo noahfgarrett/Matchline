@@ -546,6 +546,7 @@ test('migrating a v1 project backs it up and keeps every row', () => {
     JSON.stringify({ applied_at: MIGRATED_AT, version: 3 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 4 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 5 }),
+    JSON.stringify({ applied_at: MIGRATED_AT, version: 6 }),
   ]);
 
   // The backup is still the v1 file, which is the whole point of taking it.
@@ -675,6 +676,7 @@ test('migrating a v2 project widens both CHECKs and keeps every row', () => {
     JSON.stringify({ applied_at: MIGRATED_AT, version: 3 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 4 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 5 }),
+    JSON.stringify({ applied_at: MIGRATED_AT, version: 6 }),
   ]);
 
   // The backup is still the v2 file, which is the whole point of taking it.
@@ -992,6 +994,7 @@ test('migrating a v3 project gives every source an id and keeps every row', () =
     JSON.stringify({ applied_at: CREATED_AT, version: 3 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 4 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 5 }),
+    JSON.stringify({ applied_at: MIGRATED_AT, version: 6 }),
   ]);
 
   // The backup is still the v3 file, which is the whole point of taking it.
@@ -1098,11 +1101,11 @@ test('a v3 project with no sources and no compiles migrates just as well', () =>
   }
 });
 
-test('a project created today is already v5 and needs no migration', () => {
-  const path = temp.file('fresh-v5.matchline');
+test('a project created today is already current and needs no migration', () => {
+  const path = temp.file('fresh-current.matchline');
   const store = createProject(path, { name: 'Dragon', now: frozenClock(CREATED_AT) });
   try {
-    assert.equal(store.meta().schemaVersion, 5);
+    assert.equal(store.meta().schemaVersion, PROJECT_SCHEMA_VERSION);
     assert.equal(store.getLedger(), undefined, 'and its ledger table starts empty');
     store.upsertSourceV4({
       sourceId: 'model:dragon.nwd',
@@ -1118,6 +1121,15 @@ test('a project created today is already v5 and needs no migration', () => {
     store.saveLearnedRules('wbs', { version: 1 });
     assert.deepEqual(store.getConfig('extoTemplate').value, { version: 1 });
     assert.deepEqual(store.getLearnedRules('wbs').rules, { version: 1 });
+    // The two sections v6 widened the CHECK for (P0-7, P0-8).
+    store.saveConfig('derivedAttributes', [{ attributeId: 'area', resolverChain: [] }]);
+    store.saveConfig('sourceAssignmentRules', [{ scope: 'source-model', match: 'A.nwc' }]);
+    assert.deepEqual(store.getConfig('derivedAttributes').value, [
+      { attributeId: 'area', resolverChain: [] },
+    ]);
+    assert.deepEqual(store.getConfig('sourceAssignmentRules').value, [
+      { scope: 'source-model', match: 'A.nwc' },
+    ]);
   } finally {
     store.close();
   }
@@ -1316,6 +1328,7 @@ test('migrating a v4 project adds an empty ledger and moves nothing else', () =>
   assert.deepEqual(dumpTables(path, ['migrations']).migrations, [
     JSON.stringify({ applied_at: CREATED_AT, version: 4 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 5 }),
+    JSON.stringify({ applied_at: MIGRATED_AT, version: 6 }),
   ]);
 
   // The backup is still the v4 file, which is the whole point of taking it.
@@ -1389,6 +1402,320 @@ test('a current file whose version was walked back migrates without a second led
     1,
     'one ledger table, not two',
   );
+});
+
+/* ------------------------------------------------------- v5 → v6 */
+
+/**
+ * `PROJECT_SCHEMA_SQL` as **v5** shipped, frozen.
+ *
+ * Copied out of `schema.ts` before v6 edited it. Its `config` CHECK lists the
+ * six sections v3 left it with and NOT `derivedAttributes` or
+ * `sourceAssignmentRules`, which is the whole point of the snapshot: a v6 step
+ * that failed to widen the CHECK would still pass against a file built from
+ * today's DDL, and fails here. A test below asserts the absence of both words in
+ * this text, so the fixture cannot be quietly modernized.
+ */
+const V5_SCHEMA_SQL = `
+CREATE TABLE meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE sources (
+  source_id            TEXT PRIMARY KEY,
+  role                 TEXT NOT NULL CHECK (role IN (
+                         'model', 'easypower', 'cable-schedule', 'pmd', 'mel', 'p6', 'prior-ssm')),
+  logical_name         TEXT NOT NULL,
+  raw_file_name        TEXT NOT NULL,
+  raw_sha256           TEXT NOT NULL,
+  raw_byte_size        INTEGER NOT NULL CHECK (raw_byte_size >= 0),
+  derived_cache_sha256 TEXT,
+  added_at             TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE profile (
+  revision     INTEGER PRIMARY KEY CHECK (revision > 0),
+  profile_json TEXT NOT NULL,
+  note         TEXT,
+  saved_at     TEXT NOT NULL
+);
+
+CREATE TABLE learned (
+  id         INTEGER PRIMARY KEY,
+  kind       TEXT NOT NULL CHECK (kind IN ('nesting', 'item-master', 'wbs')),
+  rules_json TEXT NOT NULL,
+  saved_at   TEXT NOT NULL
+);
+CREATE INDEX idx_learned_kind ON learned(kind, id);
+
+CREATE TABLE overrides (
+  kind         TEXT NOT NULL CHECK (kind IN ('system', 'relationship')),
+  asset_key    TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  updated_at   TEXT NOT NULL,
+  PRIMARY KEY (kind, asset_key)
+) WITHOUT ROWID;
+
+CREATE TABLE compiles (
+  id                INTEGER PRIMARY KEY,
+  input_hashes_json TEXT NOT NULL,
+  profile_revision  INTEGER NOT NULL REFERENCES profile(revision),
+  stats_json        TEXT NOT NULL,
+  started_at        TEXT NOT NULL,
+  finished_at       TEXT NOT NULL,
+  recorded_at       TEXT NOT NULL
+);
+
+CREATE TABLE snapshots (
+  slot          INTEGER PRIMARY KEY CHECK (slot = 0),
+  compile_id    INTEGER NOT NULL REFERENCES compiles(id),
+  snapshot_json TEXT NOT NULL,
+  saved_at      TEXT NOT NULL
+);
+
+CREATE TABLE decisions (
+  id         INTEGER PRIMARY KEY,
+  review_key TEXT NOT NULL,
+  decision   TEXT NOT NULL CHECK (decision IN ('accepted', 'rejected', 'deferred')),
+  note       TEXT,
+  decided_at TEXT NOT NULL
+);
+CREATE INDEX idx_decisions_key ON decisions(review_key, id);
+
+CREATE TABLE migrations (
+  version    INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL
+);
+
+CREATE TABLE config (
+  key         TEXT PRIMARY KEY CHECK (key IN (
+                'hierarchy', 'roleGraph', 'ladder', 'ssmDisciplineProjection',
+                'parentTagProperty', 'extoTemplate')),
+  config_json TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE ledger (
+  slot        INTEGER PRIMARY KEY CHECK (slot = 0),
+  compile_id  INTEGER NOT NULL REFERENCES compiles(id),
+  ledger_json TEXT NOT NULL,
+  saved_at    TEXT NOT NULL
+);
+`;
+
+/**
+ * Writes a v5 project file with something in every table, from the frozen DDL.
+ *
+ * The config rows are the point of this fixture: v6 rebuilds that table to widen
+ * its CHECK, and a rebuild that dropped a row would take a site's hierarchy with
+ * it.
+ */
+function writeV5Project(name) {
+  const path = temp.file(name);
+  const db = new DatabaseSync(path);
+  try {
+    db.exec('PRAGMA foreign_keys = ON');
+    db.exec(V5_SCHEMA_SQL);
+
+    const meta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)');
+    meta.run('schema_version', '5');
+    meta.run('app_version', '0.8.1');
+    meta.run('project_name', 'Dragon');
+    meta.run('created_at', CREATED_AT);
+    meta.run('modified_at', CREATED_AT);
+    db.prepare('INSERT INTO migrations (version, applied_at) VALUES (?, ?)').run(5, CREATED_AT);
+
+    db.prepare(
+      `INSERT INTO sources
+         (source_id, role, logical_name, raw_file_name, raw_sha256, raw_byte_size,
+          derived_cache_sha256, added_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'model:dragon-coordination.nwd',
+      'model',
+      'Dragon Coordination',
+      'Dragon-Coordination.nwd',
+      'a'.repeat(64),
+      104857600,
+      'a'.repeat(64),
+      CREATED_AT,
+    );
+
+    db.prepare(
+      'INSERT INTO profile (revision, profile_json, note, saved_at) VALUES (?, ?, ?, ?)',
+    ).run(1, JSON.stringify(dragonProfile()), 'initial import', CREATED_AT);
+
+    db.prepare('INSERT INTO learned (id, kind, rules_json, saved_at) VALUES (?, ?, ?, ?)').run(
+      3,
+      'nesting',
+      JSON.stringify({ version: 1, classification: [] }),
+      CREATED_AT,
+    );
+
+    const config = db.prepare(
+      'INSERT INTO config (key, config_json, updated_at) VALUES (?, ?, ?)',
+    );
+    config.run('ladder', JSON.stringify({ tiers: ['manual'] }), CREATED_AT);
+    config.run(
+      'hierarchy',
+      JSON.stringify({ levels: [{ levelId: 'building', attributeKey: 'building' }] }),
+      CREATED_AT,
+    );
+    config.run('extoTemplate', JSON.stringify({ version: 1, headers: ['UPN'] }), CREATED_AT);
+
+    db.prepare(
+      'INSERT INTO overrides (kind, asset_key, payload_json, updated_at) VALUES (?, ?, ?, ?)',
+    ).run('system', 'MAH001-10-01', JSON.stringify({ systemKey: '001' }), CREATED_AT);
+
+    db.prepare(
+      `INSERT INTO compiles
+         (id, input_hashes_json, profile_revision, stats_json, started_at, finished_at, recorded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      1,
+      JSON.stringify({ 'model:dragon-coordination.nwd': 'a'.repeat(64) }),
+      1,
+      JSON.stringify({ nodeCount: 34 }),
+      '2026-01-15T10:00:00.000Z',
+      '2026-01-15T10:00:42.000Z',
+      CREATED_AT,
+    );
+
+    db.prepare(
+      'INSERT INTO snapshots (slot, compile_id, snapshot_json, saved_at) VALUES (0, ?, ?, ?)',
+    ).run(1, JSON.stringify({ nodes: [], reviewItems: [], stats: { nodeCount: 34 } }), CREATED_AT);
+
+    db.prepare(
+      'INSERT INTO ledger (slot, compile_id, ledger_json, saved_at) VALUES (0, ?, ?, ?)',
+    ).run(1, JSON.stringify({ formatVersion: 1, entries: [], nextOrdinal: 1 }), CREATED_AT);
+
+    db.prepare(
+      'INSERT INTO decisions (review_key, decision, note, decided_at) VALUES (?, ?, ?, ?)',
+    ).run('missing-boundary:tag:MAH001-10-01', 'accepted', 'walked it down on site', CREATED_AT);
+  } finally {
+    db.close();
+  }
+  return path;
+}
+
+test('the frozen v5 fixture really is pre-v6: its config CHECK names neither new key', () => {
+  // The guard on every assertion below, as the v3 and v4 fixtures have their own.
+  assert.equal(V5_SCHEMA_SQL.includes('derivedAttributes'), false);
+  assert.equal(V5_SCHEMA_SQL.includes('sourceAssignmentRules'), false);
+
+  const path = writeV5Project('frozen-v5.matchline');
+  assert.throws(
+    () =>
+      rawExec(
+        path,
+        "INSERT INTO config (key, config_json, updated_at) VALUES ('derivedAttributes', '[]', '')",
+      ),
+    'a v5 file refuses the section outright — that is what v6 has to widen',
+  );
+});
+
+test('a v5 project is refused, by version, until migration is asked for', () => {
+  const path = writeV5Project('refused-v5.matchline');
+
+  const failure = reason(() => openProject(path));
+  assert.equal(failure.kind, 'migration-required');
+  assert.equal(failure.found, 5);
+  assert.equal(failure.supported, PROJECT_SCHEMA_VERSION);
+  assert.equal(existsSync(`${path}.backup-5`), false, 'a refusal touches nothing');
+});
+
+test('migrating a v5 project widens the config CHECK and keeps every row', () => {
+  const path = writeV5Project('migrate-v5.matchline');
+  const before = dumpTables(path, [
+    'sources',
+    'profile',
+    'learned',
+    'overrides',
+    'compiles',
+    'snapshots',
+    'decisions',
+    'ledger',
+    'config',
+  ]);
+
+  const store = openProject(path, { migrate: true, now: frozenClock(MIGRATED_AT) });
+  try {
+    assert.deepEqual(store.migration, {
+      fromVersion: 5,
+      toVersion: PROJECT_SCHEMA_VERSION,
+      backupPath: `${path}.backup-5`,
+    });
+    assert.ok(existsSync(`${path}.backup-5`), 'the original was copied before anything ran');
+    assert.equal(store.meta().schemaVersion, PROJECT_SCHEMA_VERSION);
+
+    // The three sections the v5 file carried are still there, unchanged.
+    assert.deepEqual(store.getConfig('ladder').value, { tiers: ['manual'] });
+    assert.deepEqual(store.getConfig('extoTemplate').value, { version: 1, headers: ['UPN'] });
+    assert.deepEqual(
+      store.listConfig().map((entry) => entry.key),
+      ['extoTemplate', 'hierarchy', 'ladder'],
+      'and nothing was invented: the two new sections have no row until one is written',
+    );
+
+    // Which is the whole point of the widening (P0-7, P0-8).
+    store.saveConfig('derivedAttributes', [
+      { attributeId: 'area', displayName: 'Area', resolverChain: [] },
+    ]);
+    store.saveConfig('sourceAssignmentRules', [
+      { scope: 'filename-pattern', match: 'Dragon-*.nwc', assign: { nativeDiscipline: '$1' } },
+    ]);
+    assert.deepEqual(store.getConfig('derivedAttributes').value, [
+      { attributeId: 'area', displayName: 'Area', resolverChain: [] },
+    ]);
+    assert.deepEqual(store.getConfig('sourceAssignmentRules').value, [
+      { scope: 'filename-pattern', match: 'Dragon-*.nwc', assign: { nativeDiscipline: '$1' } },
+    ]);
+  } finally {
+    store.close();
+  }
+
+  const after_ = dumpTables(path, [
+    'sources',
+    'profile',
+    'learned',
+    'overrides',
+    'compiles',
+    'snapshots',
+    'decisions',
+    'ledger',
+  ]);
+  assert.deepEqual(
+    after_,
+    {
+      sources: before.sources,
+      profile: before.profile,
+      learned: before.learned,
+      overrides: before.overrides,
+      compiles: before.compiles,
+      snapshots: before.snapshots,
+      decisions: before.decisions,
+      ledger: before.ledger,
+    },
+    'v6 rebuilds only `config`, so every other table is byte-for-byte what it was',
+  );
+
+  assert.deepEqual(dumpTables(path, ['migrations']).migrations, [
+    JSON.stringify({ applied_at: CREATED_AT, version: 5 }),
+    JSON.stringify({ applied_at: MIGRATED_AT, version: 6 }),
+  ]);
+});
+
+test('a migrated v5 project reopens as current, with no second backup', () => {
+  const path = writeV5Project('reopen-v5.matchline');
+  openProject(path, { migrate: true, now: frozenClock(MIGRATED_AT) }).close();
+
+  const store = openProject(path, { migrate: true });
+  try {
+    assert.equal(store.migration, null, 'nothing to do the second time');
+  } finally {
+    store.close();
+  }
 });
 
 /* ------------------------------------------------------- the config table */

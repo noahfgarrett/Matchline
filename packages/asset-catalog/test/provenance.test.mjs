@@ -58,7 +58,14 @@ test('field provenance is a domain Provenance addressing the model object', () =
     sourceRef: { kind: 'model-object', objectId: '3' },
     propertyOrColumn: 'Dragon Data > Building',
     rule: 'asset-catalog:building',
+    // P0-8: which rung of the field's chain answered, counted both ways --
+    // from 1 for a reader (`fallbackRung`, the engine's own vocabulary) and from
+    // 0 for a caller indexing the chain. A mapping written as a single property
+    // is a one-rung chain, so rung 0 is the only rung there is.
+    fallbackRung: 1,
     property: { category: 'Dragon Data', name: 'Building' },
+    rungIndex: 0,
+    sourceSpecificChain: false,
     objectId: 3,
   });
   assert.equal(asset.building, 'D1');

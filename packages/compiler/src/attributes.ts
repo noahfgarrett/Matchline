@@ -31,6 +31,14 @@
  * and is treated as unstated -- which is what `missingValuePolicy` is for, and
  * is far safer than inventing a bucket for a misspelled key.
  *
+ * ## Plus whatever the site derived
+ *
+ * A project's own `DerivedAttributeDefinition`s (P0-7) land in the same map
+ * under their `attributeId`, so a level addresses one exactly as it addresses a
+ * built-in. They cannot shadow the table above: `validateDerivedAttributes`
+ * refuses a definition whose id is one of {@link ATTRIBUTE_KEYS} before any
+ * asset is evaluated, which is why merging them here needs no precedence rule.
+ *
  * ## Explicit values only
  *
  * An absent or blank source field puts no entry in the map (ENGINE.md binding
@@ -41,7 +49,7 @@
 import type { SystemResolution } from '@matchline/domain';
 import type { ModelAsset } from '@matchline/asset-catalog';
 
-import type { SsmDisciplineProjection } from './types.js';
+import type { DerivedAttributeValue, SsmDisciplineProjection } from './types.js';
 
 /** Every attribute key a configured hierarchy level may address. */
 export const ATTRIBUTE_KEYS = [
@@ -93,7 +101,7 @@ export function ssmDisciplineOf(
 }
 
 /** Adds an entry only when the value says something. */
-function put(attributes: Map<string, string>, key: AttributeKey, value: string | undefined): void {
+function put(attributes: Map<string, string>, key: string, value: string | undefined): void {
   if (value === undefined) {
     return;
   }
@@ -106,16 +114,22 @@ function put(attributes: Map<string, string>, key: AttributeKey, value: string |
 
 /**
  * The level attributes for one asset: catalog fields, the projected discipline,
- * and whatever the System Resolver settled on.
+ * whatever the System Resolver settled on, and whatever the site derived.
  *
  * `resolution` is `null` for an asset no resolver rung could place. Its three
  * system keys are then simply absent, which is the honest reading -- an
  * unresolved system is not the empty system.
+ *
+ * `derived` is what `derivedAttributesFor` resolved for this asset (P0-7).
+ * Every entry there already yielded a non-blank value, so nothing is filtered
+ * here; a definition that yielded nothing produced no entry, and its key stays
+ * off the map exactly like an unmapped built-in.
  */
 export function attributesFor(
   asset: ModelAsset,
   resolution: SystemResolution | null,
   projection?: SsmDisciplineProjection,
+  derived: ReadonlyArray<DerivedAttributeValue> = [],
 ): ReadonlyMap<string, string> {
   const attributes = new Map<string, string>();
 
@@ -130,6 +144,10 @@ export function attributesFor(
     put(attributes, 'systemKey', resolution.systemKey);
     put(attributes, 'systemDescription', resolution.systemDescription);
     put(attributes, 'systemLabel', resolution.systemLabel);
+  }
+
+  for (const value of derived) {
+    put(attributes, value.attributeId, value.value);
   }
 
   return attributes;

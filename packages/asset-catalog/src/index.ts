@@ -13,7 +13,7 @@ export type {
 export { AssetCatalogConfigError, describeAssetCatalogConfigReason } from './errors.js';
 export type { AssetCatalogConfigReason } from './errors.js';
 
-export { isTagAccepted } from './patterns.js';
+export { applyCapture, captureFromPattern, isCapturePattern, isTagAccepted } from './patterns.js';
 
 export { FILTER_STAGES } from './types.js';
 export type {

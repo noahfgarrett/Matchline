@@ -44,10 +44,17 @@
  * component -- and then the same asset would carry a tag through the seam and
  * an empty `canonicalTag` on `ModelAsset`. A resolver rung addressing the tag
  * property, or a Studio preview, would be reading a tag the catalog says the
- * asset does not have. So the seam special-cases that one `PropertyRef` and
- * reads it the way the catalog does.
+ * asset does not have. So the seam special-cases the tag mapping and reads it
+ * the way the catalog does.
+ *
+ * Since P0-8 the tag mapping is a CHAIN with optional per-source overrides, so
+ * the special case covers every rung of the chain the asset's own source reads
+ * through -- not one pair. A rung the catalog would have read as a tag must not
+ * reach the bag off an absorbed component either, or the same disagreement
+ * comes back one rung down.
  */
-import type { PropertyRef } from '@matchline/domain';
+import { chainFor, migrateMappedProperty } from '@matchline/domain';
+import type { MappedPropertyInput, PropertyChain, PropertyRef } from '@matchline/domain';
 import type { ModelAsset } from '@matchline/asset-catalog';
 import type { ExtractionCache, SourceModelNode } from '@matchline/model-schema';
 import type { ResolverSubject } from '@matchline/system-resolver';
@@ -97,21 +104,21 @@ function meaningful(value: string | null): string | null {
  * order. Pure with respect to the cache: nothing is written, and the same cache
  * and asset always produce the same bag.
  *
- * `equipmentTag` is the profile's tag mapping, and it is the one pair read off
- * the representative object only -- see this file's header for why. It is
- * required rather than optional: a caller that forgets it would silently get
- * the reading that disagrees with the catalog, which is the bug this parameter
- * exists to make impossible.
+ * `equipmentTagChain` is the profile's tag mapping as THIS asset's source reads
+ * it, and every rung of it is read off the representative object only -- see
+ * this file's header for why. It is required rather than optional: a caller that
+ * forgets it would silently get the reading that disagrees with the catalog,
+ * which is the bug this parameter exists to make impossible.
  */
 export function readAssetProperties(
   cache: ExtractionCache,
   asset: ModelAsset,
-  equipmentTag: PropertyRef,
+  equipmentTagChain: PropertyChain,
 ): AssetPropertyBag {
   const properties = new Map<string, Map<string, string>>();
   const ownerObjectIds = new Map<string, number>();
   const representative = asset.objectIds[0];
-  const tagKey = propertyKey(equipmentTag);
+  const tagKeys = new Set(equipmentTagChain.map(propertyKey));
 
   for (const objectId of asset.objectIds) {
     for (const property of cache.propertiesOf(objectId)) {
@@ -122,7 +129,7 @@ export function readAssetProperties(
       const key = propertyKey({ category: property.category, name: property.name });
       // An absorbed component's tag is a part's tag; it never becomes the
       // whole's, exactly as `asset-catalog` reads it.
-      if (key === tagKey && objectId !== representative) {
+      if (objectId !== representative && tagKeys.has(key)) {
         continue;
       }
       let byName = properties.get(property.category);
@@ -155,6 +162,12 @@ export function readAssetProperties(
  * the wrong cache would not fail -- it would read *another asset's* properties
  * and present them as this one's.
  *
+ * `equipmentTag` is taken in whichever spelling the caller holds -- a bare
+ * `PropertyRef` from a profile written before P0-8, or a chain with per-source
+ * overrides -- and the chain the ASSET's own source reads through is resolved
+ * here. A caller that resolved it against another source would special-case the
+ * wrong pairs and leak an absorbed component's tag into the bag.
+ *
  * @throws Error when no source in the universe answers to the asset's
  * `sourceId`, which is the caller pairing an asset with a universe it did not
  * come from.
@@ -162,7 +175,7 @@ export function readAssetProperties(
 export function subjectPropertiesFor(
   sources: ReadonlyArray<ModelSourceInput>,
   asset: ModelAsset,
-  equipmentTag: PropertyRef,
+  equipmentTag: MappedPropertyInput,
 ): SubjectProperties {
   const source = sources.find((candidate) => candidate.sourceId === asset.sourceId);
   if (source === undefined) {
@@ -171,7 +184,8 @@ export function subjectPropertiesFor(
         `${JSON.stringify(asset.assetId)}'s properties cannot be read`,
     );
   }
-  return readAssetProperties(source.cache, asset, equipmentTag).properties;
+  const chain = chainFor(migrateMappedProperty(equipmentTag), asset.sourceId);
+  return readAssetProperties(source.cache, asset, chain).properties;
 }
 
 /** One property as the bag holds it, with the object that supplied it. */

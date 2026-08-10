@@ -61,3 +61,59 @@ export function isTagAccepted(tag: string, patterns: ReadonlyArray<string> | und
   }
   return patterns.some((pattern) => matchesPattern(tag, pattern));
 }
+
+/**
+ * Whether a filename-pattern rule's `match` is one this package can run (P0-8).
+ *
+ * Exactly one `*`. Zero would make the rule an exact match wearing a pattern's
+ * clothes, and two would make `$1` ambiguous -- a rule whose author cannot tell
+ * which run of characters they captured is a rule that assigns the wrong
+ * building to a whole file.
+ */
+export function isCapturePattern(pattern: string): boolean {
+  return pattern.indexOf('*') !== -1 && pattern.indexOf('*') === pattern.lastIndexOf('*');
+}
+
+/**
+ * Matches `value` against a one-star pattern and returns what the star covered,
+ * or `null` when it does not match.
+ *
+ * The capture may be empty: `*` stands for any run of characters *including
+ * none*, exactly as it does in {@link isTagAccepted}, and a rule whose `$1`
+ * expands to nothing states a blank value, which the caller drops as it drops
+ * every other blank.
+ *
+ * Case-sensitive, and no regular expression anywhere near it -- for the same
+ * reasons this file's header gives.
+ *
+ * @throws Error when `pattern` does not carry exactly one `*`. Callers validate
+ * with {@link isCapturePattern} first and report a typed configuration error;
+ * this throw is the guard on that contract, not a path a profile can reach.
+ */
+export function captureFromPattern(value: string, pattern: string): string | null {
+  const star = pattern.indexOf('*');
+  if (!isCapturePattern(pattern)) {
+    throw new Error(`capture pattern ${JSON.stringify(pattern)} needs exactly one '*'`);
+  }
+  const prefix = pattern.slice(0, star);
+  const suffix = pattern.slice(star + 1);
+  if (prefix.length + suffix.length > value.length) {
+    return null;
+  }
+  if (!value.startsWith(prefix) || !value.endsWith(suffix)) {
+    return null;
+  }
+  return value.slice(prefix.length, value.length - suffix.length);
+}
+
+/**
+ * Substitutes a pattern's capture into an assigned value.
+ *
+ * `$1` is the only thing that means anything; every other character, `$`
+ * included, is literal. One placeholder and no escape vocabulary, because a
+ * profile author reading `$1` should not have to know a second rule to predict
+ * what they get.
+ */
+export function applyCapture(value: string, capture: string): string {
+  return value.replaceAll('$1', capture);
+}

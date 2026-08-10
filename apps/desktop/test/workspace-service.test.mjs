@@ -1094,6 +1094,26 @@ const FULL_CONFIG_PATCH = {
   ladder: { tiers: ['manual', 'flow-family'] },
   ssmDisciplineProjection: [{ from: 'I&C', to: 'Electrical' }],
   parentTagProperty: { category: 'Dragon Data', name: 'Parent Tag' },
+  // The two sections schema v6 added: the site's own attribute registry (P0-7)
+  // and its assignment rules (P0-8). Both travel with the project file for the
+  // same reason the five above do.
+  derivedAttributes: [
+    {
+      attributeId: 'turnover-package',
+      displayName: 'Turnover Package',
+      resolverChain: [
+        { kind: 'model-property', chain: [{ category: 'Dragon Data', name: 'Package' }] },
+        { kind: 'tag-segment', segment: 'unit' },
+      ],
+    },
+  ],
+  sourceAssignmentRules: [
+    {
+      scope: 'filename-pattern',
+      match: 'Dragon-*.nwc',
+      assign: { building: '', nativeDiscipline: '$1', custom: [{ key: 'zone', value: 'Z-$1' }] },
+    },
+  ],
 };
 
 /**
@@ -1136,6 +1156,46 @@ test('a moved project file carries its whole configuration with it', () => {
     assert.deepEqual(reader.config(), configured, 'every section came back off the file');
   } finally {
     reader.close();
+  }
+});
+
+/**
+ * P0-7: "Composer selects them."
+ *
+ * A derived attribute a level cannot be pointed at is a registry nobody can
+ * use, so the Composer's menu has to be the built-in keys AND whatever the
+ * project defines — in one list, addressable the same way.
+ */
+test('the level-attribute menu offers the project’s derived attributes beside the built-ins', () => {
+  const service = newService();
+  try {
+    service.create(join(workDir, 'Derived.matchline'), 'Derived');
+
+    const builtInOnly = service.attributeChoices();
+    assert.equal(
+      builtInOnly.some((choice) => choice.attributeKey === 'turnover-package'),
+      false,
+      'a new project defines none',
+    );
+
+    service.updateConfig({ derivedAttributes: FULL_CONFIG_PATCH.derivedAttributes });
+    const choices = service.attributeChoices();
+    assert.equal(
+      choices.length,
+      builtInOnly.length + 1,
+      'the built-ins are still all there — a derived attribute adds, it never replaces',
+    );
+
+    const derived = choices.at(-1);
+    assert.equal(derived.attributeKey, 'turnover-package');
+    assert.equal(derived.label, 'Turnover Package', 'the display name is what a person reads');
+    assert.ok(
+      derived.example.includes('Dragon Data > Package'),
+      'and the menu says where it comes from, not merely that it is derived',
+    );
+    assert.equal(derived.distinctValueCount, null, 'nothing compiled yet, so no count');
+  } finally {
+    service.close();
   }
 });
 
@@ -1208,10 +1268,16 @@ test('a config left in the app-state file is copied into the project once', () =
   try {
     const { notice } = first.open(projectPathHere);
     assert.equal(notice.adoptedAppStateConfig, true, 'the copy is reported, not silent');
-    // The legacy entry predates EXTO template capture, so it carries no key for
-    // it. An absent key means "no template captured", and the schema's default
-    // is what says so — an older entry must still be adoptable.
-    assert.deepEqual(first.config(), { ...legacyConfig, extoTemplate: null });
+    // The legacy entry predates EXTO template capture, the derived attribute
+    // registry (P0-7) and the assignment rules (P0-8), so it carries no key for
+    // any of them. An absent key means "none captured, none defined", and the
+    // schema's defaults are what say so — an older entry must still be adoptable.
+    assert.deepEqual(first.config(), {
+      ...legacyConfig,
+      extoTemplate: null,
+      derivedAttributes: [],
+      sourceAssignmentRules: [],
+    });
   } finally {
     first.close();
   }
@@ -1228,7 +1294,12 @@ test('a config left in the app-state file is copied into the project once', () =
     assert.equal(notice.adoptedAppStateConfig, false, 'there is nothing left to adopt');
     assert.deepEqual(
       second.config(),
-      { ...legacyConfig, extoTemplate: null },
+      {
+        ...legacyConfig,
+        extoTemplate: null,
+        derivedAttributes: [],
+        sourceAssignmentRules: [],
+      },
       'and the project answers on its own now',
     );
   } finally {

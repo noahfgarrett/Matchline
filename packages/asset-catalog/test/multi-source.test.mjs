@@ -493,6 +493,11 @@ test('a source assignment fills a field the model left empty', () => {
       sourceFile: 'Dragon-Controls.nwd',
       sourceRef: { kind: 'model-object', objectId: '54' },
       rule: 'source-assignment',
+      // P0-8: the tier that answered, and what it matched on. A direct
+      // assignment is the logical-file tier said the short way, and what it
+      // matched is the source's own id.
+      scope: 'logical-source',
+      match: 'dragon-controls',
       objectId: 54,
     });
   }

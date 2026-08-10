@@ -1,7 +1,9 @@
+import { migrateMappedProperty } from '@matchline/domain';
 import type {
   AssetFilterConfig,
+  MappedPropertyInput,
   NormalizationStep,
-  PropertyMappings,
+  PropertyMappingsInput,
   PropertyRef,
   SegmentExtractor,
   SegmentName,
@@ -138,10 +140,17 @@ function toPropertyRef(ref: { readonly category: string; readonly name: string }
 }
 
 /**
+ * The wizard's single-property mappings as the domain takes them.
+ *
+ * Each field stays one `PropertyRef` on the wire this round: screen 3 picks one
+ * property, and `PropertyRef` is a legal `MappedPropertyInput` that every engine
+ * entry point lifts to a one-rung chain (P0-8). Editing a chain or a per-source
+ * override is a Site Profile Studio job, not a wizard one.
+ *
  * @throws DraftIncompleteError when no equipment tag property has been chosen —
  * the one mapping with no default (PRODUCT.md §6.5).
  */
-export function toPropertyMappings(wire: WirePropertyMappings): PropertyMappings {
+export function toPropertyMappings(wire: WirePropertyMappings): PropertyMappingsInput {
   if (wire.equipmentTag === null) {
     throw new DraftIncompleteError(
       'Pick the property that holds the equipment tag before previewing assets.',
@@ -298,7 +307,7 @@ export function toSiteProfile(draft: WireDraftProfile): SiteProfile {
     profileId: string;
     name: string;
     version: number;
-    propertyMappings: PropertyMappings;
+    propertyMappings: PropertyMappingsInput;
     assetFilters: AssetFilterConfig;
     tagAnatomy?: TagAnatomyConfig;
     systemResolver?: SystemResolverConfig;
@@ -323,6 +332,22 @@ export function toSiteProfile(draft: WireDraftProfile): SiteProfile {
 
 const SEGMENT_ORDER: readonly SegmentName[] = ['role', 'system', 'unit', 'instance'];
 
+/**
+ * One stored mapping as the wizard's single-property picker can show it.
+ *
+ * A profile written before P0-8 is one `PropertyRef` and passes through. A
+ * profile carrying a chain narrows to its first rung, because that is the rung
+ * the site preferred and the picker has room for exactly one — the remaining
+ * rungs and any per-source overrides stay in the published profile, which is
+ * where they were configured. The wizard is a view of a draft, not the profile.
+ */
+function firstRungOf(mapping: MappedPropertyInput | undefined): PropertyRef | null {
+  if (mapping === undefined) {
+    return null;
+  }
+  return migrateMappedProperty(mapping).chain[0] ?? null;
+}
+
 /** Rehydrates a draft from a stored revision, so reopening resumes the wizard. */
 export function fromSiteProfile(profile: SiteProfile): WireDraftProfile {
   const base = emptyDraft(profile.name);
@@ -334,14 +359,14 @@ export function fromSiteProfile(profile: SiteProfile): WireDraftProfile {
     name: profile.name,
     version: profile.version,
     propertyMappings: {
-      equipmentTag: profile.propertyMappings.equipmentTag,
-      description: profile.propertyMappings.description ?? null,
-      equipmentType: profile.propertyMappings.equipmentType ?? null,
-      building: profile.propertyMappings.building ?? null,
-      nativeDiscipline: profile.propertyMappings.nativeDiscipline ?? null,
-      wbs: profile.propertyMappings.wbs ?? null,
-      itemMaster: profile.propertyMappings.itemMaster ?? null,
-      equipmentClassification: profile.propertyMappings.equipmentClassification ?? null,
+      equipmentTag: firstRungOf(profile.propertyMappings.equipmentTag),
+      description: firstRungOf(profile.propertyMappings.description),
+      equipmentType: firstRungOf(profile.propertyMappings.equipmentType),
+      building: firstRungOf(profile.propertyMappings.building),
+      nativeDiscipline: firstRungOf(profile.propertyMappings.nativeDiscipline),
+      wbs: firstRungOf(profile.propertyMappings.wbs),
+      itemMaster: firstRungOf(profile.propertyMappings.itemMaster),
+      equipmentClassification: firstRungOf(profile.propertyMappings.equipmentClassification),
     },
     assetFilters: {
       includedClasses: [...(profile.assetFilters.includedClasses ?? [])],

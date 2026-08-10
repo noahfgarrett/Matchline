@@ -42,21 +42,48 @@ export {
   modelObjectKeyToString,
   parseModelObjectKey,
   SOURCE_ASSIGNMENT_FIELDS,
+  SOURCE_ASSIGNMENT_SCOPES,
   unescapeSourceId,
 } from './model-universe.js';
 export type {
   ModelObjectKey,
   ModelSourceRef,
   SourceAssignmentField,
+  SourceAssignmentRule,
+  SourceAssignmentScope,
   SourceAssignments,
 } from './model-universe.js';
 
+export {
+  chainFor,
+  MAPPED_PROPERTY_FIELDS,
+  migrateMappedProperty,
+  migratePropertyMappings,
+} from './profile.js';
 export type {
   AssetFilterConfig,
+  MappedProperty,
+  MappedPropertyChainInput,
+  MappedPropertyField,
+  MappedPropertyInput,
+  PropertyChain,
   PropertyMappings,
+  PropertyMappingsInput,
   PropertyRef,
   SiteProfile,
+  SourcePropertyChain,
 } from './profile.js';
+
+export {
+  ATTRIBUTE_RESOLVER_KINDS,
+  DERIVED_ATTRIBUTE_ID_PATTERN,
+  isDerivedAttributeId,
+} from './derived-attributes.js';
+export type {
+  AttributeResolver,
+  AttributeResolverKind,
+  DerivedAttributeDefinition,
+} from './derived-attributes.js';
 
 export type {
   NormalizationStep,

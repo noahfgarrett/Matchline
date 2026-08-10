@@ -40,11 +40,18 @@
  *   first derived from and every manual decision recorded against that id keeps
  *   applying. Purely additive: no existing table changes, so a v4 file reaches
  *   v5 by gaining an empty table.
+ * - **v6** — widens the `config` CHECK by two sections: `derivedAttributes`
+ *   (P0-7, the site's own attribute registry) and `sourceAssignmentRules`
+ *   (P0-8, the profile-level assignment rules). A widening — every v5 row is
+ *   still legal — but a CHECK cannot be altered in place, so the step rebuilds
+ *   the table and copies every row across. Nothing back-fills the two new keys:
+ *   a project that has configured neither simply has no row for them, which is
+ *   what "not configured" has always looked like in this table.
  */
 import type { SourceKind } from '@matchline/domain';
 
 /** The schema version this build writes and reads. */
-export const PROJECT_SCHEMA_VERSION = 5;
+export const PROJECT_SCHEMA_VERSION = 6;
 
 /**
  * The `app_version` written into a new project when the caller does not supply
@@ -138,18 +145,24 @@ export function isDecisionValue(value: string): value is DecisionValue {
 }
 
 /**
- * The configuration sections a project carries (six, as of v3).
+ * The configuration sections a project carries (eight, as of v6).
  *
  * A closed list rather than free-form keys, and enforced by a CHECK constraint
- * as well as by this array: `config` is not a scratchpad. Five of the six are
- * the things `CompileProjectInput` takes that a `SiteProfile` cannot yet hold.
- * A seventh section is a schema change, which is the point — it should be.
+ * as well as by this array: `config` is not a scratchpad. Most of them are the
+ * things `CompileProjectInput` takes that a `SiteProfile` cannot yet hold. A
+ * ninth section is a schema change, which is the point — it should be.
  *
- * `extoTemplate` is the sixth, added in v3: the registry layout captured from a
+ * `extoTemplate` was the sixth, added in v3: the registry layout captured from a
  * site's own workbook, which every later EXTO export is written on. It lives
  * here rather than in a Site Profile because it belongs to *this* project's
  * deliverable, and it is the one place anything site-specific about the export's
  * shape is allowed to be — the engine's own column map stays generic.
+ *
+ * `derivedAttributes` (P0-7) and `sourceAssignmentRules` (P0-8) are the seventh
+ * and eighth, added in v6. Both are profile material in the end — SiteProfileV2
+ * lists them — and both live here for exactly the reason the other six do: the
+ * domain's `SiteProfile` cannot carry them yet, and a project file that lost them
+ * when it moved machines would lose a site's decisions.
  */
 export const CONFIG_KEYS = [
   'hierarchy',
@@ -158,6 +171,8 @@ export const CONFIG_KEYS = [
   'ssmDisciplineProjection',
   'parentTagProperty',
   'extoTemplate',
+  'derivedAttributes',
+  'sourceAssignmentRules',
 ] as const;
 
 /** Which configuration section a `config` row holds. */
@@ -183,7 +198,7 @@ export const SOURCE_KINDS = [
 ] as const satisfies ReadonlyArray<SourceKind>;
 
 /**
- * The `config` table, as v3 creates it.
+ * The `config` table, as v6 creates it.
  *
  * Its own constant because two places need exactly these bytes: the full DDL a
  * new project is created from, and the v1 → v2 migration that adds the table to
@@ -191,16 +206,17 @@ export const SOURCE_KINDS = [
  * second, drifting definition of the same table.
  *
  * A v1 file therefore arrives at v2 with the *current* CHECK rather than the one
- * v2 shipped, and is then rebuilt again by the v3 step below. That is harmless —
- * both steps are widenings and the rebuild is a copy — and it is much safer than
- * freezing a second copy of this DDL here purely to be historically exact about
- * a constraint no v1 file has any rows under.
+ * v2 shipped, and is then rebuilt again by the v3 and v6 steps below. That is
+ * harmless — every step is a widening and the rebuild is a copy — and it is much
+ * safer than freezing a second copy of this DDL here purely to be historically
+ * exact about a constraint no v1 file has any rows under.
  */
 export const CONFIG_TABLE_SQL = `
 CREATE TABLE config (
   key         TEXT PRIMARY KEY CHECK (key IN (
                 'hierarchy', 'roleGraph', 'ladder', 'ssmDisciplineProjection',
-                'parentTagProperty', 'extoTemplate')),
+                'parentTagProperty', 'extoTemplate', 'derivedAttributes',
+                'sourceAssignmentRules')),
   config_json TEXT NOT NULL,
   updated_at  TEXT NOT NULL
 ) WITHOUT ROWID;
@@ -293,7 +309,7 @@ CREATE TABLE ledger (
 `;
 
 /**
- * The v5 DDL.
+ * The v6 DDL.
  *
  * Notes on the shapes that are not obvious:
  * - `sources` is keyed by `source_id` (see {@link SOURCES_TABLE_SQL}).

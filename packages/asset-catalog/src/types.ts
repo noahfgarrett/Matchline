@@ -12,6 +12,7 @@ import type {
   ModelObjectKey,
   PropertyRef,
   Provenance,
+  SourceAssignmentScope,
   SourceStatus,
 } from '@matchline/domain';
 
@@ -48,19 +49,45 @@ interface AssetProvenanceBase extends Provenance {
  */
 export interface ModelPropertyProvenance extends AssetProvenanceBase {
   readonly origin: 'model-property';
-  /** The cache property this value was read from. */
+  /** The cache property this value was read from -- the rung that answered. */
   readonly property: PropertyRef;
+  /**
+   * Which rung of the field's chain {@link property} is, counted from 0 (P0-8).
+   *
+   * `Provenance.fallbackRung` carries the same number counted from 1, which is
+   * the vocabulary the rest of the engine's provenance uses. Both are stated
+   * because a reviewer reads the second and a caller indexes with the first.
+   */
+  readonly rungIndex: number;
+  /**
+   * Whether the chain that answered was this source's own override rather than
+   * the profile's global chain (P0-8).
+   *
+   * The distinction is the whole point of per-source mappings: "the building
+   * came from rung 0" means something different on a file that redefined rung 0.
+   */
+  readonly sourceSpecificChain: boolean;
 }
 
 /**
- * A value the project asserted about the whole source (P0-8).
+ * A value the project asserted about a whole document (P0-8).
  *
  * There is no property to name, which is the point: an assignment is what the
  * site says when the model does not say it. An explicit object property always
  * wins, so this record can only ever appear on a field the model left empty.
+ *
+ * `scope` and `match` say which tier answered and what it matched on, so the
+ * precedence P0-8 fixes -- source model, then logical source, then filename
+ * pattern -- is readable off any value it produced instead of being re-derived.
  */
 export interface SourceAssignmentProvenance extends AssetProvenanceBase {
   readonly origin: 'source-assignment';
+  readonly scope: SourceAssignmentScope;
+  /**
+   * What the tier matched on: the source model's file name, the `sourceId`, or
+   * the pattern text.
+   */
+  readonly match: string;
 }
 
 /**
@@ -196,15 +223,27 @@ export interface ModelAsset {
   /** Source model of the representative object; `null` when the cache has none. */
   readonly sourceModelId: number | null;
   /**
-   * The site-defined attributes its source assigns, by attribute key
-   * (`SourceAssignments.custom`), key order ascending.
+   * The site-defined attributes assigned to this asset's document, by attribute
+   * key (`SourceAssignments.custom`), key order ascending.
    *
-   * Empty when the source assigns none. Standard fields do not appear here --
-   * an assigned `building` is a `building`, recorded with source-assignment
+   * Empty when nothing assigns any. Standard fields do not appear here -- an
+   * assigned `building` is a `building`, recorded with source-assignment
    * provenance, because a consumer should not have to look in two places for
    * one field.
+   *
+   * Per asset rather than per source since P0-8: one cache can hold many source
+   * models, and a `source-model` or `filename-pattern` rule speaks for one of
+   * them rather than for the file that appended it.
    */
   readonly assignedAttributes: ReadonlyMap<string, string>;
+  /**
+   * Where each entry of {@link assignedAttributes} came from, by the same key.
+   *
+   * Keys match {@link assignedAttributes} exactly. Published because a derived
+   * attribute may resolve through a source assignment (P0-7), and a value that
+   * reaches a register has to be able to say which rule put it there.
+   */
+  readonly assignedAttributeProvenance: ReadonlyMap<string, SourceAssignmentProvenance>;
   /**
    * What the model says about which object this is, for the asset identity
    * ledger (P0-9). Always present: an object with no GUID and no authoring id

@@ -11,6 +11,16 @@ export { CONFLICT_STATUS_OF, resolveSubject, resolveSystems } from './resolve.js
 
 export { COMPONENT_EVIDENCE_TIER, lowestTier } from './tiers.js';
 
+/**
+ * Published so a second chain evaluator cannot invent a second template
+ * vocabulary. `@matchline/compiler`'s derived attributes (P0-7) carry a
+ * `composite` rung, and a site that has already learned `{segment:role}` and
+ * `{prop:Item.UPN}` for its systems must not have to learn different spellings
+ * for its own fields.
+ */
+export { expandComposite } from './composite.js';
+export type { CompositeFilled, CompositeResult, CompositeUnfilled } from './composite.js';
+
 export { normalizeSystemValue } from './normalize.js';
 export type { NormalizedValue } from './normalize.js';
 

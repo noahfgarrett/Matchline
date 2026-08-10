@@ -1789,7 +1789,14 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
 
     attributeChoices(): readonly WireAttributeChoice[] {
       const active = session;
-      return attributeChoices(active === null ? null : distinctAttributeValues(active));
+      // The site's own derived attributes belong in the same menu as the
+      // built-ins (P0-7): a level addresses either one the same way, so a
+      // Composer that offered only the built-ins would leave a configured
+      // attribute unreachable.
+      return attributeChoices(
+        active === null ? null : distinctAttributeValues(active),
+        active === null ? [] : active.config.derivedAttributes,
+      );
     },
 
     config(): WireProjectConfig {

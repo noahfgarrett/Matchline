@@ -202,6 +202,27 @@ const EXAMPLE_CONFIG = {
   ssmDisciplineProjection: [{ from: 'I&C', to: 'Mechanical' }],
   parentTagProperty: null,
   extoTemplate: null,
+  // A site that has defined an attribute of its own (P0-7) and a rule that reads
+  // the discipline out of a file name (P0-8). Both are what the config table
+  // gained in schema v6, and both are stated here so the round-trip test covers
+  // a populated section rather than only an empty one.
+  derivedAttributes: [
+    {
+      attributeId: 'turnover-package',
+      displayName: 'Turnover Package',
+      resolverChain: [
+        { kind: 'model-property', chain: [{ category: 'Dragon Data', name: 'Package' }] },
+        { kind: 'tag-segment', segment: 'unit' },
+      ],
+    },
+  ],
+  sourceAssignmentRules: [
+    {
+      scope: 'filename-pattern',
+      match: 'Dragon-*.nwc',
+      assign: { building: '', nativeDiscipline: '$1', custom: [] },
+    },
+  ],
 } as const;
 
 const EXAMPLE_COMPILE_SUMMARY = {

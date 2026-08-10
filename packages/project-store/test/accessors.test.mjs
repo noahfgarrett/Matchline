@@ -313,6 +313,56 @@ test('a profile round-trips through canonical JSON unchanged', () => {
   assert.deepEqual(store.getProfile().profile, dragonProfile());
 });
 
+test('every mapped role survives the round trip, register fields included', () => {
+  // The three register mappings a site may state in the model. Left out of the
+  // reader they would be validated away on the way in and silently absent from
+  // the profile the store wrote back — a decision lost with no error.
+  const profile = dragonProfile({
+    propertyMappings: {
+      equipmentTag: { category: 'Item', name: 'Name' },
+      equipmentType: { category: 'Item', name: 'Type' },
+      nativeDiscipline: { category: 'Item', name: 'Discipline' },
+      wbs: { category: 'Registry', name: 'WBS' },
+      itemMaster: { category: 'Registry', name: 'Item Master' },
+      equipmentClassification: { category: 'Registry', name: 'Classification' },
+    },
+  });
+  store.saveProfile(profile);
+  assert.deepEqual(store.getProfile().profile.propertyMappings, profile.propertyMappings);
+});
+
+test('a mapping written as a chain round-trips as a chain (P0-8)', () => {
+  // Read and stored in the spelling it was written in. A validator that
+  // rewrote a site's hand-edited profile into another shape would be changing
+  // a document nobody asked it to change.
+  const propertyMappings = {
+    equipmentTag: { category: 'Item', name: 'Name' },
+    building: {
+      chain: [
+        { category: 'Revit Type', name: 'Building' },
+        { category: 'Element', name: 'Level' },
+      ],
+      bySource: [
+        { sourceId: 'dragon-architectural', chain: [{ category: 'Element', name: 'Level' }] },
+      ],
+    },
+  };
+  store.saveProfile(dragonProfile({ propertyMappings }));
+  assert.deepEqual(store.getProfile().profile.propertyMappings, propertyMappings);
+});
+
+test('a malformed chain is refused by the rung that is wrong', () => {
+  const broken = dragonProfile({
+    propertyMappings: {
+      equipmentTag: { category: 'Item', name: 'Name' },
+      building: { chain: [{ category: 'Revit Type', name: '' }] },
+    },
+  });
+  const failure = reason(() => store.saveProfile(broken));
+  assert.equal(failure.kind, 'invalid-profile');
+  assert.equal(failure.field, 'profile.propertyMappings.building.chain[0].name');
+});
+
 test('learned rules keep the latest per kind and retain the prior sets', () => {
   assert.equal(store.getLearnedRules('nesting'), undefined);
 

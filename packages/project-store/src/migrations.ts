@@ -287,6 +287,40 @@ export function addLedgerTableV5(db: DatabaseSync): void {
 }
 
 /**
+ * v5 → v6: widen the `config` CHECK by two sections.
+ *
+ * `derivedAttributes` (P0-7) and `sourceAssignmentRules` (P0-8). SQLite cannot
+ * alter a CHECK, so the table is rebuilt: create the new shape under a
+ * temporary name, copy every row, drop the old table, rename. A widening —
+ * every row legal under v5 is legal under v6 — so the copy can never lose a row
+ * to the new constraint, and the whole step runs inside `migrateProjectFile`'s
+ * transaction.
+ *
+ * Column names are written out rather than `SELECT *`, for the same reason the
+ * v3 step writes them out: a future column added to `config` should stop this
+ * step compiling into something that silently drops it.
+ *
+ * Nothing back-fills the two new keys. A project that has configured neither has
+ * no row for them, which is exactly what "not configured" has always looked like
+ * in this table — and inventing an empty registry would be a claim the migration
+ * has no evidence for.
+ */
+export const WIDEN_CONFIG_KEYS_SQL = `
+CREATE TABLE config_v6 (
+  key         TEXT PRIMARY KEY CHECK (key IN (
+                'hierarchy', 'roleGraph', 'ladder', 'ssmDisciplineProjection',
+                'parentTagProperty', 'extoTemplate', 'derivedAttributes',
+                'sourceAssignmentRules')),
+  config_json TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+) WITHOUT ROWID;
+INSERT INTO config_v6 (key, config_json, updated_at)
+  SELECT key, config_json, updated_at FROM config;
+DROP TABLE config;
+ALTER TABLE config_v6 RENAME TO config;
+`;
+
+/**
  * Every migration this build can run, in order, each one version apart.
  *
  * `openProject` walks from the version a file declares to
@@ -298,4 +332,5 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
   { kind: 'sql', to: 3, sql: WIDEN_CHECKS_SQL },
   { kind: 'procedure', to: 4, run: migrateSourcesToV4 },
   { kind: 'procedure', to: 5, run: addLedgerTableV5 },
+  { kind: 'sql', to: 6, sql: WIDEN_CONFIG_KEYS_SQL },
 ];

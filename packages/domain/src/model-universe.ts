@@ -167,3 +167,46 @@ type EverySourceAssignmentFieldListed =
 
 const SOURCE_ASSIGNMENT_FIELDS_ARE_COMPLETE: EverySourceAssignmentFieldListed = true;
 void SOURCE_ASSIGNMENT_FIELDS_ARE_COMPLETE;
+
+/**
+ * How a profile-level assignment rule picks the documents it speaks for (P0-8).
+ *
+ * Three scopes rather than one matcher, because they answer at three different
+ * strengths and P0-8 orders them: `source-model` names one model inside a
+ * federated file, `logical-source` names a registered source by its project id,
+ * and `filename-pattern` is the confirmed guess that fills in what neither of
+ * them stated.
+ */
+export const SOURCE_ASSIGNMENT_SCOPES = [
+  'source-model',
+  'logical-source',
+  'filename-pattern',
+] as const;
+
+/** Which documents one {@link SourceAssignmentRule} speaks for. */
+export type SourceAssignmentScope = (typeof SOURCE_ASSIGNMENT_SCOPES)[number];
+
+/**
+ * One profile-level assignment rule (P0-8, "profile carries assignment rules").
+ *
+ * `match` is read according to `scope`:
+ *
+ * - `source-model` — the source model's file name, exactly. `Mechanical.nwc`.
+ * - `logical-source` — the project's `sourceId`, exactly. Never a file name.
+ * - `filename-pattern` — a glob-lite pattern over the source model's file name
+ *   with exactly ONE `*`, which captures. `Dragon-*.nwc` against
+ *   `Dragon-Mechanical.nwc` captures `Mechanical`, and any value in `assign`
+ *   may spell `$1` to mean it. One star and no regular expressions: a Site
+ *   Profile is hand-editable JSON, and a profile must never be able to hand the
+ *   engine a pattern that backtracks catastrophically.
+ *
+ * A rule states facts about documents; it never states a default. An object
+ * property answering the same field always wins, because the model saying so
+ * beats the project saying so about the model.
+ */
+export interface SourceAssignmentRule {
+  readonly scope: SourceAssignmentScope;
+  readonly match: string;
+  /** What the matched documents assert. `$1` is only meaningful under a pattern. */
+  readonly assign: SourceAssignments;
+}
