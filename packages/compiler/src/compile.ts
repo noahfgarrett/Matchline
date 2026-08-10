@@ -36,6 +36,7 @@ import {
   orderCatalogSources,
 } from '@matchline/asset-catalog';
 import type { ModelAsset } from '@matchline/asset-catalog';
+import { reconcileLedger } from '@matchline/asset-identity';
 import { importConnectivityWorkbook } from '@matchline/connectivity-import';
 import type { ConnectivityObservation, ConnectivityWorkbookReport } from '@matchline/connectivity-import';
 import { buildElectricalFlowFromIndex } from '@matchline/electrical-flow';
@@ -68,6 +69,13 @@ import type {
 import { applyAnatomy } from '@matchline/tag-anatomy';
 
 import { attributesFor, ssmDisciplineOf } from './attributes.js';
+import {
+  applyLedgerMapping,
+  decisionResolverOf,
+  ledgerCandidateOf,
+  resolveManualAssignments,
+  resolveManualOverrides,
+} from './identity-ledger.js';
 import { modelTreeParents } from './model-tree.js';
 import {
   propertyFrom,
@@ -227,17 +235,17 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   const sources = orderCatalogSources(input.sources);
 
   // --- 1. the model-first asset universe -----------------------------------
-  const catalog = buildAssetCatalog(sources, profile.propertyMappings, profile.assetFilters);
+  const modelCatalog = buildAssetCatalog(sources, profile.propertyMappings, profile.assetFilters);
   // One streaming pass per cache, for a value only a property picker reads. Not
   // run unless it was asked for (see `includePropertyCatalog`).
   const propertyCatalog =
     input.includePropertyCatalog === true ? buildUniversePropertyCatalog(sources) : [];
 
   // --- 2. the property-bag seam --------------------------------------------
-  // One pass over the owning source's cache per asset, and both consumers of the
-  // raw bag are served from it: the resolver subject, and the claim subject's
-  // explicit parent tag. Reading it twice would double the only I/O the compile
-  // does.
+  // One pass over the owning source's cache per asset, and every consumer of the
+  // raw bag is served from it: the resolver subject, the claim subject's
+  // explicit parent tag, and the identity ledger's stable-id property. Reading
+  // it twice would double the only I/O the compile does.
   const contexts = new Map<string, SourceContext>();
   for (const source of sources) {
     contexts.set(source.sourceId, {
@@ -260,6 +268,39 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     return context;
   };
 
+  // --- 2b. stable asset identity (P0-9) --------------------------------------
+  // THE SPLICE POINT. The catalog derives an id from the content it read, which
+  // is stable for one compile and wrong across two -- a corrected tag would mint
+  // a new id and orphan every decision recorded against the old one. The ledger
+  // decides the id instead, and it is applied here, exactly once, before any
+  // stage has keyed anything: everything below reads ledger ids only.
+  //
+  // The model half of the evidence is already on the asset. The stable-id
+  // property is not -- it lives in the bag, and the bag is read below, after the
+  // ids are settled. Reading it here costs a second pass over the caches, so it
+  // is taken ONLY when the site mapped one: holding every asset's whole bag in
+  // memory to save that pass would be a per-asset property map for a project
+  // with 40k assets and a million property rows.
+  const stableIdProperty = input.stableIdProperty;
+  const stableIds: ReadonlyArray<string | undefined> =
+    stableIdProperty === undefined
+      ? []
+      : modelCatalog.assets.map((asset) => {
+          const bag = readAssetProperties(
+            contextOf(asset).source.cache,
+            asset,
+            profile.propertyMappings.equipmentTag,
+          );
+          return propertyFrom(bag, stableIdProperty)?.value;
+        });
+
+  const ledgerResult = reconcileLedger(
+    input.identityLedger ?? null,
+    modelCatalog.assets.map((asset, index) => ledgerCandidateOf(asset, stableIds[index])),
+  );
+  const catalog = applyLedgerMapping(modelCatalog, ledgerResult.mapping);
+  const identityLedger = ledgerResult.ledger;
+
   const sourceFiles = new Map<string, string>();
   const subjects: ResolverSubject[] = [];
   const claimSubjects: ClaimSubject[] = [];
@@ -281,6 +322,21 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   const sourceFileFor = (asset: ModelAsset): string =>
     sourceFiles.get(asset.assetId) ?? contextOf(asset).inputFileName;
 
+  // --- 2c. stored decisions, re-addressed through the ledger ------------------
+  // A project file holds decisions taken against the ids an earlier compile
+  // published. They are re-aimed here, once, so every rung below sees decisions
+  // about assets that exist -- and the ones that cannot be re-aimed become
+  // review items rather than silence.
+  const resolveDecisionRef = decisionResolverOf(catalog.assets, identityLedger);
+  const manualParents = resolveManualOverrides(
+    input.manualRelationshipOverrides ?? [],
+    resolveDecisionRef,
+  );
+  const manualSystems =
+    input.manualSystemAssignments === undefined
+      ? null
+      : resolveManualAssignments(input.manualSystemAssignments, resolveDecisionRef);
+
   /** The one file this project was extracted from, or `null` once there are two. */
   const soleSource = sources.length === 1 ? sources[0] : undefined;
   const soleInputFileName =
@@ -294,9 +350,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     ...(anatomy === undefined ? {} : { anatomy }),
     catalog: mel.catalog,
     melRows: mel.rows,
-    ...(input.manualSystemAssignments === undefined
-      ? {}
-      : { manual: input.manualSystemAssignments }),
+    ...(manualSystems === null ? {} : { manual: manualSystems.assignments }),
   };
   const systems = resolveSystems(
     subjects,
@@ -397,8 +451,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     return outcome.status === 'matched' ? outcome.assetId : null;
   };
 
-  const manualOverrides: ReadonlyArray<ManualRelationshipOverride> =
-    input.manualRelationshipOverrides ?? [];
+  const manualOverrides: ReadonlyArray<ManualRelationshipOverride> = manualParents.overrides;
 
   const claims = assembleRelationshipClaims(claimSubjects, {
     ...(input.roleGraph === undefined ? {} : { roleGraph: input.roleGraph }),
@@ -469,6 +522,11 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   // --- 11. one review queue -------------------------------------------------------
   const reviewItems = aggregateReviewItems([
     catalog.reviewItems,
+    // Stored decisions the ledger could not re-address. Raised before the
+    // stages that would have consumed them, because a decision nobody can see
+    // is exactly what P0-9 forbids.
+    manualParents.reviewItems,
+    manualSystems?.reviewItems ?? [],
     mel.reviewItems,
     systems.reviewItems,
     flow.reviewItems,
@@ -494,6 +552,8 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
 
   return {
     catalog,
+    identityLedger,
+    identityLedgerEvents: ledgerResult.events,
     propertyCatalog,
     subjects,
     melRows: mel.rows,
@@ -642,6 +702,9 @@ function generatedMelAssetOf(
 
   return {
     canonicalTag: asset.canonicalTag,
+    // The ledger id, never printed. It is what lets a revision diff report a
+    // corrected tag as a changed tag rather than a remove and an add (P0-9).
+    stableAssetId: asset.assetId,
     ...(asset.description === undefined ? {} : { description: asset.description }),
     ...(asset.equipmentType === undefined ? {} : { equipmentType: asset.equipmentType }),
     ...(asset.building === undefined ? {} : { building: asset.building }),

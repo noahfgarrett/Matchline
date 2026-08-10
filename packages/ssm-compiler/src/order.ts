@@ -334,6 +334,17 @@ export function reviewKey(item: ReviewItem): string {
         field(item.absorbingAssetId),
         String(item.objectId),
       );
+    case 'orphaned-decision':
+      // Both spellings and the reason, but not the note: the note is what the
+      // person wrote, and two people writing different notes about the same
+      // unresolvable pair are still one decision to re-aim.
+      return composeKey(
+        item.kind,
+        field(item.decision),
+        field(item.reason),
+        field(item.childRef),
+        field(item.parentRef),
+      );
   }
   return assertNever(item, 'unhandled ReviewItem');
 }

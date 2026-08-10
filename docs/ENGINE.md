@@ -120,10 +120,24 @@ observations + identity + anatomy + role graph + learned rules
   4. **Snapshot**: immutable ResolvedSnapshot — deterministic (same inputs + profile →
      identical snapshot), cycle detection (structural cycles broken to review items, never
      silently), every decision provenance'd, losing claims retained.
+- **`@matchline/asset-identity`** — the asset identity ledger (RELEASE-1.0-PLAN P0-9).
+  Evidence order, strongest first: profile-mapped stable-id property → source-model
+  persistent id + authoring object id → source-model persistent id + InstanceGuid →
+  deterministic structural key (persistent id + root-relative child-index path + class) →
+  tag (reconciliation only, reported as its own event). Content hash is never identity, so
+  a re-extraction of an unchanged model moves nothing. `reconcileLedger` moves a ledger
+  `{assetId, currentCanonicalTag, aliases, modelIdentities, status}` forward by one compile:
+  a tier that names two previous entries identifies nothing and the walk falls through; one
+  entry claimed by two assets SPLITS (both kept, event explains) and is never merged; an
+  entry no asset claimed is flagged `disappeared` and never deleted. Plain JSON, because
+  the project persists it.
 - **`@matchline/compiler`** — the orchestrator that owns the E1 property-bag seam:
-  extraction cache + spreadsheets + SiteProfile → asset catalog → subjects (property bags)
-  → system resolution → identity → observations → claims → snapshot → outputs. The only
-  package that knows the whole pipeline order.
+  extraction cache + spreadsheets + SiteProfile → asset catalog → **identity ledger** →
+  subjects (property bags) → system resolution → identity → observations → claims →
+  snapshot → outputs. The only package that knows the whole pipeline order. The ledger is
+  spliced immediately after the catalog and before any stage keys on an id, so every stage
+  below it reads ledger ids; stored manual decisions are re-addressed through the ledger in
+  the same place, and one that cannot be becomes an `orphaned-decision` review item.
 
 ## Binding semantics (all stages)
 
@@ -133,3 +147,7 @@ observations + identity + anatomy + role graph + learned rules
    fallback rung). Losing claims are retained.
 3. Determinism: same cache + same profile → identical outputs, byte-stable exports.
 4. No profile fallback value may drive a structural decision (donor invariant 2 carries over).
+5. Asset identity is the ledger's, not the model content's: a corrected tag keeps its
+   assetId, decisions recorded against it survive, and a revision diff reports a tag change
+   rather than a removal and an addition. A decision that cannot be re-addressed is
+   reported, never dropped.

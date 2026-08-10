@@ -112,6 +112,17 @@ export const DRAGON_REVIEW_ITEMS = [
     absorbingAssetId: 'asset-0001',
     objectId: 57,
   },
+  {
+    // A parent decision recorded while the register still listed a unit that
+    // this revision of the model does not contain (P0-9). The note is the part
+    // that would be lost if the decision were dropped instead of reported.
+    kind: 'orphaned-decision',
+    decision: 'manual-parent',
+    childRef: 'tag:MAH009-10-01',
+    parentRef: 'tag:MAH001-10-01',
+    reason: 'unknown-child',
+    note: 'Commissioned with the D1 train.',
+  },
 ] as const satisfies ReadonlyArray<ReviewItem>;
 
 /**

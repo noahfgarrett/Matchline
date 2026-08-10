@@ -22,6 +22,7 @@
     "@matchline/domain": "0.1.0",
     "@matchline/model-schema": "0.1.0",
     "@matchline/asset-catalog": "0.1.0",
+    "@matchline/asset-identity": "0.1.0",
     "@matchline/tag-anatomy": "0.1.0",
     "@matchline/system-resolver": "0.1.0",
     "@matchline/identity": "0.1.0",

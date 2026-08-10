@@ -186,6 +186,48 @@ export interface AbsorbedTaggedComponentReviewItem {
   readonly objectId: number;
 }
 
+/**
+ * Which stored decision could not be re-addressed to an asset.
+ *
+ * A person's decision is recorded against an asset id, and P0-9's identity
+ * ledger is what carries those ids across a re-compile. When it cannot -- the
+ * equipment left the model, a source was not registered this time, a tag now
+ * names two assets -- the decision is not applied and it is NOT dropped: it
+ * arrives here, verbatim, for a person to re-aim or retire.
+ */
+export type OrphanedDecisionKind = 'manual-parent' | 'manual-system';
+
+/** Why a stored decision could not be re-addressed. */
+export type OrphanedDecisionReason =
+  | 'unknown-child'
+  | 'unknown-parent'
+  | 'ambiguous-child'
+  | 'ambiguous-parent';
+
+/**
+ * A stored decision the identity ledger could not re-address (P0-9).
+ *
+ * "Migrate tag-keyed overrides via latest snapshot; unmappable overrides become
+ * orphaned-decision review items, never dropped." Both references are carried
+ * exactly as the project recorded them, because the spelling is the evidence: a
+ * reviewer needs to see the id or tag that no longer resolves in order to know
+ * what the decision was ever about.
+ */
+export interface OrphanedDecisionReviewItem {
+  readonly kind: 'orphaned-decision';
+  readonly decision: OrphanedDecisionKind;
+  /** The asset the decision was about, as recorded. */
+  readonly childRef: string;
+  /**
+   * The other end, as recorded. `''` when the decision names none -- a manual
+   * make-root, or a system assignment, which is about one asset only.
+   */
+  readonly parentRef: string;
+  readonly reason: OrphanedDecisionReason;
+  /** The person's own words, kept so the decision itself survives its address. */
+  readonly note?: string;
+}
+
 export type ReviewItem =
   | SystemConflictReviewItem
   | DuplicateModelTagReviewItem
@@ -198,7 +240,8 @@ export type ReviewItem =
   | NestingProposalReviewItem
   | DeadClaimRuleReviewItem
   | UnresolvableAliasReviewItem
-  | AbsorbedTaggedComponentReviewItem;
+  | AbsorbedTaggedComponentReviewItem
+  | OrphanedDecisionReviewItem;
 
 /**
  * A one-line description of what needs deciding.
@@ -238,6 +281,12 @@ export function reviewItemSummary(item: ReviewItem): string {
       return `alias ${item.evidenceTag} -> ${item.aliasTarget}: no asset carries that tag`;
     case 'absorbed-tagged-component':
       return `tag ${item.absorbedTag} was absorbed into ${item.absorbingAssetId} (object ${item.objectId})`;
+    case 'orphaned-decision': {
+      // The other end is named only when the decision has one, so a make-root
+      // or a system assignment does not read as a decision about nothing.
+      const target = item.parentRef === '' ? '' : ` -> ${item.parentRef}`;
+      return `stored ${item.decision} decision ${item.childRef}${target} no longer resolves (${item.reason})`;
+    }
   }
   return assertNever(item, 'unhandled ReviewItem');
 }

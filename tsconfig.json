@@ -18,6 +18,9 @@
       "path": "./packages/asset-catalog"
     },
     {
+      "path": "./packages/asset-identity"
+    },
+    {
       "path": "./packages/system-resolver"
     },
     {

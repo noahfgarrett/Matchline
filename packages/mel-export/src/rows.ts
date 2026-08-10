@@ -41,6 +41,19 @@ import { compareCodeUnits } from './order.js';
 export interface GeneratedMelAsset {
   /** The tag the project should use. Written to Equipment Tag. */
   readonly canonicalTag: string;
+  /**
+   * The asset's identity ledger id (RELEASE-1.0-PLAN P0-9).
+   *
+   * Never printed -- it means nothing on a sheet an engineer reads, and §12.1
+   * has no column for it. It is carried because it is the only thing that makes
+   * two revisions comparable by identity rather than by spelling:
+   * {@link diffMelRevisions} pairs rows by it when both revisions have one, so
+   * a corrected tag reports as a changed tag instead of a remove and an add.
+   *
+   * Optional because a caller assembling rows by hand has no ledger, and a diff
+   * between two such revisions is exactly the tag-keyed comparison it always was.
+   */
+  readonly stableAssetId?: string;
   readonly description?: string;
   readonly equipmentType?: string;
   readonly building?: string;

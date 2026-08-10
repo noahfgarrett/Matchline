@@ -82,8 +82,13 @@ export function writeSyntheticCache(path, content) {
         object.depth ?? 0,
         object.displayName ?? null,
         object.className ?? null,
-        `00000000-0000-4000-8000-${String(object.id).padStart(12, '0')}`,
-        null,
+        // Derived from the id so every object has one without a test saying so,
+        // and overridable (`null` included) because P0-9 makes both the value
+        // and its absence identity evidence a test may need to state.
+        object.instanceGuid === undefined
+          ? `00000000-0000-4000-8000-${String(object.id).padStart(12, '0')}`
+          : object.instanceGuid,
+        object.authoringId ?? null,
       );
     }
 

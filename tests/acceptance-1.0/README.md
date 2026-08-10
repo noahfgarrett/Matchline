@@ -53,7 +53,7 @@ required above. Never discard provenance or review items to make tests pass."
 | file | directive | hard gates | milestone that turns it green |
 |------|-----------|------------|-------------------------------|
 | `multi-model.test.mjs` | P0-1 Multi-model universe | 2, 3, 4 | 2 — Multi-model domain+storage — **green, wired into `npm test`** |
-| `stable-identity.test.mjs` | P0-9 Stable asset identity | 12 | 3 — Stable identity |
+| `stable-identity.test.mjs` | P0-9 Stable asset identity | 12 | 3 — Stable identity — **green, wired into `npm test`** |
 | `manual-parent-boundaries.test.mjs` | P0-4 Manual parents honor boundaries | 9, 10 | 4 — Hierarchy+profile semantics |
 | `default-hierarchy.test.mjs` | P0-5 Default hierarchy | 11 | 4 — Hierarchy+profile semantics |
 | `level-key-display.test.mjs` | P0-6 Level key vs display | 8 | 4 — Hierarchy+profile semantics |

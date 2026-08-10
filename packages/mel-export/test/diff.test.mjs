@@ -257,6 +257,113 @@ test('two hints claiming the same new tag are refused', () => {
   );
 });
 
+/* ---- identity: what two compiles of ONE project already know (P0-9) ---- */
+
+/**
+ * The identity ledger id behind each spelling.
+ *
+ * `VFD001-10-01` and `VFD001-10-01A` are one asset, which is precisely the fact
+ * `DRAGON_RENAME_HINT` exists to state by hand. Two compiles of one project
+ * carry it on the rows themselves, so nobody has to.
+ */
+const LEDGER_IDS = new Map([
+  ['MAH001-10-01', 'asset:000001'],
+  ['MAH001-10-02', 'asset:000002'],
+  ['PLC001-10-01', 'asset:000003'],
+  ['VFD001-10-01', 'asset:000004'],
+  ['VFD001-10-01A', 'asset:000004'],
+  ['TIT001-10-01', 'asset:000005'],
+  ['CHW001-01-01', 'asset:000006'],
+  ['EPB002-01-01', 'asset:000007'],
+  ['ESB002-01', 'asset:000008'],
+  ['FCU-SPARE-09', 'asset:000009'],
+  ['PMP003-01-01', 'asset:000010'],
+]);
+
+/** The same revision, as a ledger-aware compile would have published it. */
+function withLedgerIds(assets, ids = LEDGER_IDS) {
+  return assets.map((asset) => ({ ...asset, stableAssetId: ids.get(asset.canonicalTag) }));
+}
+
+const LEDGER_REVISION_A = withLedgerIds(DRAGON_REVISION_A);
+const LEDGER_REVISION_B = withLedgerIds(DRAGON_REVISION_B);
+
+test('one ledger id spelled two ways is a changed tag, with no hint from the caller', () => {
+  const derived = diffMelRevisions(LEDGER_REVISION_A, LEDGER_REVISION_B);
+
+  assert.deepEqual(
+    derived.changedTags.map((change) => `${change.before} -> ${change.after}`),
+    ['VFD001-10-01 -> VFD001-10-01A'],
+  );
+  // The real add and the real removal are untouched: identity says those two
+  // ids exist on one side each, which is what an addition and a removal are.
+  assert.deepEqual(derived.added.map((entry) => entry.canonicalTag), ['PMP003-01-01']);
+  assert.deepEqual(derived.removed.map((entry) => entry.canonicalTag), ['FCU-SPARE-09']);
+
+  // And the whole diff is the one the hand-written hint used to produce.
+  assert.deepEqual(derived, diff());
+});
+
+test('an explicit hint outranks a derived one: a person beats an inference', () => {
+  // The caller claims the VFD became the pump. Identity says otherwise, and the
+  // claim wins -- so `VFD001-10-01A` is left over as an addition.
+  const claimed = diffMelRevisions(LEDGER_REVISION_A, LEDGER_REVISION_B, {
+    renamedTags: new Map([['VFD001-10-01', 'PMP003-01-01']]),
+  });
+
+  assert.deepEqual(
+    claimed.changedTags.map((change) => `${change.before} -> ${change.after}`),
+    ['VFD001-10-01 -> PMP003-01-01'],
+  );
+  assert.deepEqual(claimed.added.map((entry) => entry.canonicalTag), ['VFD001-10-01A']);
+});
+
+test('a derived pair that does not describe these revisions is dropped, never thrown', () => {
+  // An id reused across two tags that both still exist: an inference the tag
+  // columns cannot express. An explicit hint saying this would be refused --
+  // it is a claim, and a wrong claim is a caller error -- but a derived one is
+  // the diff's own guess, and guessing wrongly is not something to throw at.
+  const reused = new Map(LEDGER_IDS);
+  reused.set('MAH001-10-02', 'asset:000001');
+
+  const derived = diffMelRevisions(
+    withLedgerIds(DRAGON_REVISION_A, reused),
+    withLedgerIds(DRAGON_REVISION_B, reused),
+  );
+  assert.deepEqual(
+    derived.changedTags.map((change) => `${change.before} -> ${change.after}`),
+    ['VFD001-10-01 -> VFD001-10-01A'],
+    'the sound pair survives; the unsound one says nothing',
+  );
+  assert.deepEqual(derived.added.map((entry) => entry.canonicalTag), ['PMP003-01-01']);
+});
+
+test('a duplicated tag never derives a rename: the diff compares one row per tag', () => {
+  // `ESB002-01` carries two rows in revision B (DUPLICATE_MODEL_TAG, never
+  // merged). Pairing a removal onto that group would move a duplicate rather
+  // than an asset, so it is left alone and the removal stays a removal.
+  const collided = new Map(LEDGER_IDS);
+  collided.set('FCU-SPARE-09', 'asset:000008');
+
+  const derived = diffMelRevisions(
+    withLedgerIds(DRAGON_REVISION_A, collided),
+    withLedgerIds(DRAGON_REVISION_B, collided),
+  );
+  assert.deepEqual(derived.removed.map((entry) => entry.canonicalTag), ['FCU-SPARE-09']);
+  assert.deepEqual(
+    derived.changedTags.map((change) => change.before),
+    ['VFD001-10-01'],
+  );
+});
+
+test('a revision with no ledger diffs by tag, exactly as it always did', () => {
+  // One side carrying ids and the other not is a project mid-migration: there
+  // is no id in common, so nothing is derived and the tags decide.
+  const mixed = diffMelRevisions(DRAGON_REVISION_A, LEDGER_REVISION_B);
+  assert.deepEqual(mixed, diffMelRevisions(DRAGON_REVISION_A, DRAGON_REVISION_B));
+  assert.deepEqual(mixed.changedTags, []);
+});
+
 /* ---- the workbook ---- */
 
 test('the workbook holds a Summary and one sheet per non-empty category', () => {

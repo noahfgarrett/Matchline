@@ -107,7 +107,7 @@ test('a profile-lookup pair reaches the snapshot at tier 3, outranking the flow-
   );
 });
 
-test('a make-root directive whose asset is unknown is a dead rule with no parent named', () => {
+test('a make-root directive whose asset is unknown is an orphaned decision with no parent named', () => {
   const project = compileProject(
     fullInput(handle.cache, {
       manualRelationshipOverrides: [
@@ -116,21 +116,34 @@ test('a make-root directive whose asset is unknown is a dead rule with no parent
     }),
   );
 
-  // `SkippedClaimInput.parentRef` is `null` for a make-root -- the input names
-  // no parent by construction -- and the review item has to say that without
-  // inventing one.
+  // A manual override is a *decision*, not a rule, and P0-9 says an unmappable
+  // one becomes an orphaned-decision review item and is never dropped. The
+  // identity ledger re-addresses stored decisions before claims assembly sees
+  // them, so a decision naming nothing never reaches assembly to be skipped:
+  // this item is what reports it, and unlike the `dead-claim-rule` it replaces
+  // it keeps the note, which is the part nobody can reconstruct.
+  //
+  // A make-root names no parent by construction, and the item has to say that
+  // without inventing one.
   assert.deepEqual(
-    project.reviewItems.filter((item) => item.kind === 'dead-claim-rule'),
+    project.reviewItems.filter((item) => item.kind === 'orphaned-decision'),
     [
       {
-        kind: 'dead-claim-rule',
-        ladderSource: 'manual',
-        reason: 'unknown-child-asset',
+        kind: 'orphaned-decision',
+        decision: 'manual-parent',
         childRef: idOf(UNKNOWN_TAG),
         parentRef: '',
+        reason: 'unknown-child',
+        note: 'commissioned standalone',
       },
     ],
   );
+  assert.deepEqual(
+    project.reviewItems.filter((item) => item.kind === 'dead-claim-rule'),
+    [],
+    'the decision is reported once, by the stage that could not re-address it',
+  );
+  assert.equal(project.stats.skippedClaimInputCount, 0);
 });
 
 test('a prior-SSM pair loses to every rung above it, and places the asset when there is none', () => {

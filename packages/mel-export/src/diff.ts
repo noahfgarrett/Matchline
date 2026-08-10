@@ -20,17 +20,26 @@
  *
  * ## Identity across revisions
  *
- * The Equipment Tag is the key. A tag that only the new revision has is an
- * *added* asset; a tag only the old one has is *removed*. That is the honest
- * default — a renamed asset is genuinely indistinguishable, from the two
- * workbooks alone, from one asset disappearing while another appears.
+ * The Equipment Tag is the key *unless the revisions carry an identity*. A tag
+ * that only the new revision has is an *added* asset; a tag only the old one has
+ * is *removed*. That is the honest default for two workbooks compared in
+ * isolation — a renamed asset is genuinely indistinguishable, from the tags
+ * alone, from one asset disappearing while another appears.
  *
- * A rename is therefore a **claim**, and the caller makes it:
- * {@link DiffMelRevisionsOptions.renamedTags} maps old tag → new tag, and a
- * hinted pair is one asset whose tag changed rather than an add and a remove.
- * A hint that does not describe these two revisions is refused rather than
- * ignored, because a silently dropped hint reads, in the output, exactly like a
- * real add/remove pair.
+ * Two compiles of ONE project are not in isolation. Both revisions' assets carry
+ * {@link GeneratedMelAsset.stableAssetId}, the asset identity ledger's id
+ * (RELEASE-1.0-PLAN P0-9), and one id spelled two ways across two revisions is a
+ * tag correction stated by the project rather than guessed here. Those pairs are
+ * derived automatically (see {@link derivedRenames}) and reported as changed
+ * tags, which is what P0-9 requires: "diffs report tag-change not remove+add".
+ *
+ * A caller with no ledger can still claim a rename by hand:
+ * {@link DiffMelRevisionsOptions.renamedTags} maps old tag → new tag, and an
+ * explicit hint always outranks a derived one. An explicit hint that does not
+ * describe these two revisions is refused rather than ignored, because a
+ * silently dropped *claim* reads, in the output, exactly like a real add/remove
+ * pair. A derived pair that does not fit is simply not used: it is an inference
+ * from identity, and inferring wrongly is not a caller error to throw at.
  *
  * ## What the diff is a diff of
  *
@@ -137,6 +146,10 @@ export interface DiffMelRevisionsOptions {
    * Renames the caller is claiming: old tag → new tag. Each pair must name a
    * tag the previous revision has and a tag the current revision has, and
    * neither may exist on the other side.
+   *
+   * Rarely needed once both revisions carry `stableAssetId`: the diff derives
+   * the same pairs from identity. An explicit hint still wins where the two
+   * disagree — a person's claim outranks an inference.
    */
   readonly renamedTags?: ReadonlyMap<string, string>;
 }
@@ -175,7 +188,11 @@ export function diffMelRevisions(
 ): MelRevisionDiff {
   const before = groupByTag(previous);
   const after = groupByTag(current);
-  const previousTagOf = validateRenames(options.renamedTags, before, after);
+  const previousTagOf = validateRenames(
+    mergedRenames(previous, current, before, after, options.renamedTags),
+    before,
+    after,
+  );
   const renamedFrom = new Set<string>(previousTagOf.values());
 
   const added: MelAssetChange[] = [];
@@ -356,6 +373,96 @@ function conflictReasons(rows: ReadonlyArray<CanonicalMelRow>): ReadonlyArray<st
     if (rows.some((row) => row.inclusionStatus.includes(status))) reasons.push(status);
   }
   return reasons;
+}
+
+/**
+ * The tag each stable asset id carries on one side, where that is unambiguous.
+ *
+ * An id carried by two assets, or a tag carried by two rows, is left out: the
+ * diff compares one row per tag (`groupByTag`), and a rename pair drawn from a
+ * duplicated tag would move a group rather than an asset. A duplication is
+ * reported through `newConflicts`, which is where it belongs.
+ */
+function unambiguousTagByStableId(
+  assets: ReadonlyArray<GeneratedMelAsset>,
+  grouped: ReadonlyMap<string, ReadonlyArray<CanonicalMelRow>>,
+): ReadonlyMap<string, string> {
+  const tagById = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  for (const asset of assets) {
+    const stableAssetId = asset.stableAssetId;
+    if (stableAssetId === undefined || stableAssetId === '' || asset.canonicalTag === '') continue;
+    if ((grouped.get(asset.canonicalTag)?.length ?? 0) !== 1) continue;
+    if (tagById.has(stableAssetId)) ambiguous.add(stableAssetId);
+    else tagById.set(stableAssetId, asset.canonicalTag);
+  }
+  for (const stableAssetId of ambiguous) tagById.delete(stableAssetId);
+  return tagById;
+}
+
+/**
+ * Rename pairs the two revisions' identity ledger ids state on their own.
+ *
+ * One id, two spellings, one on each side: the project already decided those
+ * two rows are one asset, so the diff does not have to guess and the caller does
+ * not have to claim it. Pairs that do not describe these two revisions are
+ * dropped rather than refused — see this module's header.
+ */
+function derivedRenames(
+  previous: ReadonlyArray<GeneratedMelAsset>,
+  current: ReadonlyArray<GeneratedMelAsset>,
+  before: ReadonlyMap<string, ReadonlyArray<CanonicalMelRow>>,
+  after: ReadonlyMap<string, ReadonlyArray<CanonicalMelRow>>,
+  claimed: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
+  const previousTags = unambiguousTagByStableId(previous, before);
+  const currentTags = unambiguousTagByStableId(current, after);
+
+  const spokenFor = new Set([...claimed.keys(), ...claimed.values()]);
+  const pairs: Array<readonly [string, string]> = [];
+  for (const [stableAssetId, toTag] of currentTags) {
+    const fromTag = previousTags.get(stableAssetId);
+    if (fromTag === undefined || fromTag === toTag) continue;
+    // An explicit claim about either end wins outright; deriving a second
+    // opinion about the same tag would only make `validateRenames` throw.
+    if (spokenFor.has(fromTag) || spokenFor.has(toTag)) continue;
+    // The same preconditions `validateRenames` enforces, applied quietly.
+    if (!before.has(fromTag) || !after.has(toTag)) continue;
+    if (after.has(fromTag) || before.has(toTag)) continue;
+    pairs.push([fromTag, toTag]);
+  }
+
+  // Two ids renaming onto one tag, or one tag renaming to two: identity is
+  // saying something the tag columns cannot express, so say nothing about
+  // either end rather than picking one and calling the rest an add.
+  const fromCounts = countOf(pairs.map(([fromTag]) => fromTag));
+  const toCounts = countOf(pairs.map(([, toTag]) => toTag));
+  const derived = new Map<string, string>();
+  for (const [fromTag, toTag] of pairs) {
+    if (fromCounts.get(fromTag) !== 1 || toCounts.get(toTag) !== 1) continue;
+    derived.set(fromTag, toTag);
+  }
+  return derived;
+}
+
+function countOf(values: ReadonlyArray<string>): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>();
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+  return counts;
+}
+
+/** Derived pairs first, then the caller's claims, which overwrite them. */
+function mergedRenames(
+  previous: ReadonlyArray<GeneratedMelAsset>,
+  current: ReadonlyArray<GeneratedMelAsset>,
+  before: ReadonlyMap<string, ReadonlyArray<CanonicalMelRow>>,
+  after: ReadonlyMap<string, ReadonlyArray<CanonicalMelRow>>,
+  claimed: ReadonlyMap<string, string> | undefined,
+): ReadonlyMap<string, string> {
+  const hints = claimed ?? new Map<string, string>();
+  const derived = derivedRenames(previous, current, before, after, hints);
+  if (derived.size === 0) return hints;
+  return new Map<string, string>([...derived, ...hints]);
 }
 
 /**

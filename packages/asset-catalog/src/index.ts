@@ -1,4 +1,4 @@
-export { buildAssetCatalog } from './catalog.js';
+export { buildAssetCatalog, uniqueTagAssetId } from './catalog.js';
 export type { AssetCatalog } from './catalog.js';
 
 export { orderCatalogSources } from './sources.js';
@@ -22,6 +22,7 @@ export type {
   FilterStageName,
   InclusionImpact,
   ModelAsset,
+  ModelAssetIdentityEvidence,
   ModelAssetProvenance,
   ModelAssetStatus,
   ModelPropertyProvenance,

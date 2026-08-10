@@ -272,6 +272,10 @@ function assetIdsOf(item: ReviewItem): readonly string[] {
     // there is no tree row to hang a flag on.
     case 'dead-claim-rule':
     case 'unresolvable-alias':
+    // An orphaned decision is one whose asset id no longer resolves (P0-9); by
+    // definition there is no row to flag, which is exactly the problem it
+    // reports.
+    case 'orphaned-decision':
       return [];
     default: {
       const exhaustive: never = item;

@@ -92,6 +92,44 @@ export interface ModelAssetProvenance {
   readonly equipmentClassification?: AssetFieldProvenance;
 }
 
+/**
+ * The durable identity evidence one asset's representative object carries
+ * (RELEASE-1.0-PLAN P0-9).
+ *
+ * Read from the cache and published verbatim: this package states what the
+ * model says about which object this is, and `@matchline/asset-identity` is
+ * what turns it into keys and reconciles them across compiles. Nothing here is
+ * content-derived -- no property value, no hash -- so a model re-extracted
+ * unchanged produces identical evidence.
+ *
+ * The representative object only. A collapsed component is a part of the asset,
+ * and a part's GUID is not the asset's identity any more than its tag is its
+ * name (`catalog.ts`, the `AssetDraft` construction).
+ */
+export interface ModelAssetIdentityEvidence {
+  /**
+   * The representative object's source model, identified persistently:
+   * `source_models.guid` when the extractor recorded one, else the model's file
+   * name, else `null` when the cache states neither.
+   */
+  readonly sourceModelPersistentId: string | null;
+  /** `objects.instance_guid` of the representative object. */
+  readonly instanceGuid: string | null;
+  /** `objects.authoring_id` of the representative object. */
+  readonly authoringId: string | null;
+  /**
+   * Sibling positions (`objects.path_index`) from the root of the
+   * representative object's own tree down to the object itself.
+   *
+   * The shape of the tree, not its contents: it survives a re-extraction that
+   * changed every property, and it changes when the object is moved -- which is
+   * exactly why it ranks below the two id tiers.
+   */
+  readonly structuralPath: ReadonlyArray<number>;
+  /** `objects.class_name` of the representative object. */
+  readonly className: string | null;
+}
+
 /** One asset as the model universe alone describes it. */
 export interface ModelAsset {
   /**
@@ -167,6 +205,13 @@ export interface ModelAsset {
    * one field.
    */
   readonly assignedAttributes: ReadonlyMap<string, string>;
+  /**
+   * What the model says about which object this is, for the asset identity
+   * ledger (P0-9). Always present: an object with no GUID and no authoring id
+   * still has a position in a tree, and "the model states nothing" is a
+   * reading, not a missing field.
+   */
+  readonly identityEvidence: ModelAssetIdentityEvidence;
   readonly provenance: ModelAssetProvenance;
 }
 

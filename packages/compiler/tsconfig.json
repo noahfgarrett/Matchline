@@ -10,6 +10,7 @@
     { "path": "../domain" },
     { "path": "../model-schema" },
     { "path": "../asset-catalog" },
+    { "path": "../asset-identity" },
     { "path": "../tag-anatomy" },
     { "path": "../system-resolver" },
     { "path": "../identity" },

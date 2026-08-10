@@ -335,6 +335,84 @@ function augmentDragonCache(path, build) {
         );
       },
 
+      /**
+       * Rewrites one meta value.
+       *
+       * Used to give a cache a different `input_sha256` without changing an
+       * object: a re-extraction of an unchanged model is exactly that, and P0-9
+       * says a content hash is never part of identity.
+       */
+      setMeta(key, value) {
+        db.prepare('UPDATE meta SET value = ? WHERE key = ?').run(value, key);
+      },
+
+      /** The object carrying a mapped tag. */
+      objectIdOfTag(tag) {
+        const row = db
+          .prepare(
+            "SELECT object_id AS id FROM properties WHERE category = 'Dragon Data' " +
+              "AND name = 'Tag' AND value_text = ?",
+          )
+          .get(tag);
+        return row === undefined ? null : row.id;
+      },
+
+      /**
+       * Rewrites one object's mapped tag, its display name and its `Item > Name`.
+       *
+       * `instance_guid` and `authoring_id` are deliberately untouched: this is a
+       * tag CORRECTION, and the whole question P0-9 asks is whether the engine
+       * can tell that from a replacement.
+       */
+      retag(fromTag, toTag) {
+        const id = context.objectIdOfTag(fromTag);
+        if (id === null) {
+          throw new Error(`the fixture carries no Dragon Data > Tag of ${fromTag}`);
+        }
+        db.prepare(
+          "UPDATE properties SET value_text = ? WHERE object_id = ? AND category = 'Dragon Data' AND name = 'Tag'",
+        ).run(toTag, id);
+        db.prepare(
+          "UPDATE properties SET value_text = ? WHERE object_id = ? AND category = 'Item' AND name = 'Name'",
+        ).run(toTag, id);
+        db.prepare('UPDATE objects SET display_name = ? WHERE id = ?').run(toTag, id);
+        return id;
+      },
+
+      /** Re-parents one object, which is what moves its structural key. */
+      moveUnder(tag, parentId, depth) {
+        const id = context.objectIdOfTag(tag);
+        if (id === null) {
+          throw new Error(`the fixture carries no Dragon Data > Tag of ${tag}`);
+        }
+        db.prepare('UPDATE objects SET parent_id = ?, path_index = ?, depth = ? WHERE id = ?').run(
+          parentId,
+          nextPathIndex(parentId),
+          depth,
+          id,
+        );
+        return id;
+      },
+
+      /**
+       * Rewrites one object's durable ids.
+       *
+       * The other half of {@link retag}: this is what a REPLACEMENT looks like
+       * in the cache, so a test can tell the two apart instead of assuming the
+       * engine can.
+       */
+      setObjectIdentity(objectId, { authoringId, instanceGuid }) {
+        if (authoringId !== undefined) {
+          db.prepare('UPDATE objects SET authoring_id = ? WHERE id = ?').run(authoringId, objectId);
+        }
+        if (instanceGuid !== undefined) {
+          db.prepare('UPDATE objects SET instance_guid = ? WHERE id = ?').run(
+            instanceGuid,
+            objectId,
+          );
+        }
+      },
+
       /** One tagged piece of equipment: the four properties the profile maps. */
       addEquipment({ sourceModelId, parentId, depth, tag, className, upn, building, service }) {
         const id = context.addObject({

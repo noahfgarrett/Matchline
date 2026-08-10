@@ -9,7 +9,7 @@ import {
 } from './dist/review.fixture.js';
 
 test('every review item kind summarizes to a non-empty line', () => {
-  assert.equal(DRAGON_REVIEW_ITEMS.length, 12);
+  assert.equal(DRAGON_REVIEW_ITEMS.length, 13);
   const kinds = new Set();
   for (const item of DRAGON_REVIEW_ITEMS) {
     kinds.add(item.kind);
@@ -136,6 +136,30 @@ test('an absorbed tagged component names the tag that stopped naming an asset', 
   assert.equal(
     reviewItemSummary(absorbed),
     'tag VFD001-10-01 was absorbed into asset-0001 (object 57)',
+  );
+});
+
+test('an orphaned decision names the stored decision that no longer resolves', () => {
+  const orphaned = DRAGON_REVIEW_ITEMS[12];
+  assert.equal(orphaned.kind, 'orphaned-decision');
+  assert.equal(
+    reviewItemSummary(orphaned),
+    'stored manual-parent decision tag:MAH009-10-01 -> tag:MAH001-10-01 no longer resolves (unknown-child)',
+  );
+  // The person's words survive the address they were recorded against.
+  assert.equal(orphaned.note, 'Commissioned with the D1 train.');
+});
+
+test('an orphaned decision with no other end does not read as a decision about nothing', () => {
+  assert.equal(
+    reviewItemSummary({
+      kind: 'orphaned-decision',
+      decision: 'manual-system',
+      childRef: 'tag:MAH009-10-01',
+      parentRef: '',
+      reason: 'unknown-child',
+    }),
+    'stored manual-system decision tag:MAH009-10-01 no longer resolves (unknown-child)',
   );
 });
 

@@ -29,6 +29,7 @@ import type {
   SourceAssignments,
 } from '@matchline/domain';
 import type { AssetCatalog, UniversePropertyCatalogEntry } from '@matchline/asset-catalog';
+import type { AssetLedger, LedgerEvent } from '@matchline/asset-identity';
 import type {
   ConnectivityOverrides,
   ConnectivityWorkbookReport,
@@ -182,6 +183,30 @@ export interface CompileProjectInput {
   readonly parentTagProperty?: PropertyRef;
   /** Explicit discipline rewrites. Absent means ssmDiscipline is nativeDiscipline. */
   readonly ssmDisciplineProjection?: SsmDisciplineProjection;
+  /**
+   * The asset identity ledger the last compile of this project wrote (P0-9).
+   *
+   * What makes an asset id survive a tag correction. Absent means "this project
+   * has never been compiled": every asset is new, every id is minted, and the
+   * compile publishes the ledger the next one should hand back.
+   *
+   * It also decides how stored decisions are read. `manualRelationshipOverrides`
+   * and `manualSystemAssignments` name assets by whatever id the compile that
+   * showed them published -- or, in an older project, by tag -- and the ledger is
+   * what re-addresses those onto this compile's assets. See
+   * `identity-ledger.ts`'s `decisionResolverOf` for the resolution rules.
+   */
+  readonly identityLedger?: AssetLedger;
+  /**
+   * The model property a site nominates as its stable asset id (P0-9's first
+   * evidence tier).
+   *
+   * A site-wide equipment number a person maintains outranks every model-borne
+   * id, because it follows the equipment when it moves from one document to
+   * another. Absent means the tier never runs and identity starts at the
+   * authoring id.
+   */
+  readonly stableIdProperty?: PropertyRef;
 }
 
 /** The canonical generated MEL, as rows and as bytes. */
@@ -258,8 +283,31 @@ export interface CompileStats {
  * `sourceId` order.
  */
 export interface CompiledProject {
-  /** Stage 1: the model-first asset universe plus the inclusion impact. */
+  /**
+   * Stage 1: the model-first asset universe plus the inclusion impact.
+   *
+   * Every `assetId` here is the LEDGER's, not the one the catalog derived from
+   * the model: stage 2b replaces them before anything reads one, so a corrected
+   * tag keeps the id it already had (P0-9).
+   */
   readonly catalog: AssetCatalog;
+  /**
+   * Stage 2b: the asset identity ledger this compile wrote (P0-9).
+   *
+   * Always published, even for a project with no previous ledger -- that compile
+   * is the one that mints the ids, and the caller has to persist the result or
+   * the next compile starts over. Plain JSON: the store round-trips it.
+   */
+  readonly identityLedger: AssetLedger;
+  /**
+   * Stage 2b: what reconciliation did -- new assets, tag corrections, splits,
+   * assets that disappeared.
+   *
+   * Empty on the ordinary re-compile where nothing moved. A first compile
+   * reports one `new-asset` per asset, which is the truthful account of a
+   * project that has just learned what it contains.
+   */
+  readonly identityLedgerEvents: ReadonlyArray<LedgerEvent>;
   /**
    * Stage 1: every `(category, name)` pair the universe carries, with overall
    * and per-source coverage (P0-1, "Property Catalog aggregates across
