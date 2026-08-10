@@ -14,11 +14,12 @@ import {
   CONNECTIVITY_SOURCE_FILE,
   DRAGON_ANATOMY,
   FEED_ROOT_TAG,
-  FUZZY_PMD_TAG,
   fullInput,
+  FUZZY_PMD_TAG,
   HIERARCHY,
   idOf,
   MEL_SOURCE_FILE,
+  oneSource,
   openDragonCache,
   PROPERTY_MAPPINGS,
   UNKNOWN_FEED_TAG,
@@ -67,7 +68,7 @@ test('stage 2: the property-bag seam hands the resolver every raw property, addr
   assert.equal(subject.sourceFile, 'Dragon-Mechanical.nwc');
 
   const asset = catalog.assets.find((candidate) => candidate.canonicalTag === 'MAH001-10-01');
-  const standalone = subjectPropertiesFor(handle.cache, asset, PROPERTY_MAPPINGS.equipmentTag);
+  const standalone = subjectPropertiesFor(oneSource(handle.cache), asset, PROPERTY_MAPPINGS.equipmentTag);
   assert.equal(standalone.get('Dragon Data')?.get('UPN'), '001');
   assert.equal(standalone.get('Dragon Data')?.get('Building'), 'D1');
 });

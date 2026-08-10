@@ -16,12 +16,13 @@ import test, { after, before } from 'node:test';
 import { compileProject, subjectPropertiesFor } from '../dist/index.js';
 import {
   fullInput,
+  oneSource,
   openDragonCache,
   PROPERTY_MAPPINGS,
   siteProfile,
-  untaggedSkid,
   UNTAGGED_SKID_FILTERS,
   UNTAGGED_SKID_TAG,
+  untaggedSkid,
 } from './support.mjs';
 
 let handle = null;
@@ -76,7 +77,7 @@ test('the seam reads the equipment tag off the representative object only', () =
   // Without the special case the bag would answer `PMP002-10-01` here, and a
   // resolver rung or a Studio preview addressing `Dragon Data > Tag` would see
   // a tag the catalog says this asset does not have.
-  const bag = subjectPropertiesFor(handle.cache, skid, PROPERTY_MAPPINGS.equipmentTag);
+  const bag = subjectPropertiesFor(oneSource(handle.cache), skid, PROPERTY_MAPPINGS.equipmentTag);
   assert.equal(
     bag.get(PROPERTY_MAPPINGS.equipmentTag.category)?.get(PROPERTY_MAPPINGS.equipmentTag.name),
     undefined,
@@ -107,6 +108,6 @@ test('a representative that states its own tag still reports it', () => {
   const tagged = project.catalog.assets.find(
     (asset) => asset.canonicalTag === 'MAH001-10-01',
   );
-  const bag = subjectPropertiesFor(handle.cache, tagged, PROPERTY_MAPPINGS.equipmentTag);
+  const bag = subjectPropertiesFor(oneSource(handle.cache), tagged, PROPERTY_MAPPINGS.equipmentTag);
   assert.equal(bag.get('Dragon Data')?.get('Tag'), 'MAH001-10-01');
 });

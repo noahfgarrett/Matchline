@@ -12,8 +12,13 @@
  * Determinism is the whole contract (ENGINE.md binding rule 3): every stage is
  * pure, every list is built by iterating `catalog.assets` in catalog order or is
  * sorted by content downstream, and nothing reads a clock, a locale or the
- * filesystem. Two runs over the same cache, workbooks and profile produce a
+ * filesystem. Two runs over the same sources, workbooks and profile produce a
  * deep-equal `CompiledProject` and byte-identical MEL workbook bytes.
+ *
+ * Many sources, one project (RELEASE-1.0-PLAN P0-1). The universe is ordered by
+ * `sourceId` before anything reads it, so registering the same two files in the
+ * other order is the same compile; every per-asset cache read goes through the
+ * asset's own source, because an object ordinal addresses nothing without one.
  */
 import type {
   DeadClaimRuleReviewItem,
@@ -25,7 +30,11 @@ import type {
   SystemResolverConfig,
   TagAnatomyConfig,
 } from '@matchline/domain';
-import { buildAssetCatalog } from '@matchline/asset-catalog';
+import {
+  buildAssetCatalog,
+  buildUniversePropertyCatalog,
+  orderCatalogSources,
+} from '@matchline/asset-catalog';
 import type { ModelAsset } from '@matchline/asset-catalog';
 import { importConnectivityWorkbook } from '@matchline/connectivity-import';
 import type { ConnectivityObservation, ConnectivityWorkbookReport } from '@matchline/connectivity-import';
@@ -75,6 +84,8 @@ import type {
   CompileProjectInput,
   CompileStats,
   MelWorkbookInput,
+  ModelSourceInput,
+  SourceAssetCount,
 } from './types.js';
 
 /**
@@ -184,40 +195,93 @@ function anatomyOf(
   };
 }
 
+/** One source, plus the two cache facts every asset of it is read against. */
+interface SourceContext {
+  readonly source: ModelSourceInput;
+  /** Source-model id -> file name, flattened across appended models. */
+  readonly fileNames: ReadonlyMap<number, string>;
+  /** What this source's cache was extracted from. Never blank. */
+  readonly inputFileName: string;
+}
+
 /**
- * Compile one project: extraction cache + spreadsheets + Site Profile in, every
+ * Compile one project: a model universe + spreadsheets + Site Profile in, every
  * stage's output out.
  *
- * The cache is the caller's: it is read, never written and never closed here, so
- * one open handle can serve a compile, a re-compile under an edited profile, and
- * whatever the UI does between them.
+ * The caches are the caller's: they are read, never written and never closed
+ * here, so one set of open handles can serve a compile, a re-compile under an
+ * edited profile, and whatever the UI does between them.
+ *
+ * @throws AssetCatalogConfigError when two sources share a `sourceId`, when one
+ * is blank, or when the profile names a selection set no source contains.
  */
 export function compileProject(input: CompileProjectInput): CompiledProject {
-  const { cache, profile } = input;
+  const { profile } = input;
   const anatomy = profile.tagAnatomy;
 
+  // The universe, in the one order every stage reads it in. `orderCatalogSources`
+  // is `@matchline/asset-catalog`'s own ordering and validation, borrowed rather
+  // than restated: the catalog and the compiler disagreeing about what a valid
+  // universe is, or about which source is read first, is the whole class of bug
+  // this shares one implementation to rule out.
+  const sources = orderCatalogSources(input.sources);
+
   // --- 1. the model-first asset universe -----------------------------------
-  const catalog = buildAssetCatalog(cache, profile.propertyMappings, profile.assetFilters);
+  const catalog = buildAssetCatalog(sources, profile.propertyMappings, profile.assetFilters);
+  const propertyCatalog = buildUniversePropertyCatalog(sources);
 
   // --- 2. the property-bag seam --------------------------------------------
-  // One pass over the cache per asset, and both consumers of the raw bag are
-  // served from it: the resolver subject, and the claim subject's explicit
-  // parent tag. Reading it twice would double the only I/O the compile does.
-  const fileNames = sourceModelFileNames(cache);
-  const inputFileName = cache.meta().inputFileName;
+  // One pass over the owning source's cache per asset, and both consumers of the
+  // raw bag are served from it: the resolver subject, and the claim subject's
+  // explicit parent tag. Reading it twice would double the only I/O the compile
+  // does.
+  const contexts = new Map<string, SourceContext>();
+  for (const source of sources) {
+    contexts.set(source.sourceId, {
+      source,
+      fileNames: sourceModelFileNames(source.cache),
+      inputFileName: source.cache.meta().inputFileName,
+    });
+  }
+  const contextOf = (asset: ModelAsset): SourceContext => {
+    const context = contexts.get(asset.sourceId);
+    if (context === undefined) {
+      // Unreachable: every asset was produced from `sources` a few lines up.
+      // Stated rather than defaulted, because the fallback would be reading
+      // another source's object of the same ordinal and calling it this asset.
+      throw new Error(
+        `the asset catalog produced ${JSON.stringify(asset.assetId)} from an ` +
+          `unregistered source ${JSON.stringify(asset.sourceId)}`,
+      );
+    }
+    return context;
+  };
 
   const sourceFiles = new Map<string, string>();
   const subjects: ResolverSubject[] = [];
   const claimSubjects: ClaimSubject[] = [];
   for (const asset of catalog.assets) {
-    const bag = readAssetProperties(cache, asset, profile.propertyMappings.equipmentTag);
-    const sourceFile = sourceFileOf(asset, fileNames, inputFileName);
+    const context = contextOf(asset);
+    const bag = readAssetProperties(
+      context.source.cache,
+      asset,
+      profile.propertyMappings.equipmentTag,
+    );
+    const sourceFile = sourceFileOf(asset, context.fileNames, context.inputFileName);
     sourceFiles.set(asset.assetId, sourceFile);
     subjects.push(resolverSubjectOf(asset, bag, sourceFile));
     claimSubjects.push(
       claimSubjectOf(asset, bag, sourceFile, anatomy, input.parentTagProperty),
     );
   }
+  /** The document an asset was read from. Filled for every catalog asset above. */
+  const sourceFileFor = (asset: ModelAsset): string =>
+    sourceFiles.get(asset.assetId) ?? contextOf(asset).inputFileName;
+
+  /** The one file this project was extracted from, or `null` once there are two. */
+  const soleSource = sources.length === 1 ? sources[0] : undefined;
+  const soleInputFileName =
+    soleSource === undefined ? null : (contexts.get(soleSource.sourceId)?.inputFileName ?? null);
 
   // --- 3. the MEL and the System Catalog ------------------------------------
   const mel = readMel(input.melWorkbook);
@@ -281,7 +345,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
       ...(resolution === null
         ? {}
         : { systemKey: resolution.systemKey, systemLabel: resolution.systemLabel }),
-      sourceModelFile: sourceFiles.get(asset.assetId) ?? inputFileName,
+      sourceModelFile: sourceFileFor(asset),
     });
   }
   // `buildElectricalFlowFromIndex` resolves the observation tags once and
@@ -344,14 +408,20 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     // Profile-borne claims address the published profile they came out of, so a
     // re-compile under a new version explains itself.
     profileSource: { sourceFile: profile.profileId, profileRevision: String(profile.version) },
-    modelSourceFile: inputFileName,
+    // Assembly's fallback for an explicit-model claim whose subject carried no
+    // provenance. `claimSubjectOf` always states both together, so this never
+    // fires from here -- and once a project holds several files there is no one
+    // document to name, so it is only offered when there is exactly one.
+    // Naming an arbitrary source would be a wrong file name rather than none.
+    ...(soleInputFileName === null ? {} : { modelSourceFile: soleInputFileName }),
   });
 
   // --- 9. the resolved snapshot ------------------------------------------------
   // The model tree is the one ladder rung assembled here rather than in
-  // `@matchline/relationship-claims`: it is a fact about the extraction cache,
-  // and the cache is the orchestrator's to read.
-  const treeParents = modelTreeParents(cache, catalog.assets);
+  // `@matchline/relationship-claims`: it is a fact about the extraction caches,
+  // and the caches are the orchestrator's to read. One walk per source, never
+  // across -- a tree is what one file drew.
+  const treeParents = modelTreeParents(sources, catalog.assets);
   const compileSubjects: CompileSubject[] = catalog.assets.map((asset) => {
     const modelTreeParentId = treeParents.get(asset.assetId);
     return {
@@ -383,7 +453,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
       resolutionOf(asset.assetId),
       snapshot.nodes.get(asset.assetId),
       tagByAssetId,
-      sourceFiles.get(asset.assetId) ?? inputFileName,
+      sourceFileFor(asset),
       input.ssmDisciplineProjection,
     ),
   );
@@ -405,6 +475,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   ]);
 
   const stats = statsOf({
+    sourceCount: sources.length,
     catalog,
     mel,
     systems,
@@ -420,6 +491,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
 
   return {
     catalog,
+    propertyCatalog,
     subjects,
     melRows: mel.rows,
     systemCatalog: mel.catalog,
@@ -593,6 +665,7 @@ function generatedMelAssetOf(
 
 /** Every stage's headline number, assembled once. */
 function statsOf(parts: {
+  readonly sourceCount: number;
   readonly catalog: CompiledProject['catalog'];
   readonly mel: { readonly rows: ReadonlyArray<MelCatalogRow>; readonly catalog: SystemCatalog };
   readonly systems: CompiledProject['systems'];
@@ -616,8 +689,18 @@ function statsOf(parts: {
     }
   }
 
+  // Read off the catalog's own per-source impact rather than recounted, so the
+  // breakdown can never disagree with the total it was summed from. That map is
+  // already keyed by `sourceId` ascending, so the array inherits the order.
+  const assetCountBySource: SourceAssetCount[] = [];
+  for (const [sourceId, impact] of parts.catalog.impact.bySource) {
+    assetCountBySource.push({ sourceId, assetCount: impact.finalAssetCount });
+  }
+
   return {
+    sourceCount: parts.sourceCount,
     assetCount: parts.catalog.assets.length,
+    assetCountBySource,
     duplicateTagCount: parts.catalog.impact.duplicateTagCount,
     systemCatalogSize: parts.mel.catalog.size,
     melRowCount: parts.mel.rows.length,

@@ -26,8 +26,9 @@ import type {
   RoleGraphConfig,
   SiteProfile,
   SnapshotStats,
+  SourceAssignments,
 } from '@matchline/domain';
-import type { AssetCatalog } from '@matchline/asset-catalog';
+import type { AssetCatalog, UniversePropertyCatalogEntry } from '@matchline/asset-catalog';
 import type {
   ConnectivityOverrides,
   ConnectivityWorkbookReport,
@@ -91,10 +92,41 @@ export interface MelWorkbookInput {
 /** The sheet a MEL is read from when the caller names none. */
 export const DEFAULT_MEL_SHEET = 'MEL';
 
-/** Everything one compile needs. */
-export interface CompileProjectInput {
+/**
+ * One registered model source, as a compile reads it (RELEASE-1.0-PLAN P0-1).
+ *
+ * A project is a universe of these, not one file. `sourceId` is the identity
+ * and the only field the engine keys anything on: `rawFileName` is what the
+ * file called itself and two consultants really do both ship `Level 1.nwc`, so
+ * keying on it would silently drop one of them.
+ *
+ * `displayName` and `rawFileName` are carried rather than used: the project
+ * store records them (`ModelSourceRef`), and taking them here means a caller
+ * can hand a stored source straight to a compile instead of projecting it down
+ * to the two fields the engine happens to read this milestone.
+ */
+export interface ModelSourceInput {
+  /** Project-assigned and unique within the universe. Never a file name. */
+  readonly sourceId: string;
   /** Already opened by the caller, and still the caller's to close. */
   readonly cache: ExtractionCache;
+  /** What the project asserts about this whole source (P0-8). */
+  readonly assignments?: SourceAssignments;
+  /** What a person calls this source in the UI. */
+  readonly displayName?: string;
+  /** The basename of the file that was extracted. Never unique. */
+  readonly rawFileName?: string;
+}
+
+/** Everything one compile needs. */
+export interface CompileProjectInput {
+  /**
+   * The model universe. Read in `sourceId` order whatever order they arrive
+   * in, so a compile is a function of the project rather than of this array.
+   *
+   * @throws AssetCatalogConfigError when a `sourceId` is blank or repeated.
+   */
+  readonly sources: ReadonlyArray<ModelSourceInput>;
   readonly profile: SiteProfile;
   readonly hierarchy: HierarchyConfig;
   /** Parent ladder walk order. Defaults to `@matchline/ssm-compiler`'s. */
@@ -151,11 +183,32 @@ export interface GeneratedMel {
   readonly assets: ReadonlyArray<GeneratedMelAsset>;
 }
 
+/** How many assets one model source contributed to the universe. */
+export interface SourceAssetCount {
+  readonly sourceId: string;
+  readonly assetCount: number;
+}
+
 /** Counts a reviewer checks before trusting a compile, one group per stage. */
 export interface CompileStats {
+  /** Model sources this compile read. */
+  readonly sourceCount: number;
   /** Assets in the model-first universe. */
   readonly assetCount: number;
-  /** Distinct tags carried by more than one asset. */
+  /**
+   * {@link assetCount} broken down per source, in `sourceId` order.
+   *
+   * "34 assets" is not actionable in a universe: the question a coordinator
+   * asks first is which file the missing 10 were supposed to come from. Read
+   * off the catalog's own per-source impact, so it can never disagree with it.
+   *
+   * An array rather than the `ReadonlyMap` the catalog's own `bySource` uses,
+   * because these stats are stored: the desktop writes `CompileStats` straight
+   * into a JSON column, and `JSON.stringify` turns a Map into `{}`. Everything
+   * else on this interface is a number for the same reason.
+   */
+  readonly assetCountBySource: ReadonlyArray<SourceAssetCount>;
+  /** Distinct tags carried by more than one asset, anywhere in the universe. */
   readonly duplicateTagCount: number;
   /** Systems the MEL described. Zero when no MEL was supplied. */
   readonly systemCatalogSize: number;
@@ -185,12 +238,25 @@ export interface CompileStats {
 /**
  * One compiled project: every stage's output, in pipeline order.
  *
- * Deterministic in full. The same cache, workbooks and profile produce a
- * deep-equal value and byte-identical `generatedMel.workbookBytes`.
+ * Deterministic in full. The same sources, workbooks and profile produce a
+ * deep-equal value and byte-identical `generatedMel.workbookBytes` -- including
+ * when the sources arrive in a different order, because the universe is read in
+ * `sourceId` order.
  */
 export interface CompiledProject {
   /** Stage 1: the model-first asset universe plus the inclusion impact. */
   readonly catalog: AssetCatalog;
+  /**
+   * Stage 1: every `(category, name)` pair the universe carries, with overall
+   * and per-source coverage (P0-1, "Property Catalog aggregates across
+   * sources").
+   *
+   * Ordered by overall coverage descending, then category and name. This is the
+   * one stage output nothing downstream consumes -- it is published because a
+   * Site Profile Studio built on one file's catalog cannot answer "which source
+   * is the one missing the tag", and it costs one streaming pass per cache.
+   */
+  readonly propertyCatalog: ReadonlyArray<UniversePropertyCatalogEntry>;
   /** Stage 2: one property-bag subject per asset, in catalog order. */
   readonly subjects: ReadonlyArray<ResolverSubject>;
   /** Stage 3: the MEL as the resolver reads it. Empty without a MEL workbook. */

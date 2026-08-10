@@ -30,16 +30,17 @@ import test, { after, before } from 'node:test';
 import { compileProject } from '@matchline/compiler';
 
 import {
-  HIERARCHY,
-  MODEL_ONLY_RESOLVER,
-  ROLE_GRAPH,
   connectivityWorkbooks,
+  HIERARCHY,
   idOf,
   melWorkbook,
   mentionsAll,
+  MODEL_ONLY_RESOLVER,
+  oneSource,
   openDragonCache,
   pending,
   rioPanel,
+  ROLE_GRAPH,
   siteProfile,
 } from './support.mjs';
 
@@ -60,7 +61,7 @@ let crossing = null;
 
 function baseInput(overrides) {
   return {
-    cache: handle.cache,
+    sources: oneSource(handle.cache),
     profile: siteProfile({ systemResolver: MODEL_ONLY_RESOLVER }),
     hierarchy: HIERARCHY,
     roleGraph: ROLE_GRAPH,

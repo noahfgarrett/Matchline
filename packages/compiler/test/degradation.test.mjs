@@ -16,6 +16,7 @@ import {
   HIERARCHY,
   idOf,
   melWorkbook,
+  oneSource,
   openDragonCache,
   ROLE_GRAPH,
   siteProfile,
@@ -33,7 +34,7 @@ after(() => {
 
 test('without a MEL there is no System Catalog, and the resolver still names every system from the model and the tag', () => {
   const project = compileProject({
-    cache: handle.cache,
+    sources: oneSource(handle.cache),
     profile: siteProfile(),
     hierarchy: HIERARCHY,
     roleGraph: ROLE_GRAPH,
@@ -68,7 +69,7 @@ test('without a MEL there is no System Catalog, and the resolver still names eve
 
 test('a tag-segment-only resolver carries the whole system stage on its own', () => {
   const project = compileProject({
-    cache: handle.cache,
+    sources: oneSource(handle.cache),
     profile: siteProfile({
       systemResolver: {
         keyChain: [{ kind: 'tag-segment', segment: 'system' }],
@@ -89,7 +90,7 @@ test('a tag-segment-only resolver carries the whole system stage on its own', ()
 
 test('without connectivity the flow projection is empty and the family+role rung still builds the same four nestings', () => {
   const project = compileProject({
-    cache: handle.cache,
+    sources: oneSource(handle.cache),
     profile: siteProfile(),
     hierarchy: HIERARCHY,
     roleGraph: ROLE_GRAPH,

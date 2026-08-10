@@ -26,11 +26,17 @@ export interface CatalogSource {
  * Sorting here rather than trusting the caller is what makes every output
  * independent of the order sources were registered, dropped, or re-added in.
  *
+ * Generic in the source type so a caller that carries more than this package
+ * needs -- `@matchline/compiler`'s `ModelSourceInput` carries the display name
+ * and the raw file name too -- gets its own type back and can share this one
+ * definition of "a valid universe, in the order it is read" rather than
+ * restating it and drifting from it.
+ *
  * @throws AssetCatalogConfigError when an id is blank or repeated.
  */
-export function orderCatalogSources(
-  sources: ReadonlyArray<CatalogSource>,
-): ReadonlyArray<CatalogSource> {
+export function orderCatalogSources<TSource extends CatalogSource>(
+  sources: ReadonlyArray<TSource>,
+): ReadonlyArray<TSource> {
   const seen = new Set<string>();
   for (const source of sources) {
     if (source.sourceId.length === 0) {

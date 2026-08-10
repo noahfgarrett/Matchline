@@ -29,6 +29,7 @@ import {
   HIERARCHY,
   idOf,
   melWorkbook,
+  oneSource,
   openDragonCache,
   RIO_RESOLVER,
   RIO_ROLE_GRAPH,
@@ -45,7 +46,7 @@ let project = null;
 before(() => {
   handle = openDragonCache('boundary', rioPanel);
   project = compileProject({
-    cache: handle.cache,
+    sources: oneSource(handle.cache),
     profile: siteProfile({ systemResolver: RIO_RESOLVER }),
     hierarchy: HIERARCHY,
     roleGraph: RIO_ROLE_GRAPH,

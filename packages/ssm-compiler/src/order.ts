@@ -77,6 +77,19 @@ function numberList(values: readonly number[]): string {
 }
 
 /**
+ * One `(sourceId, objectIds)` pair of a duplicate-tag item.
+ *
+ * `:` is escaped on top of the three characters {@link field} handles, so the
+ * boundary between the source and its ordinals is the one colon the pair
+ * contains however many a site writes into a source id. `field` escapes `%`
+ * first, so a literal `%3A` in a source id leaves as `%253A` and can never be
+ * read back as the escape this adds.
+ */
+function sourceObjectField(sourceId: string, objectIds: readonly number[]): string {
+  return `${field(sourceId).replaceAll(':', '%3A')}:${numberList(objectIds)}`;
+}
+
+/**
  * Joins already-escaped fields onto the item kind.
  *
  * The kind is a literal from a closed set, none of which holds a structural
@@ -221,10 +234,12 @@ export function compareDependencies(left: ResolvedDependency, right: ResolvedDep
  *
  * Every field is escaped and every boundary is one of the two separators above,
  * which is what makes the flattening reversible in principle and collision-free
- * in practice. `fuzzy-identity` is the one shape that carries a third
- * character: a candidate is `<assetId>:<distance>`, and since the distance is a
- * trailing integer the last `:` is the boundary however many colons the asset
- * id itself contains.
+ * in practice. Two shapes carry a third character, `:`. A `fuzzy-identity`
+ * candidate is `<assetId>:<distance>`, and since the distance is a trailing
+ * integer the last `:` is the boundary however many colons the asset id itself
+ * contains. A `duplicate-model-tag` source is `<sourceId>:<objectIds>` with the
+ * colon escaped out of the source id (see {@link sourceObjectField}), because
+ * an object list is not a single trailing integer.
  *
  * No `default` branch on purpose: adding a member to `ReviewItem` without adding
  * a case here stops this function compiling, so a new review kind can never
@@ -249,7 +264,25 @@ export function reviewKey(item: ReviewItem): string {
           .join(LIST_SEPARATOR),
       );
     case 'duplicate-model-tag':
-      return composeKey(item.kind, field(item.canonicalTag), numberList(item.objectIds));
+      // The SOURCES, not the bare ordinals. An object id is an extraction
+      // ordinal within one source (P0-1's `ModelObjectKey`), so two sources that
+      // each carry an object 3 flatten onto the same key: one project's
+      // "MAH001-10-01 on mechanical rev A and rev B" and another's
+      // "MAH001-10-01 twice inside one file" would be one decision, and the
+      // desktop records decisions against this key.
+      //
+      // A record written before the universe existed carries no `sources` and
+      // is keyed the way it was written -- an absent field is not "one source",
+      // and rekeying old items would orphan every decision taken on them.
+      return item.sources === undefined
+        ? composeKey(item.kind, field(item.canonicalTag), numberList(item.objectIds))
+        : composeKey(
+            item.kind,
+            field(item.canonicalTag),
+            item.sources
+              .map((source) => sourceObjectField(source.sourceId, source.objectIds))
+              .join(LIST_SEPARATOR),
+          );
     case 'system-catalog-conflict':
       return composeKey(item.kind, field(item.systemKey), fieldList(item.descriptions));
     case 'fuzzy-identity':

@@ -10,6 +10,14 @@
  * orchestrator -- the E1 and E2 integration tests bridged it by hand, and this
  * file is that bridge made into an API.
  *
+ * ## The seam is per source, not per project (P0-1)
+ *
+ * `asset.objectIds` are extraction ordinals, and an ordinal only addresses
+ * anything together with the source that issued it. So every read below takes
+ * the cache of the asset's OWN source: object 3 of the mechanical model and
+ * object 3 of the controls model are different objects, and a bag read from the
+ * wrong one would be a plausible-looking answer about another asset entirely.
+ *
  * ## First object owning a `(category, name)` pair wins
  *
  * An asset can own several cache objects: the representative object first, then
@@ -43,6 +51,8 @@ import type { PropertyRef } from '@matchline/domain';
 import type { ModelAsset } from '@matchline/asset-catalog';
 import type { ExtractionCache, SourceModelNode } from '@matchline/model-schema';
 import type { ResolverSubject } from '@matchline/system-resolver';
+
+import type { ModelSourceInput } from './types.js';
 
 /** The nested `category -> name -> value` shape `ResolverSubject` wants. */
 export type SubjectProperties = ReadonlyMap<string, ReadonlyMap<string, string>>;
@@ -132,19 +142,36 @@ export function readAssetProperties(
 }
 
 /**
- * One asset's raw `category -> name -> value` bag.
+ * One asset's raw `category -> name -> value` bag, read from ITS source.
  *
  * The narrow half of {@link readAssetProperties}, published because the UI needs
  * exactly this and nothing more: a property inspector for a selected asset, and
  * the input a Site Profile Studio preview feeds to `resolveSubject` when a user
  * is trying a resolver rung out.
+ *
+ * The whole universe goes in rather than one cache, and the asset's own
+ * `sourceId` picks the cache out of it. An object ordinal is meaningful only
+ * inside the source that issued it (`ModelObjectKey`), so a caller that passed
+ * the wrong cache would not fail -- it would read *another asset's* properties
+ * and present them as this one's.
+ *
+ * @throws Error when no source in the universe answers to the asset's
+ * `sourceId`, which is the caller pairing an asset with a universe it did not
+ * come from.
  */
 export function subjectPropertiesFor(
-  cache: ExtractionCache,
+  sources: ReadonlyArray<ModelSourceInput>,
   asset: ModelAsset,
   equipmentTag: PropertyRef,
 ): SubjectProperties {
-  return readAssetProperties(cache, asset, equipmentTag).properties;
+  const source = sources.find((candidate) => candidate.sourceId === asset.sourceId);
+  if (source === undefined) {
+    throw new Error(
+      `no model source ${JSON.stringify(asset.sourceId)} in this universe, so ` +
+        `${JSON.stringify(asset.assetId)}'s properties cannot be read`,
+    );
+  }
+  return readAssetProperties(source.cache, asset, equipmentTag).properties;
 }
 
 /** One property as the bag holds it, with the object that supplied it. */

@@ -500,6 +500,22 @@ export function openDragonSplit(label, sourceModelIds, inputFileName) {
 export const DRAGON_MECHANICAL_MODELS = [SOURCE_MODEL_MECHANICAL];
 export const DRAGON_CONTROLS_MODELS = [SOURCE_MODEL_CONTROLS, SOURCE_MODEL_CONTROLS_PLC];
 
+/** The `sourceId` a gate that is not about the universe registers its cache under. */
+export const SINGLE_SOURCE_ID = 'dragon';
+
+/**
+ * One cache as the universe of one `compileProject` takes (P0-1).
+ *
+ * Milestone 2 removed `CompileProjectInput.cache` outright rather than
+ * deprecating it, so every gate has to say which source its cache is. The gates
+ * that are not about the universe say it once, here, and their assertions are
+ * untouched: `assetId` only names a source for a duplicated tag or an untagged
+ * asset, and none of those scenarios has either.
+ */
+export function oneSource(cache) {
+  return [{ sourceId: SINGLE_SOURCE_ID, cache }];
+}
+
 /* ------------------------------------------------------- canonicalization --- */
 
 /**

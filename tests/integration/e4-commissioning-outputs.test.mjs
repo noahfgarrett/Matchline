@@ -75,6 +75,18 @@ import {
 } from '@matchline/scheduling';
 import { readWorkbook, sheetAoa, writeWorkbook } from '@matchline/spreadsheet-import';
 
+/* ------------------------------------------------------- the universe --- */
+
+/**
+ * The `sourceId` this file's one extraction cache is registered under.
+ *
+ * `compileProject` takes a model universe rather than a cache (P0-1); a project
+ * built from one file is a universe of one, and this is that file's id. It is a
+ * project-assigned identity, not a file name -- P0-1's hard gate 4 is precisely
+ * that two sources may share a basename.
+ */
+const MODEL_SOURCE_ID = 'dragon';
+
 /* ------------------------------------------------------------- anatomy --- */
 
 /** `MAH005-10-01` -> role `MAH`, system `005`, unit `10`, instance `01`. Verbatim from e3. */
@@ -440,7 +452,7 @@ function connectivityWorkbooks() {
 /** The full input the main 47-asset project compiles from. */
 function mainInput(cache, overrides = {}) {
   return {
-    cache,
+    sources: [{ sourceId: MODEL_SOURCE_ID, cache }],
     profile: siteProfile(),
     hierarchy: HIERARCHY,
     roleGraph: ROLE_GRAPH,
@@ -1043,7 +1055,7 @@ function revisionConnectivityWorkbooks() {
 
 function revisionInput(cache, overrides = {}) {
   return {
-    cache,
+    sources: [{ sourceId: MODEL_SOURCE_ID, cache }],
     profile: siteProfile(),
     hierarchy: HIERARCHY,
     roleGraph: ROLE_GRAPH,

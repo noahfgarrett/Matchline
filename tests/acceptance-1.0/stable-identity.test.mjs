@@ -43,13 +43,14 @@ import { diffMelRevisions } from '@matchline/mel-export';
 
 import {
   HIERARCHY,
-  ROLE_GRAPH,
   idOf,
   melWorkbook,
   mentionsAll,
+  oneSource,
   openDragonCache,
   pending,
   requirePresent,
+  ROLE_GRAPH,
   siteProfile,
 } from './support.mjs';
 
@@ -72,7 +73,7 @@ let first = null;
 
 function inputFor(cache, overrides = {}) {
   return {
-    cache,
+    sources: oneSource(cache),
     profile: siteProfile(),
     hierarchy: HIERARCHY,
     roleGraph: ROLE_GRAPH,

@@ -59,6 +59,18 @@ import {
 
 /* ======================================================== running a compile */
 
+/**
+ * The `sourceId` this app registers its one model under.
+ *
+ * `@matchline/compiler` takes a model universe (P0-1), and this app still holds
+ * exactly one extraction cache per session, so it registers a universe of one.
+ * The id is a constant rather than a file name because a `sourceId` is an
+ * identity and a file name is not — and it is shared with the wizard's own
+ * catalog preview (`project-session.ts`) so that the asset ids a person sees on
+ * screen 3 are the asset ids the compile produces on screen 8.
+ */
+export const MODEL_SOURCE_ID = 'model';
+
 /** Everything a compile needs that the session already holds. */
 export interface CompileRequest {
   readonly cache: ExtractionCache;
@@ -81,7 +93,7 @@ export interface CompileRequest {
  */
 export function buildCompileInput(request: CompileRequest): CompileProjectInput {
   const input: {
-    cache: ExtractionCache;
+    sources: CompileProjectInput['sources'];
     profile: SiteProfile;
     hierarchy: CompileProjectInput['hierarchy'];
     ladder?: NonNullable<CompileProjectInput['ladder']>;
@@ -93,7 +105,7 @@ export function buildCompileInput(request: CompileRequest): CompileProjectInput 
     parentTagProperty?: NonNullable<CompileProjectInput['parentTagProperty']>;
     ssmDisciplineProjection?: NonNullable<CompileProjectInput['ssmDisciplineProjection']>;
   } = {
-    cache: request.cache,
+    sources: [{ sourceId: MODEL_SOURCE_ID, cache: request.cache }],
     profile: request.profile,
     hierarchy: toHierarchyConfig(request.config),
   };

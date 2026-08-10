@@ -32,7 +32,11 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 import { openExtractionCache } from '@matchline/model-schema';
-import { writeDragonFixture } from '@matchline/model-schema/fixtures/dragon';
+import {
+  DRAGON_SOURCE_MODEL_IDS,
+  writeDragonFixture,
+  writeDragonFixtureSubset,
+} from '@matchline/model-schema/fixtures/dragon';
 import { writeWorkbook } from '@matchline/spreadsheet-import';
 
 /** `MAH001-10-01` -> role `MAH`, system `001`, unit `10`, instance `01`. */
@@ -554,10 +558,60 @@ export function openDragonCache(label, build) {
   };
 }
 
-/** The full input: cache, profile, hierarchy, both workbooks, the role graph. */
-export function fullInput(cache, overrides = {}) {
+/**
+ * A temp-dir cache holding only part of Dragon, under its own file name.
+ *
+ * The federated Dragon fixture is one file carrying a Mechanical source model,
+ * a Controls one and the Controls-PLC model appended inside it.
+ * `writeDragonFixtureSubset` partitions it into caches whose tagged objects
+ * partition the federated file exactly -- same ids, same InstanceGuids, same
+ * properties -- which is what makes "federated versus split" a comparison of
+ * two representations of one site rather than of two sites.
+ *
+ * `build` is the same optional cache extension {@link openDragonCache} takes,
+ * applied after the subset is written.
+ */
+export function openDragonSubset(label, opts, build) {
+  const directory = mkdtempSync(join(tmpdir(), `matchline-compiler-${label}-`));
+  const path = join(directory, 'dragon.sqlite');
+  writeDragonFixtureSubset(path, opts);
+  if (build !== undefined) {
+    augmentDragonCache(path, build);
+  }
+  const cache = openExtractionCache(path);
   return {
     cache,
+    close() {
+      cache.close();
+      rmSync(directory, { recursive: true, force: true });
+    },
+  };
+}
+
+/** The mechanical half of Dragon: 24 of the fixture's 34 tagged assets. */
+export const DRAGON_MECHANICAL_MODELS = [DRAGON_SOURCE_MODEL_IDS.mechanical];
+/** The controls half, PLC module included: the other 10. */
+export const DRAGON_CONTROLS_MODELS = [
+  DRAGON_SOURCE_MODEL_IDS.controls,
+  DRAGON_SOURCE_MODEL_IDS.controlsPlc,
+];
+
+/**
+ * One cache as the universe of one `compileProject` takes.
+ *
+ * Every test that is not about the universe registers its cache under this one
+ * id, which keeps the asset ids in their assertions stable: an `assetId` only
+ * names its source for a duplicated tag or an untagged asset, and the tests that
+ * have either are in `multi-source.test.mjs`.
+ */
+export function oneSource(cache) {
+  return [{ sourceId: 'dragon', cache }];
+}
+
+/** The full input: the universe, profile, hierarchy, both workbooks, the role graph. */
+export function fullInput(cache, overrides = {}) {
+  return {
+    sources: oneSource(cache),
     profile: siteProfile(),
     hierarchy: HIERARCHY,
     roleGraph: ROLE_GRAPH,

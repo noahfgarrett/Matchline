@@ -34,12 +34,13 @@ import { compileProject } from '@matchline/compiler';
 import { DEFAULT_HIERARCHY_LEVELS } from '../../apps/desktop/dist/electron/services/project-config.js';
 
 import {
-  ROLE_GRAPH,
-  STARTUP_FAMILY,
   idOf,
+  oneSource,
   openDragonCache,
   pending,
+  ROLE_GRAPH,
   siteProfile,
+  STARTUP_FAMILY,
   startupFamily,
 } from './support.mjs';
 
@@ -59,7 +60,7 @@ let project = null;
 before(() => {
   handle = openDragonCache('default-hierarchy', startupFamily);
   project = compileProject({
-    cache: handle.cache,
+    sources: oneSource(handle.cache),
     profile: siteProfile(),
     // The preset itself, unedited. `WireHierarchyLevel` and
     // `HierarchyLevelConfig` are the same field set, which is why

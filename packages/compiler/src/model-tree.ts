@@ -32,20 +32,64 @@
  *    test is what keeps the rule literally "another asset" rather than
  *    accidentally so.
  *
- * Deterministic: the cache is read, the assets are walked in catalog order, and
- * the result depends on nothing else.
+ * ## One walk per source, never across (P0-1)
+ *
+ * A model tree is a fact about one file. Two sources have their own object
+ * ordinals and their own roots, so the climb runs once per source over that
+ * source's assets alone, and object 3 of one source can never be found as an
+ * ancestor of object 4 of another. A family that spans two files still nests --
+ * but through the tag-based claim rungs, which are about the site, rather than
+ * through a tree that only one of the two files drew.
+ *
+ * Deterministic: the caches are read in `sourceId` order, the assets are walked
+ * in catalog order, and the result depends on nothing else.
  */
 import type { ModelAsset } from '@matchline/asset-catalog';
 import type { ExtractionCache } from '@matchline/model-schema';
+
+/** The part of a model source this rung reads. */
+export interface ModelTreeSource {
+  readonly sourceId: string;
+  readonly cache: ExtractionCache;
+}
 
 /**
  * `assetId` -> the asset its representative object sits inside, for every asset
  * the model tree places inside another.
  *
  * Assets with no asset-bearing ancestor are absent from the map rather than
- * mapped to anything.
+ * mapped to anything. `sources` is expected in `sourceId` order; an asset whose
+ * source is not in the list contributes nothing, which is the same answer as a
+ * source whose tree places it at a root.
  */
 export function modelTreeParents(
+  sources: ReadonlyArray<ModelTreeSource>,
+  assets: ReadonlyArray<ModelAsset>,
+): ReadonlyMap<string, string> {
+  const assetsBySource = new Map<string, ModelAsset[]>();
+  for (const asset of assets) {
+    const bucket = assetsBySource.get(asset.sourceId);
+    if (bucket === undefined) {
+      assetsBySource.set(asset.sourceId, [asset]);
+    } else {
+      bucket.push(asset);
+    }
+  }
+
+  const parents = new Map<string, string>();
+  for (const source of sources) {
+    for (const [assetId, parentAssetId] of parentsWithinSource(
+      source.cache,
+      assetsBySource.get(source.sourceId) ?? [],
+    )) {
+      parents.set(assetId, parentAssetId);
+    }
+  }
+  return parents;
+}
+
+/** The climb over one source's cache, for that source's assets alone. */
+function parentsWithinSource(
   cache: ExtractionCache,
   assets: ReadonlyArray<ModelAsset>,
 ): ReadonlyMap<string, string> {

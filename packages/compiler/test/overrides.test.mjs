@@ -16,6 +16,7 @@ import {
   fullInput,
   HIERARCHY,
   idOf,
+  oneSource,
   openDragonCache,
   siteProfile,
 } from './support.mjs';
@@ -83,7 +84,7 @@ function learnedProfile() {
 /** No workbooks and no role graph, so the learned rung is the only one speaking. */
 function learnedInput(cache, grade) {
   return {
-    cache,
+    sources: oneSource(cache),
     profile: learnedProfile(),
     hierarchy: HIERARCHY,
     learnedRules: learnedRules(grade),

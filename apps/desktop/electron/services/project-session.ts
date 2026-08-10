@@ -75,6 +75,7 @@ import { createAppStateStore, type AppStateStore } from './app-store.js';
 import {
   createCompileView,
   runCompile,
+  MODEL_SOURCE_ID,
   type CompileView,
   type Page,
 } from './compile-service.js';
@@ -723,12 +724,15 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
 
     const mappings = toPropertyMappings(active.draft.propertyMappings);
     const filters = toAssetFilters(active.draft.assetFilters);
-    const catalog = buildAssetCatalog(model.cache, mappings, filters);
+    // The same universe of one the compile runs on, so the asset ids previewed
+    // on screen 3 are the asset ids screen 8 reports.
+    const sources = [{ sourceId: MODEL_SOURCE_ID, cache: model.cache }];
+    const catalog = buildAssetCatalog(sources, mappings, filters);
 
     const subjects: ResolverSubject[] = catalog.assets.map((asset) => ({
       assetId: asset.assetId,
       canonicalTag: asset.canonicalTag,
-      properties: subjectPropertiesFor(model.cache, asset, mappings.equipmentTag),
+      properties: subjectPropertiesFor(sources, asset, mappings.equipmentTag),
       sourceFile: model.scan.fileName,
       objectId: String(asset.objectIds[0] ?? 0),
     }));

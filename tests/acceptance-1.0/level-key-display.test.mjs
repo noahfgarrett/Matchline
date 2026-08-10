@@ -28,14 +28,15 @@ import { compileProject } from '@matchline/compiler';
 import { diffMelRevisions } from '@matchline/mel-export';
 
 import {
-  ROLE_GRAPH,
-  SYSTEM_001_DESCRIPTION_A,
-  SYSTEM_001_DESCRIPTION_B,
   idOf,
   melWorkbook,
+  oneSource,
   openDragonCache,
   pending,
+  ROLE_GRAPH,
   siteProfile,
+  SYSTEM_001_DESCRIPTION_A,
+  SYSTEM_001_DESCRIPTION_B,
 } from './support.mjs';
 
 /** Milestone 4: "Hierarchy+profile semantics". */
@@ -81,7 +82,7 @@ let revisionB = null;
 
 function compileWith(description) {
   return compileProject({
-    cache: handle.cache,
+    sources: oneSource(handle.cache),
     profile: siteProfile(),
     hierarchy: HIERARCHY_V2,
     roleGraph: ROLE_GRAPH,

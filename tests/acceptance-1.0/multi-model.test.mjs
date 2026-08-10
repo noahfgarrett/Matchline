@@ -8,15 +8,17 @@
  * > coexist. [...] Federated vs split representations of one site produce
  * > equivalent canonical outputs (provenance differences excepted).
  *
- * ## What is true today, and why that is the bug
+ * ## What was true before milestone 2, and why that was the bug
  *
- * `CompileProjectInput` (`packages/compiler/src/types.ts`) has one field for
- * the model: `readonly cache: ExtractionCache`. A project is therefore exactly
- * one extraction cache, which means a site that federates its NWDs and a site
- * that keeps them split are two different products, and a second model file is
- * a second project. Every identity in the engine — object ids, source-model
- * names, selection sets — is scoped to that single cache, so there is nothing
- * for a second source's ids to be distinguished *from*.
+ * `CompileProjectInput` (`packages/compiler/src/types.ts`) had one field for
+ * the model: `readonly cache: ExtractionCache`. A project was therefore exactly
+ * one extraction cache, which meant a site that federates its NWDs and a site
+ * that keeps them split were two different products, and a second model file
+ * was a second project. Every identity in the engine — object ids, source-model
+ * names, selection sets — was scoped to that single cache, so there was nothing
+ * for a second source's ids to be distinguished *from*. Milestone 2 replaced
+ * that field with `sources`; the field itself is gone, not deprecated, so the
+ * fixture guard below registers its one cache as a universe of one.
  *
  * ## The fixtures
  *
@@ -106,7 +108,7 @@ test('the split caches partition the federated one exactly', () => {
   // 10 controls assets is the federated fixture's own 34.
   const single = (cache) =>
     compileProject({
-      cache,
+      sources: [modelSource('only', 'The only source', 'Dragon.nwd', cache)],
       profile: siteProfile(),
       hierarchy: HIERARCHY,
       roleGraph: ROLE_GRAPH,

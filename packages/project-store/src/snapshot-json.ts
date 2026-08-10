@@ -18,6 +18,7 @@ import {
   RELATIONSHIP_TYPES,
   type AttributeClaim,
   type AttributeValue,
+  type DuplicateModelTagSource,
   type LadderSourceKind,
   type ParentDecision,
   type ParentDemotion,
@@ -288,6 +289,17 @@ function readNode(value: unknown, field: string): ResolvedAssetNode {
   };
 }
 
+/** One source's claim on a duplicated tag: the id, and its objects carrying it. */
+function readDuplicateTagSource(value: unknown, field: string): DuplicateModelTagSource {
+  const record = requireRecordAt(value, field, fail);
+  return {
+    sourceId: requireStringAt(record['sourceId'], `${field}.sourceId`, fail),
+    objectIds: requireArrayAt(record['objectIds'], `${field}.objectIds`, fail).map(
+      (item, index) => requireIntegerAt(item, `${field}.objectIds[${index}]`, fail),
+    ),
+  };
+}
+
 function readReviewItem(value: unknown, field: string): ReviewItem {
   const record = requireRecordAt(value, field, fail);
   const kind = requireMemberAt(record['kind'], REVIEW_KINDS, `${field}.kind`, fail);
@@ -300,14 +312,29 @@ function readReviewItem(value: unknown, field: string): ReviewItem {
           readAttributeClaim(item, `${field}.claims[${index}]`),
         ),
       };
-    case 'duplicate-model-tag':
+    case 'duplicate-model-tag': {
+      // `sources` is what makes the item addressable once a project holds more
+      // than one model (P0-1): an object id is an ordinal within one source, so
+      // dropping the source on the way back out of storage would turn a
+      // navigable "object 3 of the controls model" into an ambiguous "object 3".
+      // Absent stays absent -- a record written before the universe existed says
+      // nothing about sources, which is not the same as saying "one source".
+      const sources = record['sources'];
       return {
         kind,
         canonicalTag: requireStringAt(record['canonicalTag'], `${field}.canonicalTag`, fail),
         objectIds: requireArrayAt(record['objectIds'], `${field}.objectIds`, fail).map(
           (item, index) => requireIntegerAt(item, `${field}.objectIds[${index}]`, fail),
         ),
+        ...(sources === undefined
+          ? {}
+          : {
+              sources: requireArrayAt(sources, `${field}.sources`, fail).map((item, index) =>
+                readDuplicateTagSource(item, `${field}.sources[${index}]`),
+              ),
+            }),
       };
+    }
     case 'system-catalog-conflict':
       return {
         kind,

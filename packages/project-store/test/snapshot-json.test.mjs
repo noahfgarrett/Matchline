@@ -153,3 +153,64 @@ test('deserializing names the field that is wrong', () => {
   negativeCount.stats.rootCount = -1;
   assert.equal(reason(() => deserializeSnapshot(negativeCount)).field, 'snapshot.stats.rootCount');
 });
+
+test('a duplicate-tag item round-trips the sources that claim the tag', () => {
+  // An object id is an ordinal within one source (P0-1), so an item that says
+  // only "objects 17 and 42" is not navigable once a project holds two models.
+  // Dropping `sources` on the way back out of storage would turn a reviewable
+  // duplicate into an unreviewable one, silently.
+  const snapshot = dragonSnapshot();
+  const duplicate = snapshot.reviewItems.find((item) => item.kind === 'duplicate-model-tag');
+  duplicate.sources = [
+    { sourceId: 'dragon-controls', objectIds: [42] },
+    { sourceId: 'dragon-mechanical', objectIds: [17] },
+  ];
+
+  const restored = deserializeSnapshot(JSON.parse(JSON.stringify(serializeSnapshot(snapshot))));
+  const restoredDuplicate = restored.reviewItems.find(
+    (item) => item.kind === 'duplicate-model-tag',
+  );
+  assert.deepEqual(restoredDuplicate, {
+    kind: 'duplicate-model-tag',
+    canonicalTag: 'MAH001-10-01',
+    objectIds: [17, 42],
+    sources: [
+      { sourceId: 'dragon-controls', objectIds: [42] },
+      { sourceId: 'dragon-mechanical', objectIds: [17] },
+    ],
+  });
+});
+
+test('a duplicate-tag item written before the universe existed round-trips without a sources key', () => {
+  // v3 project files carry no `sources`. Absent must stay absent rather than
+  // becoming an invented one-source list: "nothing was recorded" and "one
+  // source claimed it" are different facts.
+  const snapshot = dragonSnapshot();
+  const restored = deserializeSnapshot(JSON.parse(JSON.stringify(serializeSnapshot(snapshot))));
+  const restoredDuplicate = restored.reviewItems.find(
+    (item) => item.kind === 'duplicate-model-tag',
+  );
+  assert.equal('sources' in restoredDuplicate, false);
+});
+
+test('a malformed source on a duplicate-tag item is refused by field, not accepted loosely', () => {
+  const snapshot = dragonSnapshot();
+  const duplicate = snapshot.reviewItems.find((item) => item.kind === 'duplicate-model-tag');
+  duplicate.sources = [{ sourceId: 'dragon-mechanical', objectIds: [17] }];
+  const good = JSON.parse(JSON.stringify(serializeSnapshot(snapshot)));
+  const index = good.reviewItems.findIndex((item) => item.kind === 'duplicate-model-tag');
+
+  const missingId = structuredClone(good);
+  delete missingId.reviewItems[index].sources[0].sourceId;
+  assert.equal(
+    reason(() => deserializeSnapshot(missingId)).field,
+    `snapshot.reviewItems[${index}].sources[0].sourceId`,
+  );
+
+  const badObjectId = structuredClone(good);
+  badObjectId.reviewItems[index].sources[0].objectIds = ['17'];
+  assert.equal(
+    reason(() => deserializeSnapshot(badObjectId)).field,
+    `snapshot.reviewItems[${index}].sources[0].objectIds[0]`,
+  );
+});

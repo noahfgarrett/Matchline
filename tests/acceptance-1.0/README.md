@@ -1,22 +1,25 @@
 # `tests/acceptance-1.0` — the 1.0 acceptance gates
 
-**These tests are supposed to fail right now.** That is the whole point of them.
+**The files not yet wired into `npm test` are supposed to fail right now.** That
+is the whole point of them.
 
 They encode the **target** semantics of `docs/RELEASE-1.0-PLAN.md` — the P0
-findings and the hard-gate tracker — against the 0.8.1 engine, which does not
-implement them yet. A red run here is milestone 1 working as designed
-("Safety baseline (branch, baseline counts, failing acceptance tests staged)").
-A green run here is a milestone landing.
+findings and the hard-gate tracker — against an engine that does not implement
+them yet. A red run here is milestone 1 working as designed ("Safety baseline
+(branch, baseline counts, failing acceptance tests staged)"). A green run here
+is a milestone landing.
 
 ## How to run them
 
 ```sh
-npm run test:acceptance10
+npm run test:acceptance10        # every gate, red ones included
+npm run test:acceptance10:green  # only the gates a milestone has closed
 ```
 
-They are **not** part of `npm test`, and adding them to it now would turn the
-repository's baseline red and make every real regression invisible underneath
-them.
+The whole directory is **not** part of `npm test`: running the red gates there
+would turn the repository's baseline red and make every real regression
+invisible underneath them. The green list *is* part of `npm test`, which is what
+stops a closed gate from quietly re-opening.
 
 ## How they get wired in
 
@@ -25,19 +28,18 @@ file passes in full:
 
 1. Confirm the whole file passes — not "the tests that matter", the file. A
    partially-passing acceptance file is a gate nobody can read.
-2. Move that file's run into the main suite. The mechanical step is to add its
-   path to `test:integration` in the root `package.json`, e.g.
+2. Move that file's run into the main suite by adding its path to
+   `test:acceptance10:green` in the root `package.json`, e.g.
 
    ```json
-   "test:integration": "node --test tests/integration/*.test.mjs tests/acceptance-1.0/multi-model.test.mjs"
+   "test:acceptance10:green": "node --test tests/acceptance-1.0/multi-model.test.mjs tests/acceptance-1.0/stable-identity.test.mjs"
    ```
 
-   and keep `test:acceptance10` pointed at the whole directory so the remaining
-   gates still have a command of their own.
-3. When the last file is wired in, `test:acceptance10` becomes redundant with
-   the glob in `test:integration`; replace both with
-   `node --test tests/integration/*.test.mjs tests/acceptance-1.0/*.test.mjs`
-   and delete the separate script.
+   `test` already runs that script, and `test:acceptance10` stays pointed at the
+   whole directory so the remaining gates still have a command of their own.
+3. When the last file is wired in, the two scripts describe the same set;
+   replace both with `node --test tests/acceptance-1.0/*.test.mjs` under one
+   name and delete the other.
 4. Update the gate tracker table in `docs/RELEASE-1.0-PLAN.md` in the same
    commit. A gate is closed when a test holds it closed, not when a person
    remembers it.
@@ -50,7 +52,7 @@ required above. Never discard provenance or review items to make tests pass."
 
 | file | directive | hard gates | milestone that turns it green |
 |------|-----------|------------|-------------------------------|
-| `multi-model.test.mjs` | P0-1 Multi-model universe | 2, 3, 4 | 2 — Multi-model domain+storage |
+| `multi-model.test.mjs` | P0-1 Multi-model universe | 2, 3, 4 | 2 — Multi-model domain+storage — **green, wired into `npm test`** |
 | `stable-identity.test.mjs` | P0-9 Stable asset identity | 12 | 3 — Stable identity |
 | `manual-parent-boundaries.test.mjs` | P0-4 Manual parents honor boundaries | 9, 10 | 4 — Hierarchy+profile semantics |
 | `default-hierarchy.test.mjs` | P0-5 Default hierarchy | 11 | 4 — Hierarchy+profile semantics |

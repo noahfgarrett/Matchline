@@ -229,3 +229,105 @@ test('sorting by key is a total order that does not depend on arrival', () => {
   const backwards = [...EVERY_KIND].reverse().sort(compareReviewItems).map(reviewKey);
   assert.deepEqual(backwards, forwards);
 });
+
+/* ------------------------------------------- duplicate tags across sources --- */
+
+test('a duplicated tag on two sources is not the same decision as the same ordinals in one', () => {
+  // The bug this pins: keying on `(canonicalTag, objectIds)` alone. An object
+  // id is an extraction ordinal WITHIN one source (P0-1's `ModelObjectKey`), so
+  // "object 3 of mechanical and object 3 of controls" and "objects 3 and 3 of
+  // one file" flatten onto the same key -- and the desktop records a decision
+  // against that key, so settling one would silently settle the other.
+  const acrossSources = reviewKey({
+    kind: 'duplicate-model-tag',
+    canonicalTag: 'MAH001-10-01',
+    objectIds: [3, 3],
+    sources: [
+      { sourceId: 'mechanical', objectIds: [3] },
+      { sourceId: 'controls', objectIds: [3] },
+    ],
+  });
+  const withinOne = reviewKey({
+    kind: 'duplicate-model-tag',
+    canonicalTag: 'MAH001-10-01',
+    objectIds: [3, 3],
+    sources: [{ sourceId: 'mechanical', objectIds: [3, 3] }],
+  });
+  assert.notEqual(acrossSources, withinOne);
+});
+
+test('which source carries which object moves the key', () => {
+  const base = {
+    kind: 'duplicate-model-tag',
+    canonicalTag: 'MAH001-10-01',
+    objectIds: [17, 42],
+  };
+  const keys = new Set([
+    reviewKey({
+      ...base,
+      sources: [
+        { sourceId: 'mech', objectIds: [17] },
+        { sourceId: 'ctrl', objectIds: [42] },
+      ],
+    }),
+    reviewKey({
+      ...base,
+      sources: [
+        { sourceId: 'mech', objectIds: [42] },
+        { sourceId: 'ctrl', objectIds: [17] },
+      ],
+    }),
+    reviewKey({
+      ...base,
+      sources: [{ sourceId: 'mech', objectIds: [17, 42] }],
+    }),
+    // A source id is site-chosen text, so it has to be escaped like any field.
+    reviewKey({
+      ...base,
+      sources: [
+        { sourceId: `mech${SEPARATOR}ctrl`, objectIds: [17] },
+        { sourceId: 'x', objectIds: [42] },
+      ],
+    }),
+  ]);
+  assert.equal(keys.size, 4, 'every arrangement of the same ordinals is its own decision');
+});
+
+test('a source id spelling the separator between a source and its ordinals stays distinct', () => {
+  // `<sourceId>:<objectIds>` is the pair's own shape, so a source id containing
+  // a colon must not be able to spell another pair exactly.
+  const left = reviewKey({
+    kind: 'duplicate-model-tag',
+    canonicalTag: 'MAH001-10-01',
+    objectIds: [7],
+    sources: [{ sourceId: 'a:7', objectIds: [] }],
+  });
+  const right = reviewKey({
+    kind: 'duplicate-model-tag',
+    canonicalTag: 'MAH001-10-01',
+    objectIds: [7],
+    sources: [{ sourceId: 'a', objectIds: [7] }],
+  });
+  assert.notEqual(left, right);
+});
+
+test('a record written before the universe existed keeps the key it was written under', () => {
+  // `sources` is optional because v3 project files do not carry it, and
+  // rekeying those items would orphan every decision already taken on them.
+  // Absent is not "one source": the two must not share a key either.
+  const legacy = reviewKey({
+    kind: 'duplicate-model-tag',
+    canonicalTag: 'MAH001-10-01',
+    objectIds: [17, 42],
+  });
+  assert.equal(legacy, `duplicate-model-tag${SEPARATOR}MAH001-10-01${SEPARATOR}17,42`);
+  assert.notEqual(
+    legacy,
+    reviewKey({
+      kind: 'duplicate-model-tag',
+      canonicalTag: 'MAH001-10-01',
+      objectIds: [17, 42],
+      sources: [{ sourceId: 'model', objectIds: [17, 42] }],
+    }),
+  );
+});
