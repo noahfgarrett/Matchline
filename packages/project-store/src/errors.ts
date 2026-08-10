@@ -47,6 +47,7 @@ export type ProjectStoreReason =
   | { readonly kind: 'invalid-override'; readonly field: string; readonly detail: string }
   | { readonly kind: 'unknown-compile'; readonly compileId: number }
   | { readonly kind: 'unknown-profile-revision'; readonly revision: number }
+  | { readonly kind: 'unknown-source'; readonly sourceId: string }
   | { readonly kind: 'closed'; readonly path: string }
   | { readonly kind: 'backup-exists'; readonly path: string };
 
@@ -100,6 +101,8 @@ export function describeProjectStoreReason(reason: ProjectStoreReason): string {
       return `no compile with id ${reason.compileId} in this project`;
     case 'unknown-profile-revision':
       return `no profile revision ${reason.revision} in this project`;
+    case 'unknown-source':
+      return `no source '${reason.sourceId}' in this project`;
     case 'closed':
       return `project file is closed: ${reason.path}`;
     case 'backup-exists':

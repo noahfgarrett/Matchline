@@ -1,14 +1,16 @@
 /**
- * The `.matchline` project file schema, version 2 (APP.md "Project file",
+ * The `.matchline` project file schema, version 4 (APP.md "Project file",
  * PRODUCT.md §15).
  *
  * This file is the single source of truth for the DDL: `createProject` executes
  * `PROJECT_SCHEMA_SQL` and `openProject` validates against the constants below.
- * The extraction cache keeps its DDL in `schemas/extraction-cache.sql` because a
- * C# worker writes it too; nothing outside this package writes a project file,
- * so the DDL lives next to the only code that owns it.
+ * How an older file reaches this shape lives in `migrations.ts`, which imports
+ * from here and is never imported by it. The extraction cache keeps its DDL in
+ * `schemas/extraction-cache.sql` because a C# worker writes it too; nothing
+ * outside this package writes a project file, so the DDL lives next to the only
+ * code that owns it.
  *
- * Bump `PROJECT_SCHEMA_VERSION` on ANY change and add a {@link MigrationStep};
+ * Bump `PROJECT_SCHEMA_VERSION` on ANY change and add a `MigrationStep`;
  * readers refuse versions they do not know, and refuse to guess at versions
  * they have no step for.
  *
@@ -26,11 +28,18 @@
  *   beside the nesting rules and the item-master table. Both are widenings —
  *   every v2 row is still legal — but a CHECK cannot be altered in place, so the
  *   step rebuilds both tables and copies every row across.
+ * - **v4** — source identity (P0-1). `sources` is keyed by a `source_id` the
+ *   caller supplies rather than by `(role, file_name)`, so two files with one
+ *   basename coexist (hard gate 4); it separates the name a person gave a
+ *   source (`logical_name`) from the file it came from (`raw_file_name`), and
+ *   the hash of that file (`raw_sha256`) from the hash of the extraction cache
+ *   derived from it (`derived_cache_sha256`). `compiles.input_hashes_json` is
+ *   re-keyed to match.
  */
 import type { SourceKind } from '@matchline/domain';
 
 /** The schema version this build writes and reads. */
-export const PROJECT_SCHEMA_VERSION = 3;
+export const PROJECT_SCHEMA_VERSION = 4;
 
 /**
  * The `app_version` written into a new project when the caller does not supply
@@ -209,12 +218,51 @@ CREATE INDEX idx_learned_kind ON learned(kind, id);
 `;
 
 /**
- * The v2 DDL.
+ * The `sources` table, as v4 creates it.
+ *
+ * Its own constant because two places need exactly these bytes: the full DDL a
+ * new project is created from, and the v3 → v4 migration that rebuilds the
+ * table around `source_id`.
+ *
+ * Column by column, since every one of them is a decision:
+ *
+ * - `source_id` is the identity, supplied by the caller and derived by
+ *   `deriveSourceId` (`source-id.ts`). Not `(role, raw_file_name)`, and not
+ *   UNIQUE on that pair: a site really does register four files called
+ *   `Level 1.nwc`, and keying on the name loses three of them (hard gate 4).
+ *   `WITHOUT ROWID` because the table is looked up by that text key -- and
+ *   because in a rowid table a `TEXT PRIMARY KEY` would accept NULL, which is a
+ *   SQLite quirk this table cannot afford.
+ * - `logical_name` is what a person calls this source ("Dragon Mechanical").
+ *   `raw_file_name` is the file it came from. They start out equal and diverge
+ *   the moment someone renames a source or two sources share a basename.
+ * - `raw_sha256` / `raw_byte_size` describe the file that was registered --
+ *   name only, never a directory (PRODUCT.md §13.3).
+ * - `derived_cache_sha256` is the extraction cache derived from that raw file:
+ *   NULL until an extraction associates one, and equal to `raw_sha256` when the
+ *   registered file *is* a cache (dropping a `.matchline-cache` directly, which
+ *   is how every project before v4 registered a model). A source with a NULL
+ *   here is registered but not yet ready to compile.
+ */
+export const SOURCES_TABLE_SQL = `
+CREATE TABLE sources (
+  source_id            TEXT PRIMARY KEY,
+  role                 TEXT NOT NULL CHECK (role IN (
+                         'model', 'easypower', 'cable-schedule', 'pmd', 'mel', 'p6', 'prior-ssm')),
+  logical_name         TEXT NOT NULL,
+  raw_file_name        TEXT NOT NULL,
+  raw_sha256           TEXT NOT NULL,
+  raw_byte_size        INTEGER NOT NULL CHECK (raw_byte_size >= 0),
+  derived_cache_sha256 TEXT,
+  added_at             TEXT NOT NULL
+) WITHOUT ROWID;
+`;
+
+/**
+ * The v4 DDL.
  *
  * Notes on the shapes that are not obvious:
- * - `sources` is keyed by `(role, file_name)`, not by hash: re-picking an edited
- *   spreadsheet must *replace* the row so its old hash cannot linger and make a
- *   stale compile look current.
+ * - `sources` is keyed by `source_id` (see {@link SOURCES_TABLE_SQL}).
  * - `profile`, `learned` and `decisions` are append-only histories. Nothing is
  *   ever updated in place, because "what did this project believe last Tuesday"
  *   is a question a reviewer really asks (PRODUCT.md §13.3).
@@ -231,16 +279,7 @@ CREATE TABLE meta (
   value TEXT NOT NULL
 ) WITHOUT ROWID;
 
-CREATE TABLE sources (
-  role      TEXT NOT NULL CHECK (role IN (
-              'model', 'easypower', 'cable-schedule', 'pmd', 'mel', 'p6', 'prior-ssm')),
-  file_name TEXT NOT NULL,
-  sha256    TEXT NOT NULL,
-  byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
-  added_at  TEXT NOT NULL,
-  PRIMARY KEY (role, file_name)
-);
-
+${SOURCES_TABLE_SQL}
 CREATE TABLE profile (
   revision     INTEGER PRIMARY KEY CHECK (revision > 0),
   profile_json TEXT NOT NULL,
@@ -288,73 +327,3 @@ CREATE TABLE migrations (
   applied_at TEXT NOT NULL
 );
 ${CONFIG_TABLE_SQL}`;
-
-/**
- * One step of the schema history: the version it produces, and the SQL that
- * gets a file there from the version before it.
- *
- * A step is data rather than a function because that is all a step has needed
- * to be so far. When one needs to move rows as well as add a table, this
- * becomes a discriminated union and `migrateProjectFile` grows a switch — not
- * before.
- */
-export interface MigrationStep {
-  /** The schema version a file declares once this step has run. */
-  readonly to: number;
-  readonly sql: string;
-}
-
-/**
- * Every migration this build can run, in order, each one version apart.
- *
- * `openProject` walks from the version a file declares to
- * {@link PROJECT_SCHEMA_VERSION}. A gap here is not a slow migration, it is a
- * refusal: a file this list cannot reach is left exactly as it was found.
- */
-/**
- * v2 → v3: widen two CHECK constraints.
- *
- * SQLite cannot alter a CHECK, so each table is rebuilt: create the new shape
- * under a temporary name, copy every row, drop the old table, rename. Both
- * changes are widenings — every row that was legal under v2 is legal under v3 —
- * so the copy can never lose a row to the new constraint, and the whole step
- * runs inside `migrateProjectFile`'s transaction.
- *
- * Column lists are written out rather than `SELECT *`, so a future column added
- * to either table stops this step compiling into something that silently drops
- * it. Dropping a table drops its indexes with it, which is why the index is
- * recreated at the end rather than dropped at the start.
- *
- * Nothing references either table by foreign key, so the drop-and-rename cannot
- * strand a reference.
- */
-export const WIDEN_CHECKS_SQL = `
-CREATE TABLE config_v3 (
-  key         TEXT PRIMARY KEY CHECK (key IN (
-                'hierarchy', 'roleGraph', 'ladder', 'ssmDisciplineProjection',
-                'parentTagProperty', 'extoTemplate')),
-  config_json TEXT NOT NULL,
-  updated_at  TEXT NOT NULL
-) WITHOUT ROWID;
-INSERT INTO config_v3 (key, config_json, updated_at)
-  SELECT key, config_json, updated_at FROM config;
-DROP TABLE config;
-ALTER TABLE config_v3 RENAME TO config;
-
-CREATE TABLE learned_v3 (
-  id         INTEGER PRIMARY KEY,
-  kind       TEXT NOT NULL CHECK (kind IN ('nesting', 'item-master', 'wbs')),
-  rules_json TEXT NOT NULL,
-  saved_at   TEXT NOT NULL
-);
-INSERT INTO learned_v3 (id, kind, rules_json, saved_at)
-  SELECT id, kind, rules_json, saved_at FROM learned;
-DROP TABLE learned;
-ALTER TABLE learned_v3 RENAME TO learned;
-CREATE INDEX idx_learned_kind ON learned(kind, id);
-`;
-
-export const MIGRATION_STEPS: readonly MigrationStep[] = [
-  { to: 2, sql: CONFIG_TABLE_SQL },
-  { to: 3, sql: WIDEN_CHECKS_SQL },
-];

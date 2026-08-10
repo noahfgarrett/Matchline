@@ -77,11 +77,17 @@ test('a project survives a close and reopen', () => {
     assert.equal(reopened.meta().createdAt, createdMeta.createdAt);
     assert.deepEqual(reopened.listSources(), [
       {
+        sourceId: 'model:dragon-coordination.nwd',
         role: 'model',
+        logicalName: 'Dragon-Coordination.nwd',
+        rawFileName: 'Dragon-Coordination.nwd',
+        rawSha256: 'a'.repeat(64),
+        rawByteSize: 104857600,
+        derivedCacheSha256: 'a'.repeat(64),
+        addedAt: '2026-01-15T09:30:01.000Z',
         fileName: 'Dragon-Coordination.nwd',
         sha256: 'a'.repeat(64),
         byteSize: 104857600,
-        addedAt: '2026-01-15T09:30:01.000Z',
       },
     ]);
   } finally {

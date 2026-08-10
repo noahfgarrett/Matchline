@@ -18,6 +18,13 @@ export { canonicalJson } from './json.js';
 export { validateRelationshipOverride, validateSystemOverride } from './overrides.js';
 export type { ManualSystemOverride, StoredOverride } from './overrides.js';
 
+export {
+  MIGRATION_STEPS,
+  migrateSourcesToV4,
+  WIDEN_CHECKS_SQL,
+} from './migrations.js';
+export type { MigrationStep } from './migrations.js';
+
 export { validateSiteProfile } from './profile-json.js';
 
 export {
@@ -32,23 +39,23 @@ export {
   isSourceRole,
   LEARNED_RULE_KINDS,
   LEARNED_TABLE_SQL,
-  MIGRATION_STEPS,
   OVERRIDE_KINDS,
   PROJECT_SCHEMA_SQL,
   PROJECT_SCHEMA_VERSION,
   REQUIRED_META_KEYS,
   REQUIRED_TABLES,
   SOURCE_ROLES,
-  WIDEN_CHECKS_SQL,
+  SOURCES_TABLE_SQL,
 } from './schema.js';
 export type {
   ConfigKey,
   DecisionValue,
   LearnedRuleKind,
-  MigrationStep,
   OverrideKind,
   SourceRole,
 } from './schema.js';
+
+export { deriveSourceId } from './source-id.js';
 
 export { deserializeSnapshot, serializeSnapshot } from './snapshot-json.js';
 export type { SerializedSnapshot } from './snapshot-json.js';
@@ -72,4 +79,5 @@ export type {
   ProjectStore,
   ReviewDecision,
   SourceInput,
+  SourceInputV4,
 } from './store.js';

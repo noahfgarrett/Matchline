@@ -5,12 +5,13 @@ import test, { after } from 'node:test';
 
 import {
   createProject,
+  deriveSourceId,
   openProject,
   PROJECT_SCHEMA_VERSION,
   ProjectStoreError,
 } from '../dist/index.js';
 
-import { dumpTables, frozenClock, rawExec, tempDirectory } from './support.mjs';
+import { dragonProfile, dumpTables, frozenClock, rawExec, tempDirectory } from './support.mjs';
 
 /**
  * The migrations, and the promise that running one is never destructive.
@@ -21,7 +22,7 @@ import { dumpTables, frozenClock, rawExec, tempDirectory } from './support.mjs';
  * the two would drift together and the test would keep passing while real old
  * files stopped opening. Each snapshot below is the DDL as that version actually
  * shipped, frozen here on purpose. None of them may ever be edited to match a
- * later schema — a future v4 adds a v3 snapshot beside them instead.
+ * later schema — a future v5 adds a v4 snapshot beside them instead.
  */
 
 const V1_SCHEMA_SQL = `
@@ -182,6 +183,94 @@ CREATE TABLE config (
 ) WITHOUT ROWID;
 `;
 
+/**
+ * `PROJECT_SCHEMA_SQL` as **v3** shipped, frozen.
+ *
+ * `sources` carries its v3 identity here — `PRIMARY KEY (role, file_name)`, one
+ * `sha256`, and no `source_id` — which is the whole point of the snapshot: a v4
+ * step that failed to rebuild the table would still pass against a file built
+ * from today's DDL, and would fail here. A test below asserts the absence of
+ * `source_id` in this text, so the fixture cannot be quietly modernized.
+ */
+const V3_SCHEMA_SQL = `
+CREATE TABLE meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE sources (
+  role      TEXT NOT NULL CHECK (role IN (
+              'model', 'easypower', 'cable-schedule', 'pmd', 'mel', 'p6', 'prior-ssm')),
+  file_name TEXT NOT NULL,
+  sha256    TEXT NOT NULL,
+  byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
+  added_at  TEXT NOT NULL,
+  PRIMARY KEY (role, file_name)
+);
+
+CREATE TABLE profile (
+  revision     INTEGER PRIMARY KEY CHECK (revision > 0),
+  profile_json TEXT NOT NULL,
+  note         TEXT,
+  saved_at     TEXT NOT NULL
+);
+
+CREATE TABLE learned (
+  id         INTEGER PRIMARY KEY,
+  kind       TEXT NOT NULL CHECK (kind IN ('nesting', 'item-master', 'wbs')),
+  rules_json TEXT NOT NULL,
+  saved_at   TEXT NOT NULL
+);
+CREATE INDEX idx_learned_kind ON learned(kind, id);
+
+CREATE TABLE overrides (
+  kind         TEXT NOT NULL CHECK (kind IN ('system', 'relationship')),
+  asset_key    TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  updated_at   TEXT NOT NULL,
+  PRIMARY KEY (kind, asset_key)
+) WITHOUT ROWID;
+
+CREATE TABLE compiles (
+  id                INTEGER PRIMARY KEY,
+  input_hashes_json TEXT NOT NULL,
+  profile_revision  INTEGER NOT NULL REFERENCES profile(revision),
+  stats_json        TEXT NOT NULL,
+  started_at        TEXT NOT NULL,
+  finished_at       TEXT NOT NULL,
+  recorded_at       TEXT NOT NULL
+);
+
+CREATE TABLE snapshots (
+  slot          INTEGER PRIMARY KEY CHECK (slot = 0),
+  compile_id    INTEGER NOT NULL REFERENCES compiles(id),
+  snapshot_json TEXT NOT NULL,
+  saved_at      TEXT NOT NULL
+);
+
+CREATE TABLE decisions (
+  id         INTEGER PRIMARY KEY,
+  review_key TEXT NOT NULL,
+  decision   TEXT NOT NULL CHECK (decision IN ('accepted', 'rejected', 'deferred')),
+  note       TEXT,
+  decided_at TEXT NOT NULL
+);
+CREATE INDEX idx_decisions_key ON decisions(review_key, id);
+
+CREATE TABLE migrations (
+  version    INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL
+);
+
+CREATE TABLE config (
+  key         TEXT PRIMARY KEY CHECK (key IN (
+                'hierarchy', 'roleGraph', 'ladder', 'ssmDisciplineProjection',
+                'parentTagProperty', 'extoTemplate')),
+  config_json TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+) WITHOUT ROWID;
+`;
+
 const CREATED_AT = '2026-01-15T09:30:00.000Z';
 const MIGRATED_AT = '2026-02-01T08:00:00.000Z';
 
@@ -321,11 +410,17 @@ test('migrating a v1 project backs it up and keeps every row', () => {
 
     assert.deepEqual(store.listSources(), [
       {
+        sourceId: 'model:dragon-coordination.nwd',
         role: 'model',
+        logicalName: 'Dragon-Coordination.nwd',
+        rawFileName: 'Dragon-Coordination.nwd',
+        rawSha256: 'a'.repeat(64),
+        rawByteSize: 104857600,
+        derivedCacheSha256: 'a'.repeat(64),
+        addedAt: CREATED_AT,
         fileName: 'Dragon-Coordination.nwd',
         sha256: 'a'.repeat(64),
         byteSize: 104857600,
-        addedAt: CREATED_AT,
       },
     ]);
     assert.equal(store.listDecisions().length, 1);
@@ -334,7 +429,9 @@ test('migrating a v1 project backs it up and keeps every row', () => {
     store.close();
   }
 
-  // Every pre-existing table came through untouched.
+  // Every pre-existing table came through untouched -- except `sources`, which
+  // v4 rebuilds around `source_id`; its data is asserted through the store
+  // above, and its row count here.
   const after_ = dumpTables(path, [
     'meta',
     'sources',
@@ -345,7 +442,7 @@ test('migrating a v1 project backs it up and keeps every row', () => {
     'snapshots',
     'decisions',
   ]);
-  assert.deepEqual(after_.sources, before.sources);
+  assert.equal(after_.sources.length, before.sources.length, 'one row in, one row out');
   assert.deepEqual(after_.decisions, before.decisions);
   assert.deepEqual(
     after_.meta.filter((row) => !row.includes('schema_version')),
@@ -359,6 +456,7 @@ test('migrating a v1 project backs it up and keeps every row', () => {
     JSON.stringify({ applied_at: CREATED_AT, version: 1 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 2 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 3 }),
+    JSON.stringify({ applied_at: MIGRATED_AT, version: 4 }),
   ]);
 
   // The backup is still the v1 file, which is the whole point of taking it.
@@ -469,7 +567,7 @@ test('migrating a v2 project widens both CHECKs and keeps every row', () => {
   }
 
   const after_ = dumpTables(path, ['learned', 'sources']);
-  assert.deepEqual(after_.sources, before.sources, 'an untouched table is untouched');
+  assert.equal(after_.sources.length, before.sources.length, 'the v4 rebuild kept the row');
   for (const row of before.learned) {
     assert.ok(
       after_.learned.includes(row),
@@ -486,6 +584,7 @@ test('migrating a v2 project widens both CHECKs and keeps every row', () => {
     JSON.stringify({ applied_at: CREATED_AT, version: 1 }),
     JSON.stringify({ applied_at: CREATED_AT, version: 2 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 3 }),
+    JSON.stringify({ applied_at: MIGRATED_AT, version: 4 }),
   ]);
 
   // The backup is still the v2 file, which is the whole point of taking it.
@@ -545,11 +644,399 @@ test('a migrated v2 project reopens as current, with no second backup', () => {
   }
 });
 
-test('a project created today is already v3 and needs no migration', () => {
-  const path = temp.file('fresh-v3.matchline');
+/* ------------------------------------------------------- v3 → v4 */
+
+/**
+ * Writes a v3 project file with something in every table, from the frozen DDL.
+ *
+ * Two model sources share a basename in spirit but not in fact — a v3 file
+ * cannot hold two rows with one `(role, file_name)`, which is the limitation v4
+ * exists to remove — so the fixture registers four sources across three roles
+ * and leaves the duplicate-basename case to a post-migration insert.
+ *
+ * The compile rows are the interesting part: their `input_hashes_json` is keyed
+ * the way the desktop app keyed it (`role/fileName`), plus one key that names a
+ * source which is no longer registered. The first must come out keyed by
+ * `source_id`; the second must come out kept, not dropped.
+ */
+function writeV3Project(name) {
+  const path = temp.file(name);
+  const db = new DatabaseSync(path);
+  try {
+    db.exec('PRAGMA foreign_keys = ON');
+    db.exec(V3_SCHEMA_SQL);
+
+    const meta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)');
+    meta.run('schema_version', '3');
+    meta.run('app_version', '0.8.1');
+    meta.run('project_name', 'Dragon');
+    meta.run('created_at', CREATED_AT);
+    meta.run('modified_at', CREATED_AT);
+    const migration = db.prepare('INSERT INTO migrations (version, applied_at) VALUES (?, ?)');
+    migration.run(3, CREATED_AT);
+
+    const source = db.prepare(
+      'INSERT INTO sources (role, file_name, sha256, byte_size, added_at) VALUES (?, ?, ?, ?, ?)',
+    );
+    source.run('model', 'Dragon Coordination.nwd', 'a'.repeat(64), 104857600, CREATED_AT);
+    source.run('model', 'Dragon-Controls.matchline-cache', 'b'.repeat(64), 8388608, CREATED_AT);
+    // Two file names a v3 file kept apart that reduce to one id: the space and
+    // the hyphen both normalize away. Distinct rows must stay distinct.
+    source.run('model', 'Dragon-Coordination.nwd', 'f'.repeat(64), 104857601, CREATED_AT);
+    source.run('mel', 'Dragon-MEL.xlsx', 'c'.repeat(64), 20480, CREATED_AT);
+    source.run('pmd', 'Dragon-PMD.xlsx', 'd'.repeat(64), 4096, CREATED_AT);
+
+    const profile = db.prepare(
+      'INSERT INTO profile (revision, profile_json, note, saved_at) VALUES (?, ?, ?, ?)',
+    );
+    profile.run(1, JSON.stringify(dragonProfile()), 'initial import', CREATED_AT);
+    profile.run(2, JSON.stringify(dragonProfile({ name: 'Dragon Phase 2' })), null, CREATED_AT);
+
+    const learned = db.prepare(
+      'INSERT INTO learned (id, kind, rules_json, saved_at) VALUES (?, ?, ?, ?)',
+    );
+    learned.run(3, 'nesting', JSON.stringify({ version: 1, classification: [] }), CREATED_AT);
+    learned.run(9, 'item-master', JSON.stringify({ version: 1, entries: [] }), CREATED_AT);
+    learned.run(11, 'wbs', JSON.stringify({ version: 1, entries: [] }), CREATED_AT);
+
+    const config = db.prepare('INSERT INTO config (key, config_json, updated_at) VALUES (?, ?, ?)');
+    config.run('ladder', JSON.stringify({ tiers: ['manual'] }), CREATED_AT);
+    config.run('extoTemplate', JSON.stringify({ version: 1, headers: ['UPN'] }), CREATED_AT);
+
+    db.prepare(
+      'INSERT INTO overrides (kind, asset_key, payload_json, updated_at) VALUES (?, ?, ?, ?)',
+    ).run('system', 'MAH001-10-01', JSON.stringify({ systemKey: '001' }), CREATED_AT);
+
+    db.prepare(
+      `INSERT INTO compiles
+         (id, input_hashes_json, profile_revision, stats_json, started_at, finished_at, recorded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      1,
+      JSON.stringify({
+        'model/Dragon Coordination.nwd': 'a'.repeat(64),
+        'model/Dragon-Controls.matchline-cache': 'b'.repeat(64),
+        'model/Dragon-Coordination.nwd': 'f'.repeat(64),
+        'mel/Dragon-MEL.xlsx': 'c'.repeat(64),
+        // A source that was compiled once and has since been removed. Its hash
+        // is history, and history is not the migration's to throw away.
+        'mel/Dragon-MEL-2025.xlsx': 'e'.repeat(64),
+      }),
+      2,
+      JSON.stringify({ nodeCount: 34 }),
+      '2026-01-15T10:00:00.000Z',
+      '2026-01-15T10:00:42.000Z',
+      CREATED_AT,
+    );
+
+    db.prepare(
+      'INSERT INTO snapshots (slot, compile_id, snapshot_json, saved_at) VALUES (0, ?, ?, ?)',
+    ).run(1, JSON.stringify({ nodes: [], reviewItems: [], stats: { nodeCount: 34 } }), CREATED_AT);
+
+    db.prepare(
+      'INSERT INTO decisions (review_key, decision, note, decided_at) VALUES (?, ?, ?, ?)',
+    ).run('missing-boundary:tag:MAH001-10-01', 'accepted', 'walked it down on site', CREATED_AT);
+  } finally {
+    db.close();
+  }
+  return path;
+}
+
+/** The column names of one table, as SQLite reports them. */
+function columnsOf(path, table) {
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    return db
+      .prepare(`PRAGMA table_info(${table})`)
+      .all()
+      .map((row) => row.name);
+  } finally {
+    db.close();
+  }
+}
+
+test('the frozen v3 fixture really is pre-v4: its sources table has no source_id', () => {
+  // The guard on every assertion below. A fixture quietly rebuilt from today's
+  // DDL would make the whole v3 -> v4 suite prove nothing.
+  assert.equal(V3_SCHEMA_SQL.includes('source_id'), false, 'the frozen DDL names no source_id');
+  const path = writeV3Project('frozen-v3.matchline');
+  assert.deepEqual(columnsOf(path, 'sources'), [
+    'role',
+    'file_name',
+    'sha256',
+    'byte_size',
+    'added_at',
+  ]);
+});
+
+test('a v3 project is refused, by version, until migration is asked for', () => {
+  const path = writeV3Project('refused-v3.matchline');
+
+  const failure = reason(() => openProject(path));
+  assert.equal(failure.kind, 'migration-required');
+  assert.equal(failure.found, 3);
+  assert.equal(failure.supported, PROJECT_SCHEMA_VERSION);
+  assert.equal(existsSync(`${path}.backup-3`), false, 'a refusal touches nothing');
+});
+
+test('migrating a v3 project gives every source an id and keeps every row', () => {
+  const path = writeV3Project('migrate-v3.matchline');
+  const before = dumpTables(path, [
+    'profile',
+    'learned',
+    'overrides',
+    'snapshots',
+    'decisions',
+    'config',
+  ]);
+
+  const store = openProject(path, { migrate: true, now: frozenClock(MIGRATED_AT) });
+  try {
+    assert.deepEqual(store.migration, {
+      fromVersion: 3,
+      toVersion: PROJECT_SCHEMA_VERSION,
+      backupPath: `${path}.backup-3`,
+    });
+    assert.ok(existsSync(`${path}.backup-3`), 'the original was copied before anything ran');
+    assert.equal(store.meta().schemaVersion, PROJECT_SCHEMA_VERSION);
+
+    // Every source kept its name, hash, size and date, and gained an id derived
+    // from what it already was -- not a random one.
+    assert.deepEqual(store.listSources(), [
+      {
+        sourceId: 'mel:dragon-mel.xlsx',
+        role: 'mel',
+        logicalName: 'Dragon-MEL.xlsx',
+        rawFileName: 'Dragon-MEL.xlsx',
+        rawSha256: 'c'.repeat(64),
+        rawByteSize: 20480,
+        derivedCacheSha256: 'c'.repeat(64),
+        addedAt: CREATED_AT,
+        fileName: 'Dragon-MEL.xlsx',
+        sha256: 'c'.repeat(64),
+        byteSize: 20480,
+      },
+      {
+        sourceId: 'model:dragon-controls.matchline-cache',
+        role: 'model',
+        logicalName: 'Dragon-Controls.matchline-cache',
+        rawFileName: 'Dragon-Controls.matchline-cache',
+        rawSha256: 'b'.repeat(64),
+        rawByteSize: 8388608,
+        derivedCacheSha256: 'b'.repeat(64),
+        addedAt: CREATED_AT,
+        fileName: 'Dragon-Controls.matchline-cache',
+        sha256: 'b'.repeat(64),
+        byteSize: 8388608,
+      },
+      {
+        sourceId: 'model:dragon-coordination.nwd',
+        role: 'model',
+        logicalName: 'Dragon Coordination.nwd',
+        rawFileName: 'Dragon Coordination.nwd',
+        rawSha256: 'a'.repeat(64),
+        rawByteSize: 104857600,
+        derivedCacheSha256: 'a'.repeat(64),
+        addedAt: CREATED_AT,
+        fileName: 'Dragon Coordination.nwd',
+        sha256: 'a'.repeat(64),
+        byteSize: 104857600,
+      },
+      {
+        // Same slug as the row above, and a different source: the suffix is
+        // what keeps a v3 file's two rows two rows.
+        sourceId: 'model:dragon-coordination.nwd-2',
+        role: 'model',
+        logicalName: 'Dragon-Coordination.nwd',
+        rawFileName: 'Dragon-Coordination.nwd',
+        rawSha256: 'f'.repeat(64),
+        rawByteSize: 104857601,
+        derivedCacheSha256: 'f'.repeat(64),
+        addedAt: CREATED_AT,
+        fileName: 'Dragon-Coordination.nwd',
+        sha256: 'f'.repeat(64),
+        byteSize: 104857601,
+      },
+      {
+        sourceId: 'pmd:dragon-pmd.xlsx',
+        role: 'pmd',
+        logicalName: 'Dragon-PMD.xlsx',
+        rawFileName: 'Dragon-PMD.xlsx',
+        rawSha256: 'd'.repeat(64),
+        rawByteSize: 4096,
+        derivedCacheSha256: 'd'.repeat(64),
+        addedAt: CREATED_AT,
+        fileName: 'Dragon-PMD.xlsx',
+        sha256: 'd'.repeat(64),
+        byteSize: 4096,
+      },
+    ]);
+
+    // The compile history is re-keyed to the ids the sources now carry, and the
+    // hash of a source nobody registers any more is kept under `legacy:`.
+    const [compile] = store.listCompiles();
+    assert.deepEqual(compile.inputHashes, {
+      'mel:dragon-mel.xlsx': 'c'.repeat(64),
+      'model:dragon-controls.matchline-cache': 'b'.repeat(64),
+      'model:dragon-coordination.nwd': 'a'.repeat(64),
+      'model:dragon-coordination.nwd-2': 'f'.repeat(64),
+      'legacy:mel/Dragon-MEL-2025.xlsx': 'e'.repeat(64),
+    });
+    assert.equal(compile.profileRevision, 2);
+    assert.deepEqual(compile.stats, { nodeCount: 34 });
+
+    // And nothing else moved.
+    assert.deepEqual(
+      store.listProfileRevisions().map((entry) => entry.revision),
+      [2, 1],
+    );
+    assert.equal(store.getProfile().profile.name, 'Dragon Phase 2');
+    assert.deepEqual(store.getLearnedRules('wbs').rules, { version: 1, entries: [] });
+    assert.deepEqual(
+      store.listConfig().map((entry) => entry.key),
+      ['extoTemplate', 'ladder'],
+    );
+    assert.equal(store.listOverrides().length, 1);
+    assert.equal(store.listDecisions().length, 1);
+    assert.equal(store.getLatestSnapshot().compileId, 1);
+  } finally {
+    store.close();
+  }
+
+  const after_ = dumpTables(path, [
+    'profile',
+    'learned',
+    'overrides',
+    'snapshots',
+    'decisions',
+    'config',
+  ]);
+  assert.deepEqual(after_, before, 'every table v4 does not rebuild is byte-for-byte what it was');
+
+  assert.deepEqual(dumpTables(path, ['migrations']).migrations, [
+    JSON.stringify({ applied_at: CREATED_AT, version: 3 }),
+    JSON.stringify({ applied_at: MIGRATED_AT, version: 4 }),
+  ]);
+
+  // The backup is still the v3 file, which is the whole point of taking it.
+  assert.deepEqual(columnsOf(`${path}.backup-3`, 'sources'), [
+    'role',
+    'file_name',
+    'sha256',
+    'byte_size',
+    'added_at',
+  ]);
+});
+
+test('two sources with the same basename coexist once a project is v4', () => {
+  // Hard gate 4, at the storage layer: the thing a v3 file structurally could
+  // not do. Both rows survive, and neither overwrites the other's hash.
+  const path = writeV3Project('duplicate-basename.matchline');
+  const store = openProject(path, { migrate: true, now: frozenClock(MIGRATED_AT) });
+  try {
+    const shared = 'Level 1.nwc';
+    const first = deriveSourceId(
+      'model',
+      shared,
+      store.listSources().map((source) => source.sourceId),
+    );
+    store.upsertSourceV4({
+      sourceId: first,
+      role: 'model',
+      logicalName: 'Level 1 (Mechanical)',
+      rawFileName: shared,
+      rawSha256: '1'.repeat(64),
+      rawByteSize: 512,
+      addedAt: MIGRATED_AT,
+    });
+    const second = deriveSourceId(
+      'model',
+      shared,
+      store.listSources().map((source) => source.sourceId),
+    );
+    store.upsertSourceV4({
+      sourceId: second,
+      role: 'model',
+      logicalName: 'Level 1 (Controls)',
+      rawFileName: shared,
+      rawSha256: '2'.repeat(64),
+      rawByteSize: 1024,
+      addedAt: MIGRATED_AT,
+    });
+
+    assert.equal(first, 'model:level-1.nwc');
+    assert.equal(second, 'model:level-1.nwc-2', 'the second one is suffixed, not refused');
+
+    const shared_ = store.listSources().filter((source) => source.rawFileName === shared);
+    assert.equal(shared_.length, 2, 'both are registered');
+    assert.deepEqual(
+      shared_.map((source) => source.rawSha256),
+      ['1'.repeat(64), '2'.repeat(64)],
+      'and each keeps its own hash',
+    );
+    assert.deepEqual(
+      shared_.map((source) => source.logicalName),
+      ['Level 1 (Mechanical)', 'Level 1 (Controls)'],
+    );
+  } finally {
+    store.close();
+  }
+});
+
+test('a migrated v3 project reopens as current, with no second backup', () => {
+  const path = writeV3Project('reopen-v3.matchline');
+  openProject(path, { migrate: true, now: frozenClock(MIGRATED_AT) }).close();
+
+  const store = openProject(path, { migrate: true });
+  try {
+    assert.equal(store.migration, null, 'nothing to do the second time');
+    assert.equal(store.listSources().length, 5, 'and the second open re-derived nothing');
+  } finally {
+    store.close();
+  }
+});
+
+test('a v3 project with no sources and no compiles migrates just as well', () => {
+  const path = temp.file('empty-v3.matchline');
+  const db = new DatabaseSync(path);
+  try {
+    db.exec(V3_SCHEMA_SQL);
+    const meta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)');
+    meta.run('schema_version', '3');
+    meta.run('app_version', '0.8.1');
+    meta.run('project_name', 'Dragon');
+    meta.run('created_at', CREATED_AT);
+    meta.run('modified_at', CREATED_AT);
+    db.prepare('INSERT INTO migrations (version, applied_at) VALUES (?, ?)').run(3, CREATED_AT);
+  } finally {
+    db.close();
+  }
+
+  const store = openProject(path, { migrate: true, now: frozenClock(MIGRATED_AT) });
+  try {
+    assert.equal(store.meta().schemaVersion, PROJECT_SCHEMA_VERSION);
+    assert.deepEqual(store.listSources(), [], 'an empty table rebuilds to an empty table');
+    assert.deepEqual(store.listCompiles(), []);
+  } finally {
+    store.close();
+  }
+});
+
+test('a project created today is already v4 and needs no migration', () => {
+  const path = temp.file('fresh-v4.matchline');
   const store = createProject(path, { name: 'Dragon', now: frozenClock(CREATED_AT) });
   try {
-    assert.equal(store.meta().schemaVersion, 3);
+    assert.equal(store.meta().schemaVersion, 4);
+    store.upsertSourceV4({
+      sourceId: 'model:dragon.nwd',
+      role: 'model',
+      logicalName: 'Dragon',
+      rawFileName: 'Dragon.nwd',
+      rawSha256: 'a'.repeat(64),
+      rawByteSize: 1,
+      addedAt: CREATED_AT,
+    });
+    assert.equal(store.getSource('model:dragon.nwd').derivedCacheSha256, null);
     store.saveConfig('extoTemplate', { version: 1 });
     store.saveLearnedRules('wbs', { version: 1 });
     assert.deepEqual(store.getConfig('extoTemplate').value, { version: 1 });
@@ -557,6 +1044,16 @@ test('a project created today is already v3 and needs no migration', () => {
   } finally {
     store.close();
   }
+  assert.deepEqual(columnsOf(path, 'sources'), [
+    'source_id',
+    'role',
+    'logical_name',
+    'raw_file_name',
+    'raw_sha256',
+    'raw_byte_size',
+    'derived_cache_sha256',
+    'added_at',
+  ]);
   assert.equal(openProject(path).migration, null);
 });
 
