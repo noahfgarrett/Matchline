@@ -141,6 +141,10 @@ namespace Matchline.Extraction.Extractor
             SetNullableInt(_insertSet, "$parent_id", record.ParentId);
             SetText(_insertSet, "$name", record.Name ?? string.Empty);
             SetText(_insertSet, "$kind", record.Kind ?? SelectionSetKind.Folder);
+
+            // The column is INTEGER 0/1 rather than a bool: SQLite has no
+            // boolean type and the DDL's CHECK is written against 0 and 1.
+            SetInt(_insertSet, "$membership_resolved", record.MembershipResolved ? 1 : 0);
             Execute(_insertSet);
         }
 
@@ -318,9 +322,13 @@ namespace Matchline.Extraction.Extractor
                 });
 
             _insertSet = PrepareInsert(
-                "INSERT INTO selection_sets(id, parent_id, name, kind) VALUES($id, $parent_id, $name, $kind)",
-                new string[] { "$id", "$parent_id", "$name", "$kind" },
-                new SqliteType[] { SqliteType.Integer, SqliteType.Integer, SqliteType.Text, SqliteType.Text });
+                "INSERT INTO selection_sets(id, parent_id, name, kind, membership_resolved) " +
+                "VALUES($id, $parent_id, $name, $kind, $membership_resolved)",
+                new string[] { "$id", "$parent_id", "$name", "$kind", "$membership_resolved" },
+                new SqliteType[]
+                {
+                    SqliteType.Integer, SqliteType.Integer, SqliteType.Text, SqliteType.Text, SqliteType.Integer
+                });
 
             // OR IGNORE: (set_id, object_id) is the primary key and a set can
             // legitimately list the same item twice.

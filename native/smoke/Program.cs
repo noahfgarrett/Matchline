@@ -61,6 +61,7 @@ namespace Matchline.Extraction.Smoke
                 CheckSchemaIsVerbatim();
                 CheckSupportedAdapterTable();
                 CheckWarningCollector();
+                CheckProgressLineSniffing();
                 CheckExtractionSession(outputDirectory);
                 CheckAdapterSelection();
                 CheckVersionArgument();
@@ -157,6 +158,53 @@ namespace Matchline.Extraction.Smoke
                 "the supported year list names every adapter",
                 SupportedAdapters.YearList().Split(',').Length == adapters.Length,
                 SupportedAdapters.YearList());
+        }
+
+        /// <summary>
+        /// The launcher relays the plugin's progress lines by sniffing a byte
+        /// prefix and parsing only what matches, so a prefix that disagrees with
+        /// what the writer emits fails silently: progress simply never appears.
+        /// This is the check that makes the two halves meet.
+        /// </summary>
+        private static void CheckProgressLineSniffing()
+        {
+            StringWriter sink = new StringWriter(CultureInfo.InvariantCulture);
+            using (NdjsonWriter writer = new NdjsonWriter(sink, false))
+            {
+                writer.WriteProgress(ExtractionStages.Sets, 7, 19);
+            }
+
+            string line = sink.ToString().TrimEnd('\n');
+            byte[] prefix = NdjsonProgressLine.PrefixBytes();
+            byte[] written = Encoding.UTF8.GetBytes(line);
+
+            bool prefixMatches = written.Length >= prefix.Length;
+            for (int i = 0; prefixMatches && i < prefix.Length; i++)
+            {
+                prefixMatches = written[i] == prefix[i];
+            }
+
+            Check("a written progress line starts with the sniffed prefix", prefixMatches, line);
+
+            ProgressRecord parsed;
+            bool parsedOk = NdjsonProgressLine.TryParse(line, out parsed);
+            Check("a progress line parses back to its record", parsedOk, line);
+            if (parsedOk)
+            {
+                Same("progress stage", ExtractionStages.Sets, parsed.Stage);
+                Same("progress done", 7L, parsed.Done);
+                Same("progress total", 19L, parsed.Total);
+            }
+
+            // Everything else on the stream must be rejected, or the launcher
+            // would relay object records as progress.
+            ProgressRecord rejected;
+            Check(
+                "an object line is not mistaken for progress",
+                !NdjsonProgressLine.TryParse("{\"t\":\"object\",\"id\":1,\"stage\":\"walk\"}", out rejected));
+            Check(
+                "half a line is rejected rather than half-read",
+                !NdjsonProgressLine.TryParse("{\"t\":\"prog\",\"stage\":\"se", out rejected));
         }
 
         /// <summary>
@@ -532,6 +580,7 @@ namespace Matchline.Extraction.Smoke
             SelectionSet,
             SelectionSetMember,
             Warning,
+            Progress,
             End,
         }
 
@@ -552,6 +601,8 @@ namespace Matchline.Extraction.Smoke
             internal SelectionSetMemberRecord Member { get; set; }
 
             internal WarningRecord Warning { get; set; }
+
+            internal ProgressRecord Progress { get; set; }
 
             internal EndRecord End { get; set; }
         }
@@ -596,17 +647,36 @@ namespace Matchline.Extraction.Smoke
             items.Add(ObjectItem(7, 2, null, 1, 0, "Plant B", "Group", null));
             items.Add(ObjectItem(8, 2, 7, 0, 1, "Duct D-001", "Insert Group", Box(-5, -5, -1, 5, 5, 1)));
 
-            items.Add(SetItem(1, null, "Mechanical", SelectionSetKind.Folder));
-            items.Add(SetItem(2, 1, "Pumps", SelectionSetKind.Selection));
+            // The saved-set stage announces itself with a total before it
+            // resolves anything, exactly as DocumentWalker does.
+            items.Add(ProgressItem(ExtractionStages.Sets, 0, 3));
+
+            items.Add(SetItem(1, null, "Mechanical", SelectionSetKind.Folder, true));
+            items.Add(SetItem(2, 1, "Pumps", SelectionSetKind.Selection, true));
             items.Add(MemberItem(2, 3));
             // Deliberate duplicate: a saved set can list the same item twice and
             // the cache's INSERT OR IGNORE must collapse it to one row.
             items.Add(MemberItem(2, 3));
             items.Add(MemberItem(2, 6));
-            items.Add(SetItem(3, 1, "All Valves", SelectionSetKind.Search));
+            items.Add(ProgressItem(ExtractionStages.Sets, 1, 3));
+
+            // A saved search that DID resolve. Schema v1 could not represent
+            // this at all -- it recorded searches without members, so members
+            // present meant explicit and members absent meant unknown.
+            items.Add(SetItem(3, 1, "All Valves", SelectionSetKind.Search, true));
+            items.Add(MemberItem(3, 4));
+            items.Add(ProgressItem(ExtractionStages.Sets, 2, 3));
+
+            // And one that did not: no member rows at all, and a warning naming
+            // it. This is the row that proves absent is distinguishable from
+            // empty (schemas/extraction-cache.sql, membership_resolved).
+            items.Add(SetItem(4, null, "Unresolvable Search", SelectionSetKind.Search, false));
             items.Add(WarningItem(
-                WarningSeverity.Info, WarningCodes.SearchSetNotResolved,
-                "Search set 'All Valves' recorded without members.", null));
+                WarningSeverity.Warning, WarningCodes.SearchSetUnresolved,
+                "Search set 'Unresolvable Search' could not be resolved and is recorded without members: " +
+                "synthetic search failure.", null));
+            items.Add(ProgressItem(ExtractionStages.Sets, 3, 3));
+
             items.Add(WarningItem(
                 WarningSeverity.Error, WarningCodes.SourceModelReadFailed, "synthetic model-level failure", null));
 
@@ -702,14 +772,25 @@ namespace Matchline.Extraction.Smoke
             return new StreamItem { Kind = ItemKind.Property, Property = record };
         }
 
-        private static StreamItem SetItem(long id, long? parentId, string name, string kind)
+        private static StreamItem SetItem(
+            long id, long? parentId, string name, string kind, bool membershipResolved)
         {
             SelectionSetRecord record = new SelectionSetRecord();
             record.Id = id;
             record.ParentId = parentId;
             record.Name = name;
             record.Kind = kind;
+            record.MembershipResolved = membershipResolved;
             return new StreamItem { Kind = ItemKind.SelectionSet, Set = record };
+        }
+
+        private static StreamItem ProgressItem(string stage, long done, long total)
+        {
+            ProgressRecord record = new ProgressRecord();
+            record.Stage = stage;
+            record.Done = done;
+            record.Total = total;
+            return new StreamItem { Kind = ItemKind.Progress, Progress = record };
         }
 
         private static StreamItem MemberItem(long setId, long objectId)
@@ -761,6 +842,9 @@ namespace Matchline.Extraction.Smoke
                             break;
                         case ItemKind.Warning:
                             writer.WriteWarning(item.Warning);
+                            break;
+                        case ItemKind.Progress:
+                            writer.WriteProgress(item.Progress);
                             break;
                         case ItemKind.End:
                             writer.WriteEnd(item.End);
@@ -828,6 +912,11 @@ namespace Matchline.Extraction.Smoke
                     {
                         item.Kind = ItemKind.Warning;
                         item.Warning = entry.Warning;
+                    }
+                    else if (entry.Progress != null)
+                    {
+                        item.Kind = ItemKind.Progress;
+                        item.Progress = entry.Progress;
                     }
                     else if (entry.End != null)
                     {
@@ -909,6 +998,7 @@ namespace Matchline.Extraction.Smoke
                         Same(at + " set.parent", e.Set.ParentId, a.Set.ParentId);
                         Same(at + " set.name", e.Set.Name, a.Set.Name);
                         Same(at + " set.kind", e.Set.Kind, a.Set.Kind);
+                        Same(at + " set.res", e.Set.MembershipResolved, a.Set.MembershipResolved);
                         break;
 
                     case ItemKind.SelectionSetMember:
@@ -921,6 +1011,12 @@ namespace Matchline.Extraction.Smoke
                         Same(at + " warn.code", e.Warning.Code, a.Warning.Code);
                         Same(at + " warn.msg", e.Warning.Message, a.Warning.Message);
                         Same(at + " warn.obj", e.Warning.ObjectId, a.Warning.ObjectId);
+                        break;
+
+                    case ItemKind.Progress:
+                        Same(at + " prog.stage", e.Progress.Stage, a.Progress.Stage);
+                        Same(at + " prog.done", e.Progress.Done, a.Progress.Done);
+                        Same(at + " prog.total", e.Progress.Total, a.Progress.Total);
                         break;
 
                     case ItemKind.End:
@@ -1006,6 +1102,10 @@ namespace Matchline.Extraction.Smoke
                         case ItemKind.Warning:
                             writer.WriteWarning(item.Warning);
                             break;
+                        case ItemKind.Progress:
+                            // Relayed live by the launcher's stream monitor; it
+                            // is not a row in any table.
+                            break;
                         case ItemKind.End:
                             break;
                         default:
@@ -1051,11 +1151,11 @@ namespace Matchline.Extraction.Smoke
                     "warnings row count",
                     Scalar(connection, "SELECT COUNT(*) FROM warnings") == CountKind(expected, ItemKind.Warning));
 
-                // Three member lines, one of them a duplicate: INSERT OR IGNORE.
+                // Four member lines, one of them a duplicate: INSERT OR IGNORE.
                 Check(
                     "duplicate selection-set member collapsed",
-                    Scalar(connection, "SELECT COUNT(*) FROM selection_set_members") == 2,
-                    "expected 2 distinct members from 3 lines");
+                    Scalar(connection, "SELECT COUNT(*) FROM selection_set_members") == 3,
+                    "expected 3 distinct members from 4 lines");
 
                 Check(
                     "meta.object_count agrees with the objects table",
@@ -1109,6 +1209,44 @@ namespace Matchline.Extraction.Smoke
                 Check(
                     "severity CHECK constraint accepted info/warning/error",
                     Scalar(connection, "SELECT COUNT(DISTINCT severity) FROM warnings") == 3);
+
+                // ---- schema v2: membership_resolved ----------------------------
+
+                Check(
+                    "the cache declares schema version 2",
+                    Text(connection, "SELECT value FROM meta WHERE key = 'schema_version'")
+                        == CacheMetaKeys.CurrentSchemaVersion);
+
+                Check(
+                    "membership_resolved survives as 0/1, both values present",
+                    Scalar(connection, "SELECT COUNT(*) FROM selection_sets WHERE membership_resolved = 1") == 3 &&
+                    Scalar(connection, "SELECT COUNT(*) FROM selection_sets WHERE membership_resolved = 0") == 1);
+
+                // The whole point of the column: a search set that resolved is a
+                // different row from one that did not, and the resolved one may
+                // carry members. Under v1 both looked identical.
+                Check(
+                    "a resolved search set keeps its members",
+                    Scalar(
+                        connection,
+                        "SELECT COUNT(*) FROM selection_set_members m JOIN selection_sets s ON s.id = m.set_id " +
+                        "WHERE s.kind = 'search' AND s.membership_resolved = 1") == 1);
+
+                Check(
+                    "an unresolved set has no member rows at all",
+                    Scalar(
+                        connection,
+                        "SELECT COUNT(*) FROM selection_set_members m JOIN selection_sets s ON s.id = m.set_id " +
+                        "WHERE s.membership_resolved = 0") == 0);
+
+                // Absent membership is reported, not merely omitted: every
+                // unresolved set is named by exactly one warning.
+                Check(
+                    "every unresolved set is covered by a SEARCH_SET_UNRESOLVED warning",
+                    Scalar(
+                        connection,
+                        "SELECT COUNT(*) FROM warnings WHERE code = '" + WarningCodes.SearchSetUnresolved + "'")
+                        == Scalar(connection, "SELECT COUNT(*) FROM selection_sets WHERE membership_resolved = 0"));
             }
         }
 

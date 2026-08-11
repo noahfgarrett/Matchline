@@ -275,7 +275,7 @@ export function writeScaleFixture(path: string, shape: ScaleFixtureShape): Scale
     });
 
     for (const [key, value] of [
-      ['schema_version', '1'],
+      ['schema_version', '2'],
       ['input_file_name', shape.inputFileName],
       // A stand-in, derived from the invented file name so two files of one
       // universe differ and two writes of one file do not. It is never the hash

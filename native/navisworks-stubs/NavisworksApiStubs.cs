@@ -453,6 +453,45 @@ namespace Autodesk.Navisworks.Api
         {
             get { throw new NotImplementedException(StubMessage.Text); }
         }
+
+        /// <summary>Assumed: true when this set is a saved search rather than a fixed list.</summary>
+        public bool HasSearch
+        {
+            get { throw new NotImplementedException(StubMessage.Text); }
+        }
+
+        /// <summary>
+        /// Assumed: the saved search itself, as a reference type so the walker's
+        /// null check is meaningful.
+        /// </summary>
+        public Search Search
+        {
+            get { throw new NotImplementedException(StubMessage.Text); }
+        }
+    }
+
+    /// <summary>
+    /// Stub. A saved search, run to resolve a Search Set's membership.
+    /// <para>
+    /// Declared because DocumentWalker calls it directly rather than
+    /// reflectively: a wrong member name here becomes a compile error on the
+    /// first Windows build, which is the cheap failure. What the stub cannot
+    /// check is any of the semantics -- whether the bool argument means "do not
+    /// also select the results", and whether a search can run at all inside a
+    /// -NoGUI session. See docs/WINDOWS-RUNBOOK.md.
+    /// </para>
+    /// </summary>
+    public class Search
+    {
+        /// <summary>
+        /// Assumed: FindAll(Document, bool) returning a materialised collection
+        /// of the items that matched, and a reference type so a null answer is
+        /// distinguishable from an empty one.
+        /// </summary>
+        public ModelItemCollection FindAll(Document document, bool selectResults)
+        {
+            throw new NotImplementedException(StubMessage.Text);
+        }
     }
 
     /// <summary>Stub. Enumerable of saved items.</summary>

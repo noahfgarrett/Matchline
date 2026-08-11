@@ -142,8 +142,34 @@ namespace Matchline.Extraction.Ndjson
                 .AddInt(NdjsonFields.Id, record.Id)
                 .AddNullableInt(NdjsonFields.ParentId, record.ParentId)
                 .AddString(NdjsonFields.Name, record.Name)
-                .AddString(NdjsonFields.Kind, record.Kind);
+                .AddString(NdjsonFields.Kind, record.Kind)
+                .AddBool(NdjsonFields.MembershipResolved, record.MembershipResolved);
             WriteLine();
+        }
+
+        /// <summary>
+        /// A progress line for the launcher to relay. Flushed immediately: a
+        /// progress report nobody sees until the run ends is not progress, and
+        /// the launcher infers it by tailing this file while it is still open.
+        /// </summary>
+        public void WriteProgress(ProgressRecord record)
+        {
+            _builder.Begin()
+                .AddString(NdjsonFields.Type, NdjsonRecordType.Progress)
+                .AddString(NdjsonFields.Stage, record.Stage)
+                .AddInt(NdjsonFields.Done, record.Done)
+                .AddInt(NdjsonFields.Total, record.Total);
+            WriteLine();
+            Flush();
+        }
+
+        public void WriteProgress(string stage, long done, long total)
+        {
+            ProgressRecord record = new ProgressRecord();
+            record.Stage = stage;
+            record.Done = done;
+            record.Total = total;
+            WriteProgress(record);
         }
 
         public void WriteSelectionSetMember(SelectionSetMemberRecord record)

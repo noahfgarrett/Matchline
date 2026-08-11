@@ -29,7 +29,7 @@ after(() => {
 
 test('meta is typed, and its counts are numbers rather than decimal strings', () => {
   const meta = cache.meta();
-  assert.equal(meta.schemaVersion, '1');
+  assert.equal(meta.schemaVersion, '2');
   assert.equal(meta.inputFileName, 'Dragon-Coordination.nwd');
   assert.equal(meta.inputSha256.length, 64);
   assert.equal(meta.inputBytes, 104857600);

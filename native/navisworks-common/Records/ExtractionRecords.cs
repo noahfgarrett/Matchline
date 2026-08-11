@@ -15,6 +15,14 @@ namespace Matchline.Extraction.Records
         public const string Warning = "warn";
 
         /// <summary>
+        /// A progress line from inside the Navisworks process. Not a cache
+        /// table: the plugin has no channel back to the launcher, so a stage it
+        /// wants reported live is written into the stream and relayed by the
+        /// launcher's stream monitor (native/extractor/NdjsonProgressMonitor).
+        /// </summary>
+        public const string Progress = "prog";
+
+        /// <summary>
         /// Terminator. Its presence is how the launcher knows the plugin ran to
         /// completion rather than dying mid-walk, so a truncated stream can never
         /// be mistaken for a successful extraction.
@@ -108,6 +116,8 @@ namespace Matchline.Extraction.Records
     /// <summary>One row of <c>selection_sets</c>.</summary>
     public sealed class SelectionSetRecord
     {
+        private bool _membershipResolved = true;
+
         public long Id { get; set; }
 
         public long? ParentId { get; set; }
@@ -116,6 +126,39 @@ namespace Matchline.Extraction.Records
 
         /// <summary>One of <see cref="SelectionSetKind"/>.</summary>
         public string Kind { get; set; }
+
+        /// <summary>
+        /// False when this set's membership could not be worked out, which for
+        /// now means a saved search that would not run (schema v2,
+        /// <c>selection_sets.membership_resolved</c>).
+        /// <para>
+        /// Defaults to true because folders and explicit selections always know
+        /// their own membership, and because a record built by an older caller
+        /// that never heard of this field is describing a set it did resolve.
+        /// An unresolved set carries NO member records at all -- absent is not
+        /// empty (docs/RELEASE-1.0-PLAN.md P0-3: never return empty-as-answer).
+        /// </para>
+        /// </summary>
+        public bool MembershipResolved
+        {
+            get { return _membershipResolved; }
+            set { _membershipResolved = value; }
+        }
+    }
+
+    /// <summary>
+    /// A progress line the plugin writes into the stream for the launcher to
+    /// relay. Not a cache table.
+    /// </summary>
+    public sealed class ProgressRecord
+    {
+        /// <summary>One of <c>Matchline.Extraction.Protocol.ExtractionStages</c>.</summary>
+        public string Stage { get; set; }
+
+        public long Done { get; set; }
+
+        /// <summary>0 means unknown, exactly as on the launcher's own lines.</summary>
+        public long Total { get; set; }
     }
 
     /// <summary>One row of <c>selection_set_members</c>.</summary>
@@ -143,7 +186,14 @@ namespace Matchline.Extraction.Records
         public const string BoundingBoxReadFailed = "BOUNDING_BOX_READ_FAILED";
         public const string SelectionSetReadFailed = "SELECTION_SET_READ_FAILED";
         public const string SelectionSetMemberUnresolved = "SELECTION_SET_MEMBER_UNRESOLVED";
-        public const string SearchSetNotResolved = "SEARCH_SET_NOT_RESOLVED";
+
+        /// <summary>
+        /// A saved search whose membership could not be resolved. The set is
+        /// still recorded (with <c>membership_resolved = 0</c> and no members),
+        /// and this warning names it so a person can find it in Navisworks.
+        /// Every unresolved set has exactly one of these.
+        /// </summary>
+        public const string SearchSetUnresolved = "SEARCH_SET_UNRESOLVED";
         public const string SourceModelReadFailed = "SOURCE_MODEL_READ_FAILED";
     }
 

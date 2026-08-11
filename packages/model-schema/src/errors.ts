@@ -14,7 +14,8 @@ export type CacheValidationReason =
   | {
       readonly kind: 'unsupported-schema-version';
       readonly found: string;
-      readonly supported: string;
+      /** Every version this reader accepts, oldest first. */
+      readonly supported: ReadonlyArray<string>;
     }
   | { readonly kind: 'malformed-meta-value'; readonly key: string; readonly value: string }
   | { readonly kind: 'object-count-mismatch'; readonly declared: number; readonly actual: number }
@@ -46,7 +47,9 @@ export function describeCacheValidationReason(reason: CacheValidationReason): st
     case 'missing-meta-key':
       return `extraction cache is missing required meta key '${reason.key}'`;
     case 'unsupported-schema-version':
-      return `extraction cache schema_version '${reason.found}' is not supported (this reader supports '${reason.supported}')`;
+      return `extraction cache schema_version '${reason.found}' is not supported (this reader supports ${reason.supported
+        .map((version) => `'${version}'`)
+        .join(', ')})`;
     case 'malformed-meta-value':
       return `extraction cache meta key '${reason.key}' has malformed value '${reason.value}'`;
     case 'object-count-mismatch':

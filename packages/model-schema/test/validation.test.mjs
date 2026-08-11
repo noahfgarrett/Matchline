@@ -46,13 +46,13 @@ function refuses(path, expected) {
 
 test('a cache from an unknown schema version is refused by version', () => {
   const path = brokenCache('future-version', [
-    "UPDATE meta SET value = '2' WHERE key = 'schema_version'",
+    "UPDATE meta SET value = '3' WHERE key = 'schema_version'",
   ]);
-  refuses(path, { kind: 'unsupported-schema-version', found: '2', supported: '1' });
+  refuses(path, { kind: 'unsupported-schema-version', found: '3', supported: ['1', '2'] });
 
-  // The message has to name both versions: whoever reads the log needs to know
-  // which writer produced the file.
-  assert.throws(() => openExtractionCache(path), /schema_version '2'.*supports '1'/s);
+  // The message has to name every version involved: whoever reads the log needs
+  // to know which writer produced the file and what this reader can do about it.
+  assert.throws(() => openExtractionCache(path), /schema_version '3'.*supports '1', '2'/s);
 });
 
 test('a missing schema_version is refused before anything else is inspected', () => {

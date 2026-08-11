@@ -41,6 +41,12 @@ namespace Matchline.Extraction.Ndjson
         // selection set
         internal const string Kind = "kind";
         internal const string SetId = "set";
+        internal const string MembershipResolved = "res";
+
+        // progress
+        internal const string Stage = "stage";
+        internal const string Done = "done";
+        internal const string Total = "total";
 
         // warning
         internal const string Severity = "sev";

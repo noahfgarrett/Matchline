@@ -22,16 +22,21 @@ namespace Matchline.Extraction.Extractor
     internal static class CacheSchema
     {
         internal const string Ddl = @"
--- Matchline extraction cache schema, version 1.
+-- Matchline extraction cache schema, version 2.
 -- Single source of truth: the C# worker writes this shape, packages/model-schema reads it.
 -- Bump meta.schema_version on ANY change; readers refuse versions they don't know.
+--
+-- v2 (search set membership): selection_sets gains membership_resolved. v1 is
+-- still readable — packages/model-schema reads a v1 row as resolved for
+-- 'folder'/'selection' and unresolved for 'search', which is what a v1 writer
+-- actually meant: it recorded saved searches without ever running them.
 
 CREATE TABLE meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 ) WITHOUT ROWID;
 -- Required keys:
---   schema_version      '1'
+--   schema_version      '2'
 --   input_file_name     original NWD filename (name only, no directory — privacy)
 --   input_sha256        lowercase hex digest of the NWD bytes; also the cache filename stem
 --   input_bytes         decimal string
@@ -81,7 +86,12 @@ CREATE TABLE selection_sets (
   id        INTEGER PRIMARY KEY,
   parent_id INTEGER REFERENCES selection_sets(id),   -- folder nesting
   name      TEXT NOT NULL,
-  kind      TEXT NOT NULL CHECK (kind IN ('folder', 'selection', 'search'))
+  kind      TEXT NOT NULL CHECK (kind IN ('folder', 'selection', 'search')),
+  -- 1 when this set's membership is known, 0 when the extractor could not work
+  -- it out (a saved search that would not run). An unresolved set has NO rows
+  -- in selection_set_members at all: absent is not empty, and a reader must
+  -- refuse to filter on it rather than answer with zero objects.
+  membership_resolved INTEGER NOT NULL DEFAULT 1 CHECK (membership_resolved IN (0, 1))
 );
 
 CREATE TABLE selection_set_members (

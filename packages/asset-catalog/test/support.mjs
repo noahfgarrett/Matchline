@@ -7,7 +7,22 @@ import { DatabaseSync } from 'node:sqlite';
 // DDL are imported by built path rather than by package name: the tests need
 // them, the library does not, and `tsc -b` builds them via the project
 // reference in this package's tsconfig.
-import { EXTRACTION_CACHE_DDL } from '../../model-schema/dist/fixtures/dragon.js';
+import {
+  EXTRACTION_CACHE_DDL,
+  EXTRACTION_CACHE_DDL_V1,
+} from '../../model-schema/dist/fixtures/dragon.js';
+
+/**
+ * The tables for a declared schema version.
+ *
+ * Writing a v1 cache means writing v1 tables, not v2 tables under a v1 label:
+ * the reader chooses its columns from the declared version, so a mislabelled
+ * fixture would prove nothing about the caches this reader will actually meet.
+ */
+const DDL_BY_VERSION = {
+  1: EXTRACTION_CACHE_DDL_V1,
+  2: EXTRACTION_CACHE_DDL,
+};
 
 /** A throwaway directory under the OS temp dir; callers remove it when done. */
 export function makeTempDirectory(label) {
@@ -16,7 +31,9 @@ export function makeTempDirectory(label) {
 
 /** Meta the reader requires. Fixed values only -- no clock, no host paths. */
 const META = {
-  schema_version: '1',
+  // Matches EXTRACTION_CACHE_DDL, which this writes: a file declaring one
+  // version while carrying another's tables is a shape no writer produces.
+  schema_version: '2',
   input_file_name: 'Dragon-Synthetic.nwd',
   input_sha256: '0'.repeat(64),
   input_bytes: '2048',
@@ -41,15 +58,20 @@ export function writeSyntheticCache(path, content) {
   const objects = content.objects ?? [];
   const properties = content.properties ?? [];
   const selectionSets = content.selectionSets ?? [];
+  const meta = { ...META, ...(content.meta ?? {}) };
+  const ddl = DDL_BY_VERSION[Number(meta.schema_version)];
+  if (ddl === undefined) {
+    throw new Error(`no frozen DDL for schema_version '${meta.schema_version}'`);
+  }
 
   rmSync(path, { force: true });
   const db = new DatabaseSync(path);
   try {
-    db.exec(EXTRACTION_CACHE_DDL);
+    db.exec(ddl);
     db.exec('BEGIN');
 
     const insertMeta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)');
-    for (const [key, value] of Object.entries(META)) {
+    for (const [key, value] of Object.entries(meta)) {
       insertMeta.run(key, value);
     }
     insertMeta.run('object_count', String(objects.length));
@@ -108,15 +130,23 @@ export function writeSyntheticCache(path, content) {
       );
     }
 
+    // v1 has no membership_resolved column, so a v1 fixture cannot write one.
+    const writesMembership = ddl === EXTRACTION_CACHE_DDL;
     const insertSet = db.prepare(
-      'INSERT INTO selection_sets (id, parent_id, name, kind) VALUES (?, ?, ?, ?)',
+      writesMembership
+        ? 'INSERT INTO selection_sets (id, parent_id, name, kind, membership_resolved) VALUES (?, ?, ?, ?, ?)'
+        : 'INSERT INTO selection_sets (id, parent_id, name, kind) VALUES (?, ?, ?, ?)',
     );
     const insertMember = db.prepare(
       'INSERT INTO selection_set_members (set_id, object_id) VALUES (?, ?)',
     );
     for (const set of selectionSets) {
-      insertSet.run(set.id, set.parentId ?? null, set.name, set.kind ?? 'selection');
-      for (const objectId of set.memberObjectIds ?? []) {
+      // Resolved unless a test says otherwise, and an unresolved set gets no
+      // member rows whatever it lists: that is the shape the schema promises.
+      const resolved = set.membershipResolved ?? true;
+      const columns = [set.id, set.parentId ?? null, set.name, set.kind ?? 'selection'];
+      insertSet.run(...(writesMembership ? [...columns, resolved ? 1 : 0] : columns));
+      for (const objectId of resolved ? (set.memberObjectIds ?? []) : []) {
         insertMember.run(set.id, objectId);
       }
     }

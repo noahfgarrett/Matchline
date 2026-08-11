@@ -515,6 +515,14 @@ namespace Matchline.Extraction.Extractor
                 return;
             }
 
+            if (entry.Progress != null)
+            {
+                // Not a cache row: it was already relayed live by
+                // NdjsonProgressMonitor while the plugin was running. Re-emitting
+                // it here would report a stage as in progress after it finished.
+                return;
+            }
+
             // Unknown record type from a newer adapter: ignored on purpose.
         }
 

@@ -19,11 +19,14 @@ export { CacheValidationError, describeCacheValidationReason } from './errors.js
 export type { CacheValidationReason } from './errors.js';
 
 export {
+  CURRENT_SCHEMA_VERSION,
   isSelectionSetKind,
+  isSupportedSchemaVersion,
   isWarningSeverity,
+  readV1MembershipResolved,
   REQUIRED_META_KEYS,
   REQUIRED_TABLES,
-  SUPPORTED_SCHEMA_VERSION,
+  SUPPORTED_SCHEMA_VERSIONS,
 } from './schema.js';
 export type {
   BoundingBox,
@@ -37,5 +40,6 @@ export type {
   SelectionSetNode,
   SourceModel,
   SourceModelNode,
+  SupportedSchemaVersion,
   WarningSeverity,
 } from './schema.js';

@@ -64,6 +64,79 @@ CREATE TABLE selection_sets (
   id        INTEGER PRIMARY KEY,
   parent_id INTEGER REFERENCES selection_sets(id),
   name      TEXT NOT NULL,
+  kind      TEXT NOT NULL CHECK (kind IN ('folder', 'selection', 'search')),
+  membership_resolved INTEGER NOT NULL DEFAULT 1 CHECK (membership_resolved IN (0, 1))
+);
+
+CREATE TABLE selection_set_members (
+  set_id    INTEGER NOT NULL REFERENCES selection_sets(id),
+  object_id INTEGER NOT NULL REFERENCES objects(id),
+  PRIMARY KEY (set_id, object_id)
+) WITHOUT ROWID;
+
+CREATE TABLE warnings (
+  id        INTEGER PRIMARY KEY,
+  severity  TEXT NOT NULL CHECK (severity IN ('info', 'warning', 'error')),
+  code      TEXT NOT NULL,
+  message   TEXT NOT NULL,
+  object_id INTEGER REFERENCES objects(id)
+);
+`;
+
+/**
+ * The schema-version-1 DDL, frozen.
+ *
+ * This is what v1 caches on disk actually look like: no
+ * `selection_sets.membership_resolved`, because a v1 writer never resolved a
+ * saved search. It exists so a test can write a real v1 file rather than a v2
+ * file wearing a v1 label, and it must never be edited — the project store
+ * keeps frozen per-version DDL for the same reason.
+ */
+export const EXTRACTION_CACHE_DDL_V1 = `
+CREATE TABLE meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE source_models (
+  id           INTEGER PRIMARY KEY,
+  parent_id    INTEGER REFERENCES source_models(id),
+  file_name    TEXT,
+  display_name TEXT,
+  guid         TEXT
+);
+
+CREATE TABLE objects (
+  id              INTEGER PRIMARY KEY,
+  source_model_id INTEGER REFERENCES source_models(id),
+  parent_id       INTEGER REFERENCES objects(id),
+  path_index      INTEGER NOT NULL,
+  depth           INTEGER NOT NULL,
+  display_name    TEXT,
+  class_name      TEXT,
+  instance_guid   TEXT,
+  authoring_id    TEXT,
+  bbox_min_x REAL, bbox_min_y REAL, bbox_min_z REAL,
+  bbox_max_x REAL, bbox_max_y REAL, bbox_max_z REAL
+);
+CREATE UNIQUE INDEX idx_objects_parent_pos ON objects(parent_id, path_index);
+
+CREATE TABLE properties (
+  object_id         INTEGER NOT NULL REFERENCES objects(id),
+  category          TEXT NOT NULL,
+  category_internal TEXT,
+  name              TEXT NOT NULL,
+  name_internal     TEXT,
+  value_text        TEXT,
+  value_type        TEXT NOT NULL
+);
+CREATE INDEX idx_properties_object   ON properties(object_id);
+CREATE INDEX idx_properties_cat_name ON properties(category, name);
+
+CREATE TABLE selection_sets (
+  id        INTEGER PRIMARY KEY,
+  parent_id INTEGER REFERENCES selection_sets(id),
+  name      TEXT NOT NULL,
   kind      TEXT NOT NULL CHECK (kind IN ('folder', 'selection', 'search'))
 );
 
@@ -84,7 +157,7 @@ CREATE TABLE warnings (
 
 /** Meta values that do not depend on the generated content. */
 const DRAGON_META: readonly (readonly [string, string])[] = [
-  ['schema_version', '1'],
+  ['schema_version', '2'],
   ['input_file_name', 'Dragon-Coordination.nwd'],
   ['input_sha256', '5f2c1a9d4b7e0836c5d19af42b6e8730914cad5b2e7f60381c9a4de5f7b02c68'],
   ['input_bytes', '104857600'],
@@ -160,6 +233,8 @@ interface FixtureSelectionSet {
   readonly parentId: number | null;
   readonly name: string;
   readonly kind: string;
+  /** Defaults to true; only an unresolved saved search sets it false. */
+  readonly membershipResolved?: boolean;
   readonly memberObjectIds: readonly number[];
 }
 
@@ -515,6 +590,60 @@ export function writeDragonFixture(path: string): void {
 }
 
 /**
+ * The name of the saved search in `writeDragonFixtureWithUnresolvedSearch`.
+ *
+ * Published so a test can name it without spelling it twice, and deliberately
+ * absent from the plain fixture: adding an unresolved set to Dragon itself
+ * would change what every existing suite counts.
+ */
+export const DRAGON_UNRESOLVED_SET_NAME = 'Fan Search';
+
+/**
+ * Dragon plus one saved search the extractor could not resolve.
+ *
+ * The row exists, `membership_resolved` is 0, there are NO member rows for it,
+ * and a `SEARCH_SET_UNRESOLVED` warning names it — the exact shape schema v2
+ * exists to represent, and the one a filter has to refuse rather than read as
+ * an empty set. Everything else is the plain Dragon fixture, so a test can
+ * compare the two directly.
+ */
+export function writeDragonFixtureWithUnresolvedSearch(path: string): void {
+  const content = buildDragonContent();
+  const nextSetId = content.selectionSets.reduce((highest, set) => Math.max(highest, set.id), 0) + 1;
+  const nextWarningId =
+    content.warnings.reduce((highest, warning) => Math.max(highest, warning.id), 0) + 1;
+
+  writeFixtureContent(
+    path,
+    {
+      ...content,
+      selectionSets: [
+        ...content.selectionSets,
+        {
+          id: nextSetId,
+          parentId: null,
+          name: DRAGON_UNRESOLVED_SET_NAME,
+          kind: 'search',
+          membershipResolved: false,
+          memberObjectIds: [],
+        },
+      ],
+      warnings: [
+        ...content.warnings,
+        {
+          id: nextWarningId,
+          severity: 'warning',
+          code: 'SEARCH_SET_UNRESOLVED',
+          message: `Search set '${DRAGON_UNRESOLVED_SET_NAME}' could not be resolved and is recorded without members: synthetic failure.`,
+          objectId: null,
+        },
+      ],
+    },
+    null,
+  );
+}
+
+/**
  * Which part of Dragon a split file holds.
  *
  * Both selectors are subtractive and independent, and both are optional: an
@@ -758,13 +887,19 @@ function writeFixtureContent(
     }
 
     const insertSelectionSet = db.prepare(
-      'INSERT INTO selection_sets (id, parent_id, name, kind) VALUES (?, ?, ?, ?)',
+      'INSERT INTO selection_sets (id, parent_id, name, kind, membership_resolved) VALUES (?, ?, ?, ?, ?)',
     );
     const insertMember = db.prepare(
       'INSERT INTO selection_set_members (set_id, object_id) VALUES (?, ?)',
     );
     for (const set of content.selectionSets) {
-      insertSelectionSet.run(set.id, set.parentId, set.name, set.kind);
+      const resolved = set.membershipResolved ?? true;
+      insertSelectionSet.run(set.id, set.parentId, set.name, set.kind, resolved ? 1 : 0);
+      // An unresolved set gets no member rows even if one were listed: the
+      // fixture has to be able to produce the shape the schema promises.
+      if (!resolved) {
+        continue;
+      }
       for (const objectId of set.memberObjectIds) {
         insertMember.run(set.id, objectId);
       }

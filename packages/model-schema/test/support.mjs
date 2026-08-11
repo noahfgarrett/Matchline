@@ -16,7 +16,10 @@ export function makeTempDirectory(label) {
  */
 export function writeEmptyCache(path, metaOverrides = {}, ddl = EXTRACTION_CACHE_DDL) {
   const meta = {
-    schema_version: '1',
+    // Matches the DDL this writes by default. A caller that wants an older
+    // cache overrides both together — a file whose declared version disagrees
+    // with its own tables is a shape no writer ever produced.
+    schema_version: '2',
     input_file_name: 'Dragon-Empty.nwd',
     input_sha256: '0'.repeat(64),
     input_bytes: '1024',

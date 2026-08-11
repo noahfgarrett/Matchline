@@ -6,8 +6,39 @@
  * `meta.schema_version` is bumped.
  */
 
-/** The only cache schema version this reader accepts. */
-export const SUPPORTED_SCHEMA_VERSION = '1';
+/**
+ * Cache schema versions this reader accepts, oldest first.
+ *
+ * A reader that understands more than one version is the price of not making
+ * every cache on disk unreadable when the writer moves. v1 caches are still
+ * read — see `readV1MembershipResolved` for the one thing v1 cannot say for
+ * itself.
+ */
+export const SUPPORTED_SCHEMA_VERSIONS = ['1', '2'] as const;
+
+export type SupportedSchemaVersion = (typeof SUPPORTED_SCHEMA_VERSIONS)[number];
+
+/** The version a cache written today declares. The C# writer agrees (`CacheMetaKeys`). */
+export const CURRENT_SCHEMA_VERSION: SupportedSchemaVersion = '2';
+
+/** Type guard for `meta.schema_version`, applied before anything else is read. */
+export function isSupportedSchemaVersion(value: string): value is SupportedSchemaVersion {
+  return (SUPPORTED_SCHEMA_VERSIONS as readonly string[]).includes(value);
+}
+
+/**
+ * What a v1 row means, now that v2 can say it explicitly.
+ *
+ * v1 has no `membership_resolved` column because a v1 writer never resolved a
+ * saved search: it recorded the set and moved on, leaving the members table
+ * empty for it. So the honest reading of a v1 row is exactly the writer's
+ * behaviour — folders and fixed selections know their membership, saved
+ * searches do not. Reading a v1 search set as resolved-and-empty would invent
+ * an answer the writer never gave.
+ */
+export function readV1MembershipResolved(kind: SelectionSetKind): boolean {
+  return kind !== 'search';
+}
 
 /**
  * Meta keys the DDL declares required. `schema_version` is checked first and
@@ -117,6 +148,22 @@ export interface SelectionSet {
   readonly parentId: number | null;
   readonly name: string;
   readonly kind: SelectionSetKind;
+  /**
+   * Whether `memberObjectIds` is an answer.
+   *
+   * `false` means the extractor could not work this set's membership out — a
+   * saved search that would not run — and `memberObjectIds` is then empty
+   * because nothing is known, not because the set holds nothing. The two are
+   * different facts and a caller must not collapse them: filtering a project by
+   * an unresolved set has to refuse, never return zero assets
+   * (docs/RELEASE-1.0-PLAN.md P0-3). A resolved set with no members is a set
+   * that genuinely matched nothing.
+   *
+   * v1 caches carry no such column; they are read as resolved for folders and
+   * fixed selections and unresolved for saved searches, which is what a v1
+   * writer meant. See `readV1MembershipResolved`.
+   */
+  readonly membershipResolved: boolean;
   readonly memberObjectIds: readonly number[];
 }
 

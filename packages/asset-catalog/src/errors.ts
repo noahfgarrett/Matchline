@@ -17,6 +17,26 @@ export type AssetCatalogConfigReason =
       /** Every set and folder name across every source, deduped, in traversal order. */
       readonly available: ReadonlyArray<string>;
     }
+  /**
+   * A filter names a set whose membership the extractor could not resolve — a
+   * saved search that would not run (`selection_sets.membership_resolved = 0`).
+   *
+   * Refused rather than applied, and refused rather than treated as empty. The
+   * cache does not say the set holds nothing; it says nobody found out what it
+   * holds, and filtering a project by an unanswered question would silently
+   * drop every asset (RELEASE-1.0-PLAN.md P0-3: never return empty-as-answer).
+   * The two names differ when a folder was named and something beneath it is
+   * the unresolved one.
+   */
+  | {
+      readonly kind: 'unresolved-selection-set';
+      /** The name the profile filter asked for. */
+      readonly name: string;
+      /** The set whose membership is unknown; equal to `name` unless a folder was named. */
+      readonly unresolvedName: string;
+      /** The source whose copy of the set is unresolved. */
+      readonly sourceId: string;
+    }
   | {
       readonly kind: 'duplicate-source-id';
       readonly sourceId: string;
@@ -56,6 +76,17 @@ export function describeAssetCatalogConfigReason(reason: AssetCatalogConfigReaso
           ? 'no source in this project has any selection sets'
           : `available: ${reason.available.join(', ')}`;
       return `selection set '${reason.name}' is in no source of this project (${available})`;
+    }
+    case 'unresolved-selection-set': {
+      const via =
+        reason.unresolvedName === reason.name
+          ? `selection set '${reason.name}'`
+          : `selection set '${reason.name}' contains '${reason.unresolvedName}', whose`;
+      return (
+        `${via} membership could not be resolved when source '${reason.sourceId}' was extracted, ` +
+        'so it cannot be used to filter equipment. Re-extract that model, or filter another way — ' +
+        'an unresolved set is not an empty one'
+      );
     }
     case 'duplicate-source-id':
       return `two model sources share the id '${reason.sourceId}'; ids identify sources`;

@@ -32,6 +32,8 @@ namespace Matchline.Extraction.Ndjson
 
         public WarningRecord Warning { get; set; }
 
+        public ProgressRecord Progress { get; set; }
+
         public EndRecord End { get; set; }
     }
 
@@ -187,6 +189,13 @@ namespace Matchline.Extraction.Ndjson
                     set.ParentId = json.GetNullableInt64(NdjsonFields.ParentId);
                     set.Name = json.GetString(NdjsonFields.Name);
                     set.Kind = json.GetString(NdjsonFields.Kind);
+
+                    // Absent means resolved: a stream from an adapter that
+                    // predates schema v2 only ever recorded sets it had
+                    // membership for, plus searches it declared unresolved in
+                    // words. Defaulting the other way would mark every set in
+                    // such a stream unusable.
+                    set.MembershipResolved = json.GetBoolean(NdjsonFields.MembershipResolved, true);
                     entry.SelectionSet = set;
                     break;
 
@@ -204,6 +213,14 @@ namespace Matchline.Extraction.Ndjson
                     warning.Message = json.GetString(NdjsonFields.Message);
                     warning.ObjectId = json.GetNullableInt64(NdjsonFields.ObjectId);
                     entry.Warning = warning;
+                    break;
+
+                case NdjsonRecordType.Progress:
+                    ProgressRecord progress = new ProgressRecord();
+                    progress.Stage = json.GetString(NdjsonFields.Stage);
+                    progress.Done = json.GetInt64(NdjsonFields.Done, 0);
+                    progress.Total = json.GetInt64(NdjsonFields.Total, 0);
+                    entry.Progress = progress;
                     break;
 
                 case NdjsonRecordType.End:

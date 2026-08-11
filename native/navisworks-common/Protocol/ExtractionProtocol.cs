@@ -36,6 +36,21 @@ namespace Matchline.Extraction.Protocol
 
         public const string Open = "open";
         public const string Walk = "walk";
+
+        /// <summary>
+        /// Saved-set resolution, reported per set.
+        /// <para>
+        /// Its own stage because a saved search is not part of the tree walk and
+        /// does not cost what the walk costs: resolving one re-runs the search
+        /// over the whole model, so a document with a few dozen of them can sit
+        /// here for minutes after the last object record was written. Without
+        /// this line the walk counter simply stops moving and the run looks
+        /// hung. Unlike walk and convert this stage knows its total, because the
+        /// set tree is counted before the first one is resolved.
+        /// </para>
+        /// </summary>
+        public const string Sets = "sets";
+
         public const string Convert = "convert";
         public const string Finalize = "finalize";
     }
@@ -87,8 +102,12 @@ namespace Matchline.Extraction.Protocol
         public const string NavisworksVersion = "navisworks_version";
         public const string ObjectCount = "object_count";
 
-        /// <summary>The schema version this build reads and writes.</summary>
-        public const string CurrentSchemaVersion = "1";
+        /// <summary>
+        /// The schema version this build writes. Bumped to 2 when
+        /// selection_sets gained membership_resolved; the reader half of that
+        /// bump lives in packages/model-schema, which still accepts 1.
+        /// </summary>
+        public const string CurrentSchemaVersion = "2";
 
         public static string[] Required()
         {

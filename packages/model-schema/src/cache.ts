@@ -20,10 +20,12 @@ import {
 } from './rows.js';
 import {
   isSelectionSetKind,
+  isSupportedSchemaVersion,
   isWarningSeverity,
+  readV1MembershipResolved,
   REQUIRED_META_KEYS,
   REQUIRED_TABLES,
-  SUPPORTED_SCHEMA_VERSION,
+  SUPPORTED_SCHEMA_VERSIONS,
   type BoundingBox,
   type CacheWarning,
   type ExtractionCacheMeta,
@@ -150,11 +152,11 @@ function validate(db: DatabaseSync): ExtractionCacheMeta {
   if (schemaVersion === undefined) {
     throw new CacheValidationError({ kind: 'missing-meta-key', key: 'schema_version' });
   }
-  if (schemaVersion !== SUPPORTED_SCHEMA_VERSION) {
+  if (!isSupportedSchemaVersion(schemaVersion)) {
     throw new CacheValidationError({
       kind: 'unsupported-schema-version',
       found: schemaVersion,
-      supported: SUPPORTED_SCHEMA_VERSION,
+      supported: SUPPORTED_SCHEMA_VERSIONS,
     });
   }
 
@@ -306,6 +308,7 @@ interface SelectionSetRow {
   readonly parentId: number | null;
   readonly name: string;
   readonly kind: SelectionSetNode['kind'];
+  readonly membershipResolved: boolean;
 }
 
 interface MutableSelectionSetNode extends SelectionSetRow {
@@ -313,7 +316,13 @@ interface MutableSelectionSetNode extends SelectionSetRow {
   readonly children: SelectionSetNode[];
 }
 
-function readSelectionSet(row: SqlRow): SelectionSetRow {
+/**
+ * One `selection_sets` row.
+ *
+ * `hasMembershipColumn` is false for a v1 cache, which has no such column: the
+ * value is then derived from the kind, which is what the v1 writer meant by it.
+ */
+function readSelectionSet(row: SqlRow, hasMembershipColumn: boolean): SelectionSetRow {
   const kind = requireText(row, 'selection_sets', 'kind');
   if (!isSelectionSetKind(kind)) {
     throw new CacheValidationError({
@@ -328,7 +337,30 @@ function readSelectionSet(row: SqlRow): SelectionSetRow {
     parentId: optionalInteger(row, 'selection_sets', 'parent_id'),
     name: requireText(row, 'selection_sets', 'name'),
     kind,
+    membershipResolved: hasMembershipColumn
+      ? readMembershipResolved(row)
+      : readV1MembershipResolved(kind),
   };
+}
+
+/**
+ * `membership_resolved`, which the DDL constrains to 0 or 1.
+ *
+ * Anything else is refused rather than coerced: this flag decides whether a
+ * caller may filter on the set at all, and guessing at a third value would
+ * quietly turn "unknown" into "empty".
+ */
+function readMembershipResolved(row: SqlRow): boolean {
+  const value = requireInteger(row, 'selection_sets', 'membership_resolved');
+  if (value !== 0 && value !== 1) {
+    throw new CacheValidationError({
+      kind: 'malformed-row',
+      table: 'selection_sets',
+      column: 'membership_resolved',
+      detail: `${String(value)} is not 0 or 1`,
+    });
+  }
+  return value === 1;
 }
 
 function readWarning(row: SqlRow): CacheWarning {
@@ -486,10 +518,17 @@ class SqliteExtractionCache implements ExtractionCache {
 
   selectionSets(): readonly SelectionSetNode[] {
     const db = this.#open();
+    // The column list is chosen by declared version rather than by probing the
+    // table: a v1 cache would fail the query outright, and a file that declares
+    // v2 without the column is corrupt and should say so.
+    const hasMembershipColumn = this.#meta.schemaVersion !== '1';
+    const columns = hasMembershipColumn
+      ? 'id, parent_id, name, kind, membership_resolved'
+      : 'id, parent_id, name, kind';
     const rows = db
-      .prepare('SELECT id, parent_id, name, kind FROM selection_sets ORDER BY id')
+      .prepare(`SELECT ${columns} FROM selection_sets ORDER BY id`)
       .all()
-      .map(readSelectionSet);
+      .map((row) => readSelectionSet(row, hasMembershipColumn));
 
     const members = new Map<number, number[]>();
     for (const row of db

@@ -11,6 +11,13 @@ because when something goes wrong the raw protocol is the fastest way to see it
 — but it is not how anyone extracts a model, and the proof does not pass on it
 alone.
 
+**Two ways to run the mechanical half.** §0 dispatches a workflow that runs the
+seven proof scripts for you and uploads an anonymized summary; §3–§8 are the
+same checks by hand. Do the workflow first: it is faster, it cannot forget a
+check, and its artifact is the evidence. Do the by-hand path when the workflow
+fails and you need to see why, and for §6 — the in-app drop, which no script
+can do for you.
+
 **Read this first — everything except the Autodesk API is now compiled and
 run.** All of `native/` was written on a Mac. It has since been built there with
 the .NET SDK, and the half that does not touch Autodesk has been *executed*. The
@@ -91,6 +98,86 @@ message, or a chat. Everything in this runbook happens *outside* the repo tree:
 the model stays where it already lives, and caches are written under the app's
 own folder (`%APPDATA%\Matchline\cache\models`) or wherever `--cache-dir`
 says — neither of which is in the repo or in git.
+
+---
+
+## 0. The workflow path — let CI run the seven checks
+
+`.github/workflows/navisworks-proof.yml` does §3, §8.1, §8.2, §8.3, the Selection
+Set and Search Set gates and the error vocabulary, in one dispatch, against a
+model that never leaves your machine. It needs a **self-hosted runner** on the
+Windows box, labelled `self-hosted windows navisworks-2025`. Registering one is
+in `docs/RELEASE-RUNBOOK.md`; without it a dispatch queues forever, which is the
+honest outcome rather than a green job that proved nothing.
+
+Dispatch it from the Actions tab (or `gh workflow run`) with:
+
+| Input                      | What to put                                                       |
+| -------------------------- | ----------------------------------------------------------------- |
+| `model_path`               | The NWD/NWC/NWF **already on the runner's disk**. Never uploaded.  |
+| `navisworks_install_dir`   | Default is `C:\Program Files\Autodesk\Navisworks Manage 2025`.     |
+| `configuration`            | `Release` unless you are debugging the native build.               |
+
+```
+gh workflow run navisworks-proof.yml ^
+  -f model_path="D:\path\to\your model.nwd" ^
+  -f configuration=Release
+```
+
+The job compiles the plugin against the **real** Autodesk assembly (no stubs),
+then runs, in order:
+
+| Script                                  | What it proves                                                    |
+| --------------------------------------- | ----------------------------------------------------------------- |
+| `scripts/windows-proof/extract.mjs`      | A cold extraction: every stage, one cache named by hash, no leftovers. Clears the proof cache first, so a re-dispatch cannot pass by hitting a cache. |
+| `validate-cache.mjs`                     | The TypeScript reader the app ships opens the C#-written cache and counts it. |
+| `cache-hit.mjs`                          | The same model again is `cache-hit`, `detect`/`open`/`walk` never appear, and the cache file's timestamp and size do not move. |
+| `cancellation.mjs`                       | `cancel` on stdin mid-walk: `CANCELLED`, exit 9, no `.sqlite`, no `.partial`, no `.ndjson.tmp`. |
+| `selection-sets.mjs`                     | Gate 15. Fixed selections resolved, and **members are actually present** — the check that catches the ModelItem equality assumption. |
+| `search-sets.mjs`                        | Gate 16. Every saved search either resolved or flagged `SEARCH_SET_UNRESOLVED`, with resolved-and-empty distinguishable from unresolved. |
+| `error-classification.mjs`               | `INPUT_NOT_FOUND`, `INVALID_ARGS`, `NW_NOT_INSTALLED`, and `NW_VERSION_TOO_NEW` if you have a too-new NWD. |
+
+Each script prints `PASS`, `FAIL` or `PASS (with skips)` and writes one JSON
+file into `artifacts/windows-proof/`, which the job uploads. **That artifact is
+counts, codes and timings only** — the scripts refuse to write a string that
+looks like a path or a model file name, so a summary that would leak fails the
+proof instead of shipping. Download it and paste its numbers into §10.
+
+Two inputs are optional and are read from the environment rather than the
+dispatch form, because they are runner-local facts:
+
+- `MATCHLINE_PROOF_TOO_NEW_MODEL` — an NWD saved by a **newer** Navisworks than
+  the one installed. Without it `error-classification.mjs` prints a SKIP naming
+  the variable, and `NW_VERSION_TOO_NEW` stays unverified. Set it on the runner
+  if you have such a file; it is the only way that classification gets proven.
+- `MATCHLINE_PROOF_CACHE` — where the caches go. Defaults to a temp directory,
+  deliberately **not** under `artifacts/`, because a cache is derived from your
+  model and the artifact directory is published.
+
+**Running the scripts by hand.** They need no workflow — the same seven commands
+work in a Developer Command Prompt after §3, and this is the fastest way to
+re-check one thing:
+
+```
+set MATCHLINE_PROOF_MODEL=D:\path\to\your model.nwd
+set MATCHLINE_PROOF_OUT=%USERPROFILE%\matchline-proof\summary
+set MATCHLINE_PROOF_CACHE=%USERPROFILE%\matchline-proof\cache
+set MATCHLINE_EXTRACTOR_PATH=%USERPROFILE%\source\Matchline\native\extractor\bin\Release\Matchline.Extractor.exe
+
+node scripts\windows-proof\extract.mjs
+node scripts\windows-proof\validate-cache.mjs
+node scripts\windows-proof\cache-hit.mjs
+node scripts\windows-proof\cancellation.mjs
+node scripts\windows-proof\selection-sets.mjs
+node scripts\windows-proof\search-sets.mjs
+node scripts\windows-proof\error-classification.mjs
+```
+
+Run them in that order: `extract.mjs` produces the cache the four after it read,
+and `cache-hit.mjs` only means anything straight after it.
+
+A `SKIP` line is not a pass. If one appears, say so in your report along with
+what it named — a check that did not run is a gate that is not proven.
 
 ---
 
@@ -506,6 +593,15 @@ SELECT COUNT(*) FROM objects WHERE bbox_min_x IS NOT NULL;
 -- what kinds of value did we see?
 SELECT value_type, COUNT(*) FROM properties GROUP BY value_type ORDER BY 2 DESC;
 
+-- saved sets: kind against whether their membership is known (see §9a)
+SELECT kind, membership_resolved, COUNT(*) FROM selection_sets
+GROUP BY kind, membership_resolved;
+
+-- must be 0: an unresolved set carries no members, ever
+SELECT COUNT(*) FROM selection_set_members m
+JOIN selection_sets s ON s.id = m.set_id
+WHERE s.membership_resolved = 0;
+
 -- what went wrong, if anything
 SELECT severity, code, COUNT(*) FROM warnings GROUP BY severity, code;
 
@@ -513,6 +609,7 @@ SELECT severity, code, COUNT(*) FROM warnings GROUP BY severity, code;
 ```
 
 - [ ] `declared` equals `actual`
+- [ ] `meta.schema_version` reads `2`
 - [ ] `meta` has all nine required keys, none blank
 - [ ] `objects` count is in the ballpark you expect for that model
 - [ ] `properties` count is comfortably larger than `objects`
@@ -530,7 +627,11 @@ They are marked in the source with `// VERIFY-ON-WINDOWS:`. You do not need to
 check these by reading code — **the build and the run check them for you**. This
 list exists so that when something misbehaves, you know what to look at.
 
-**Status: 20 signature-pinned against stubs, 9 fully open.**
+**Status: every Autodesk member the adapter names is pinned by the stub build
+(the table at the end of this section lists them); 13 facts are fully open and
+are listed individually below.** Count the flags in the source at any time with
+the `findstr` command further down — the two kinds are spelled differently on
+purpose.
 
 The plugin now compiles, but against `native/navisworks-stubs` — a hand-written,
 implementation-free `Autodesk.Navisworks.Api` whose signatures were derived from
@@ -544,13 +645,13 @@ Each flag in the source now says which kind it is:
 
 - **"shape pinned by the stub build"** — the member's arity and types are fixed
   by how the plugin uses them, so if the real API differs you get a *compile
-  error*, which is the cheap failure. 20 flags.
+  error*, which is the cheap failure.
 - **"FULLY OPEN"** — the compiler cannot see it at all: reflection, runtime
   string matching, process behaviour, install layout, or a semantic claim (like
   "this collection yields document order") that has no type to check. These fail
-  *silently at runtime*, which is the expensive failure. 9 flags.
+  *silently at runtime*, which is the expensive failure.
 
-The 9 fully open ones, and what each looks like when wrong:
+The 13 fully open ones, and what each looks like when wrong:
 
 | Flag                                                        | Fails as                                            |
 | ----------------------------------------------------------- | --------------------------------------------------- |
@@ -563,6 +664,10 @@ The 9 fully open ones, and what each looks like when wrong:
 | Developer id `MTCH` needing Autodesk registration            | Plugin never runs. §7.                              |
 | Navisworks install discovery / `Roamer.exe` command line     | `NW_NOT_INSTALLED` or `EXTRACT_FAILED`. §7.         |
 | Too-new-NWD message wording (`FailureClassifier`)            | `OPEN_FAILED` instead of `NW_VERSION_TOO_NEW`.      |
+| `SelectionSet.HasSearch` meaning "carries a saved search"    | Every search set unresolved, or a fixed set treated as a search. |
+| `Search.FindAll`'s bool argument meaning "do not also select" | Resolution works but the document's selection is disturbed mid-walk. |
+| Whether a saved search can run at all in a `-NoGUI` session   | Every search set unresolved, with the exception text in its warning. §9a. |
+| Whether `FindAll`'s ModelItems compare equal to walked ones   | Search sets resolve to zero members while `membership_resolved` says 1. §9a. |
 
 Three more are semantic riders on otherwise-pinned flags, and are worth knowing
 because they compile either way:
@@ -603,6 +708,7 @@ Grouped by what would go wrong:
 | `DocumentWalker`         | `Document.Models` of `Model`, `Model.RootItem`, `Model.FileName`, `ModelItem.Children`, `.DisplayName`, `.ClassDisplayName`, `.ClassName`, `.InstanceGuid`, `.HasGeometry`, `.BoundingBox()`, `.PropertyCategories` |
 | `DocumentWalker`         | `PropertyCategory.DisplayName` / `.Name` / `.Properties`, `DataProperty.DisplayName` / `.Name` / `.Value` |
 | `DocumentWalker`         | `Document.SelectionSets.RootItem`, `GroupItem.Children`, `SelectionSet.HasExplicitModelItems`, `.ExplicitModelItems` |
+| `DocumentWalker`         | `SelectionSet.HasSearch`, `SelectionSet.Search`, `Search.FindAll(Document, bool)` returning something enumerable of `ModelItem` — the Search Set resolution added in M6 |
 | `VariantFormatter`       | `VariantData.DataType` plus `ToDisplayString` / `ToIdentifierString` / `ToInt32` / `ToDouble` / `ToDoubleLength` / `ToDoubleAngle` / `ToDoubleArea` / `ToDoubleVolume` / `ToBoolean` / `ToDateTime` / `ToNamedConstant` |
 
 **Build succeeds, nothing extracts → discovery or command line.** §4 and §7.
@@ -623,6 +729,59 @@ Also: the developer id `MTCH` may need to be one Autodesk recognises.
 - Zero rows with a bounding box → `HasGeometry` or `BoundingBox()` behaved
   differently. Cosmetic in Phase 1.
 
+### 9a. Search Sets — the one gate whose failure is designed for
+
+Matchline now *resolves* saved searches rather than recording them and shrugging
+(RELEASE-1.0-PLAN P0-3, hard gate 16). `DocumentWalker` calls
+`selectionSet.Search.FindAll(document, false)` for every set that is not a fixed
+selection, and writes what came back into `selection_set_members`.
+
+Every one of those calls is unverified. The important thing is that **failing is
+allowed and succeeding-quietly-wrongly is not**. Three outcomes, and the cache
+says which:
+
+| What happened                   | `selection_sets` row                       | Members     | Warning                 |
+| ------------------------------- | ------------------------------------------ | ----------- | ----------------------- |
+| The search ran and matched      | `kind='search'`, `membership_resolved=1`   | present     | none                    |
+| The search ran and matched none | `kind='search'`, `membership_resolved=1`   | none        | none                    |
+| The search would not run        | `kind='search'`, `membership_resolved=0`   | **none at all** | `SEARCH_SET_UNRESOLVED` naming the set |
+
+The middle row and the bottom row are the distinction the whole schema bump
+exists for. A set that could not be resolved is never treated as an empty one:
+`@matchline/asset-catalog` **refuses** to build a catalog when a profile filter
+names an unresolved set, rather than filtering the project down to nothing.
+
+So if searches do not resolve on your machine, that is a *result*, not a broken
+run. What is needed is the evidence:
+
+```sql
+SELECT kind, membership_resolved, COUNT(*) FROM selection_sets
+GROUP BY kind, membership_resolved;
+
+SELECT COUNT(*) FROM warnings WHERE code = 'SEARCH_SET_UNRESOLVED';
+
+-- The message names the set. Report the CODE and the COUNT, never the message:
+-- a set name is a client's name for their own equipment.
+```
+
+- [ ] every row with `membership_resolved = 0` has no rows in `selection_set_members`
+- [ ] the `SEARCH_SET_UNRESOLVED` count equals the `membership_resolved = 0` count
+- [ ] at least one search set resolved — if none did, say so; gate 16 is then
+      *blocked*, which is a documented outcome, not a pass
+
+**Watch the `sets` progress stage.** Resolving a saved search re-runs it over the
+whole model and can take minutes with nothing else being written, so the plugin
+emits its own progress line per set and the launcher relays it:
+
+```
+{"type":"progress","stage":"sets","done":3,"total":12}
+```
+
+If you see `walk` stop and then a long silence with no `sets` lines at all, the
+relay is not working (`NdjsonProgressMonitor`) — report that separately from
+whatever the sets themselves did. If you see `sets` climb slowly, that is the
+expected shape and the per-set timing is worth recording.
+
 **The too-new-file message.** If you happen to have an NWD published by
 Navisworks 2026, run it through and confirm you get `NW_VERSION_TOO_NEW` rather
 than `OPEN_FAILED`. If you get `OPEN_FAILED`, **paste the verbatim message** —
@@ -636,6 +795,13 @@ guessed. If you have no such file, say so; this stays open.
 Copy this template and fill it in.
 
 ```
+WORKFLOW RUN (§0) — skip this block if you only ran by hand
+  Self-hosted runner registered and labelled navisworks-2025: yes / no
+  Workflow conclusion: success / failure
+  Which step failed, if any:
+  Attach: the navisworks-proof-summary artifact (it is counts and codes only)
+  Any SKIP lines, and what each one named:
+
 BUILD
   Visual Studio / Build Tools version:
   Navisworks product and version (Help > About):
@@ -679,7 +845,25 @@ COUNTS (from §8.4)
   distinct value_type values and counts:
   warnings grouped by severity+code:
 
+SETS (from §9a — counts only, never a set name)
+  selection_sets by kind:            folder ___  selection ___  search ___
+  fixed selections that resolved:            ___ of ___
+  fixed selections that resolved to ZERO:    ___   (any at all is suspicious:
+                                                    it is what ModelItem
+                                                    equality failing looks like)
+  search sets resolved WITH members:         ___
+  search sets resolved with NONE:            ___
+  search sets UNRESOLVED:                    ___
+  SEARCH_SET_UNRESOLVED warnings:            ___   (must equal the line above)
+  member rows under an unresolved set:       ___   (must be 0)
+  SELECTION_SET_MEMBER_UNRESOLVED warnings:  ___
+  Did `sets` progress lines appear?          yes / no
+  Time from the last `walk` line to the last `sets` line:
+  Gate 15 (Selection Sets) verdict:  proven / not proven — why:
+  Gate 16 (Search Sets) verdict:     resolved / honestly blocked / not proven — why:
+
 CHECKLIST
+  0   every proof script printed PASS (list any FAIL or SKIP):
   8.1 cache named by hash, nothing else in the folder:  pass / fail
   8.1 the app never named a cache file to you:          pass / fail
   8.2 re-run is cache-hit and Roamer.exe never starts:  pass / fail
@@ -688,6 +872,8 @@ CHECKLIST
   8.3 exit code was 9:                                  pass / fail
   8.3 Cancel in the app left the source registered:     pass / fail
   8.4 declared object_count equals actual:              pass / fail
+  9a  every unresolved set has zero members:            pass / fail
+  9a  every unresolved set has its warning:             pass / fail
 
 ANYTHING ELSE
   Warnings that looked alarming (codes and counts, not messages with real names):

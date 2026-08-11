@@ -48,6 +48,11 @@ namespace Matchline.Extraction.NavisworksAdapter
 
         private long _nextObjectId = 1;
 
+        /// <summary>Saved sets resolved so far, and how many there are. Progress only.</summary>
+        private long _setsDone;
+
+        private long _setsTotal;
+
         internal DocumentWalker(NdjsonWriter writer)
         {
             if (writer == null)
@@ -416,11 +421,68 @@ namespace Matchline.Extraction.NavisworksAdapter
                 return;
             }
 
+            // Counted before the first one is resolved, so the stage can report a
+            // real total. The saved-set tree is a handful of nodes even on a huge
+            // model -- this pass costs nothing next to running one search.
+            _setsTotal = CountSelectionSets(root);
+            _setsDone = 0;
+
+            // Announced even when there are none: a stage that only appears when
+            // it has work to report is a stage a reader cannot tell from a stage
+            // that stalled before its first line.
+            ReportSetProgress();
+
             long nextSetId = 1;
-            WalkSavedItemChildren(root, null, ref nextSetId);
+            WalkSavedItemChildren(document, root, null, ref nextSetId);
         }
 
-        private void WalkSavedItemChildren(SavedItem parent, long? parentSetId, ref long nextSetId)
+        /// <summary>
+        /// Saved sets (not folders) anywhere beneath <paramref name="parent"/>.
+        /// <para>
+        /// Best effort by design: this number is a progress denominator and
+        /// nothing else, so a subtree that will not enumerate here is counted as
+        /// zero rather than failing the walk. The real traversal that follows
+        /// reports its own failure properly.
+        /// </para>
+        /// </summary>
+        private static long CountSelectionSets(SavedItem parent)
+        {
+            GroupItem group = parent as GroupItem;
+            if (group == null)
+            {
+                return 0;
+            }
+
+            long count = 0;
+            try
+            {
+                foreach (SavedItem child in group.Children)
+                {
+                    if (child is SelectionSet)
+                    {
+                        count++;
+                    }
+                    else
+                    {
+                        count += CountSelectionSets(child);
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // See the summary: a denominator is not worth a failed extraction.
+            }
+
+            return count;
+        }
+
+        private void ReportSetProgress()
+        {
+            _writer.WriteProgress(ExtractionStages.Sets, _setsDone, _setsTotal);
+        }
+
+        private void WalkSavedItemChildren(
+            Document document, SavedItem parent, long? parentSetId, ref long nextSetId)
         {
             // VERIFY-ON-WINDOWS (shape pinned by the stub build: GroupItem.Children
             // is enumerable with element type SavedItem, and FolderItem derives from
@@ -464,8 +526,12 @@ namespace Matchline.Extraction.NavisworksAdapter
                     if (selectionSet == null)
                     {
                         record.Kind = SelectionSetKind.Folder;
+
+                        // A folder holds no members of its own, so there is
+                        // nothing to resolve and nothing to be honest about.
+                        record.MembershipResolved = true;
                         _writer.WriteSelectionSet(record);
-                        WalkSavedItemChildren(child, setId, ref nextSetId);
+                        WalkSavedItemChildren(document, child, setId, ref nextSetId);
                         continue;
                     }
 
@@ -474,24 +540,43 @@ namespace Matchline.Extraction.NavisworksAdapter
                     // selection rather than saved search".
                     bool isExplicit = selectionSet.HasExplicitModelItems;
                     record.Kind = isExplicit ? SelectionSetKind.Selection : SelectionSetKind.Search;
+
+                    // Membership is worked out BEFORE the set row is written,
+                    // because the row has to state whether it is resolved and a
+                    // cache reader must never see a row that says "resolved" and
+                    // then find no members because the search failed after it.
+                    List<ModelItem> members;
+                    string failure;
+                    bool resolved = isExplicit
+                        ? TryReadExplicitMembers(selectionSet, out members, out failure)
+                        : TryResolveSearchMembers(document, selectionSet, out members, out failure);
+
+                    record.MembershipResolved = resolved;
                     _writer.WriteSelectionSet(record);
 
-                    if (isExplicit)
+                    if (resolved)
                     {
-                        EmitSelectionSetMembers(selectionSet, setId);
+                        EmitSelectionSetMembers(members, setId);
                     }
                     else
                     {
-                        // Resolving a saved search means re-running it over the
-                        // whole model, which can cost minutes on a large NWD.
-                        // Phase 1 records the set and leaves membership to the
-                        // reading side.
+                        // No member rows at all, deliberately: absent membership
+                        // is not empty membership. A reader that cannot tell the
+                        // two apart would answer "this set holds nothing" to a
+                        // question nobody managed to ask
+                        // (docs/RELEASE-1.0-PLAN.md P0-3).
                         _warnings.Warn(
-                            WarningSeverity.Info,
-                            WarningCodes.SearchSetNotResolved,
-                            "Search set '" + record.Name + "' recorded without members.",
+                            WarningSeverity.Warning,
+                            isExplicit
+                                ? WarningCodes.SelectionSetReadFailed
+                                : WarningCodes.SearchSetUnresolved,
+                            (isExplicit ? "Selection set '" : "Search set '") + record.Name +
+                            "' could not be resolved and is recorded without members: " + failure,
                             null);
                     }
+
+                    _setsDone++;
+                    ReportSetProgress();
                 }
                 catch (Exception ex)
                 {
@@ -500,9 +585,15 @@ namespace Matchline.Extraction.NavisworksAdapter
             }
         }
 
-        private void EmitSelectionSetMembers(SelectionSet selectionSet, long setId)
+        /// <summary>
+        /// The items a fixed selection lists, or false with the reason.
+        /// </summary>
+        private static bool TryReadExplicitMembers(
+            SelectionSet selectionSet, out List<ModelItem> members, out string failure)
         {
-            List<ModelItem> members = new List<ModelItem>();
+            members = new List<ModelItem>();
+            failure = null;
+
             try
             {
                 // VERIFY-ON-WINDOWS (shape pinned by the stub build:
@@ -512,13 +603,114 @@ namespace Matchline.Extraction.NavisworksAdapter
                 {
                     members.Add(member);
                 }
+
+                return true;
             }
             catch (Exception ex)
             {
-                _warnings.WarnException(WarningSeverity.Warning, WarningCodes.SelectionSetReadFailed, ex, null);
-                return;
+                failure = FailureClassifier.Describe(ex);
+                return false;
             }
+        }
 
+        /// <summary>
+        /// Runs a saved search and returns what it found, or false with the
+        /// reason it could not.
+        /// <para>
+        /// This is the preferred half of RELEASE-1.0-PLAN P0-3: a Search Set is
+        /// answered by resolving its real membership, not by recording the set
+        /// and calling the question someone else's problem. It is also the
+        /// expensive half -- the search re-runs over the whole document -- which
+        /// is why the caller reports progress per set.
+        /// </para>
+        /// <para>
+        /// VERIFY-ON-WINDOWS (shape pinned by the stub build: SelectionSet.HasSearch
+        /// is a bool, SelectionSet.Search returns a Search, and
+        /// Search.FindAll(Document, bool) returns something enumerable of
+        /// ModelItem). FULLY OPEN, all of it semantic:
+        /// </para>
+        /// <para>
+        /// (1) that the member is spelled <c>Search</c> and the method
+        /// <c>FindAll</c> -- a wrong guess is a compile error on Windows, which
+        /// is the cheap failure and the reason this is written as a direct call
+        /// rather than reflectively;
+        /// </para>
+        /// <para>
+        /// (2) that the bool argument means "do not also select the results". If
+        /// it means something else, passing false is still the conservative
+        /// choice for a headless run;
+        /// </para>
+        /// <para>
+        /// (3) that a search can be run at all inside a -NoGUI session. If it
+        /// cannot, every search set comes back unresolved with the exception text
+        /// in its warning, which is exactly the honest fallback the plan asks
+        /// for;
+        /// </para>
+        /// <para>
+        /// (4) that the ModelItems it hands back compare equal to the ones seen
+        /// during the tree walk. That is the same open question the
+        /// <see cref="_objectIds"/> dictionary rests on, and here it fails
+        /// differently: the set resolves, and every member lands in the
+        /// unresolved-member count instead.
+        /// </para>
+        /// </summary>
+        private static bool TryResolveSearchMembers(
+            Document document, SelectionSet selectionSet, out List<ModelItem> members, out string failure)
+        {
+            members = new List<ModelItem>();
+            failure = null;
+
+            try
+            {
+                if (!selectionSet.HasSearch)
+                {
+                    // Neither an explicit list nor a search: there is no question
+                    // this adapter knows how to ask, so it says so rather than
+                    // recording an empty set.
+                    failure = "the set carries neither explicit items nor a search.";
+                    return false;
+                }
+
+                Search search = selectionSet.Search;
+                if (search == null)
+                {
+                    failure = "the set reports a search but does not provide one.";
+                    return false;
+                }
+
+                ModelItemCollection found = search.FindAll(document, false);
+                if (found == null)
+                {
+                    failure = "the search returned nothing at all, not even an empty result.";
+                    return false;
+                }
+
+                foreach (ModelItem item in found)
+                {
+                    members.Add(item);
+                }
+
+                // A search that legitimately matches nothing is resolved with
+                // zero members, and the cache records exactly that: kind
+                // 'search', membership_resolved 1, no member rows. That is a
+                // different fact from this method returning false.
+                return true;
+            }
+            catch (Exception ex)
+            {
+                failure = FailureClassifier.Describe(ex);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Writes one member row per item the set resolved to that the walk also
+        /// saw. Items it did not see are counted and reported once: they are a
+        /// membership question this cache cannot answer per item, not a set that
+        /// failed to resolve.
+        /// </summary>
+        private void EmitSelectionSetMembers(List<ModelItem> members, long setId)
+        {
             long unresolved = 0;
             foreach (ModelItem member in members)
             {
