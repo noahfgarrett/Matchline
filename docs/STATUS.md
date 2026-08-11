@@ -6,7 +6,7 @@ Living document. Updated at every phase merge. Newest entries at the top of the 
 
 | Item | Needs | Where it's specified |
 |---|---|---|
-| Navisworks extraction proof run | Windows + Navisworks Manage 2025 | docs/WINDOWS-RUNBOOK.md (30 VERIFY-ON-WINDOWS flags) |
+| Navisworks extraction proof run | Windows + Navisworks Manage 2025 | docs/WINDOWS-RUNBOOK.md (35 VERIFY-ON-WINDOWS flags) |
 | Code signing (MSIX/EXE) | Certificate purchase + org verification | DECISIONS.md open items |
 | Navisworks 2024/2026 adapters | Those product versions installed | PRODUCT.md Phase 7 (M7 landed the projects; both are `stub-compiled-unverified` until a real install proves them) |
 | Multi-site pilots / baseline refinement | Real sites | PRODUCT.md Phase 8 |
@@ -100,11 +100,12 @@ backed by a real run.
 **M9 — distribution. Landed except signing.** Hosted CI matrix on ubuntu/macos/windows
 plus a native Autodesk-free smoke on Linux and Windows and an unsigned Windows packaging
 smoke; a tag-driven `release.yml` whose first step fails loudly when production signing
-credentials are absent; a self-hosted `navisworks-proof.yml` that is honest scaffolding —
-it fails at preflight naming the M6 scripts that do not exist yet, rather than reporting a
-proof that did not happen; and docs/RELEASE-RUNBOOK.md as the owner-facing release
-document. Signing itself is still blocked on the certificate, and the `signtool`
-invocations in `release.yml` have never run.
+credentials are absent; a self-hosted `navisworks-proof.yml` whose seven scripts now exist
+(`scripts/windows-proof/*.mjs`, tested against the fake extractor) — dispatched on a real
+runner it genuinely proves the real thing, rather than reporting a proof that did not
+happen; and docs/RELEASE-RUNBOOK.md as the owner-facing release document. Signing itself
+is still blocked on the certificate, and the `signtool` invocations in `release.yml` have
+never run.
 
 **M5 — integrated extraction service. Complete.** `NavisworksExtractionService`
 (`apps/desktop/electron/services/extraction-service.ts`) makes dropping a raw NWD/NWF/NWC
@@ -125,8 +126,8 @@ is M6, below.
 
 **Not landed.**
 - **M6 — real Windows proof.** Blocked on Noah's Windows box. Gates 14, 15, 16 and 21 stay
-  BLOCKED; `scripts/windows-proof/*.mjs` is M6's to write, and the proof workflow's
-  preflight lists exactly which seven scripts are missing.
+  BLOCKED; the seven `scripts/windows-proof/*.mjs` scripts are written and tested against
+  the fake extractor — what remains is running them for real.
 - **M8 — performance and one-hour UX.** Open: the scale targets (≥250k objects aggregate,
   ≥40k assets, ≥1M property rows, shuffled-source determinism, responsive event loop
   during compile) and the Quick Setup suggestion path.
@@ -158,7 +159,7 @@ profile keeps the rest.
 - C# worker compiles on Mac (SDK 8 → net48): fatal csproj defect fixed pre-Windows,
   plugin stub-compiled (20/30 VERIFY flags signature-pinned), CacheWriter executed and
   its output validated by the TS reader — schema v1 agreement proven end to end.
-- Remaining before "done-done": Noah's Windows extraction proof (9 open flags + 20
+- Remaining before "done-done": Noah's Windows extraction proof (13 open flags + 22
   signature checks), code signing, updater + Releases repo, 2024/2026 adapters, pilots.
   Known open: tag-join branch of mel-lookup still O(n^2) if a profile uses it at scale.
 

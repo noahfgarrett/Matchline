@@ -191,9 +191,11 @@ All three labels must be on the runner or the job never starts.
 
 ## 6. What Milestone 6 still owes the proof workflow
 
-`navisworks-proof.yml` calls seven scripts that do not exist yet. Its preflight
-step lists every missing one at once and fails; each individual step guards its
-own script as well. The contract each script must satisfy:
+`navisworks-proof.yml` calls seven scripts, and all seven now exist under
+`scripts/windows-proof/`, tested against the fake extractor
+(`tests/windows-proof/scripts.test.mjs`). Its preflight step still checks for
+each one and would fail listing whatever was missing; each individual step
+still guards its own script as well. The contract each script must satisfy:
 
 - Invoked as `node scripts/windows-proof/<name>.mjs`, no arguments.
 - Reads `MATCHLINE_PROOF_MODEL` (the model path), `MATCHLINE_PROOF_OUT` (the
@@ -212,9 +214,10 @@ own script as well. The contract each script must satisfy:
 | `search-sets.mjs` | Search Sets either resolve fully or are honestly marked unusable — never empty-as-answer (hard gate 16). |
 | `error-classification.mjs` | The error vocabulary in P0-2 maps to what really happens. |
 
-Until they land, dispatching the workflow fails at the preflight step with the
-list. That is the intended behaviour: a proof job that goes green without
-proving anything would be worse than no job.
+They have landed: dispatching the workflow on a real, labelled runner now runs
+the genuine proof rather than failing at preflight. The defensive check stays
+in place regardless — the intended behaviour was always that a proof job that
+goes green without proving anything is worse than no job.
 
 ---
 
@@ -308,4 +311,5 @@ when the app side proves this, not when the pipeline can push a file.
 5. **Windows only.** This pipeline builds and signs Windows. The macOS zip stays
    a local `npm run package:mac` artifact with `identity: null` — unsigned, not
    notarised, not distributed.
-6. **The Navisworks proof is scaffolding** until M6 provides §6's scripts.
+6. **The Navisworks proof scripts exist and are tested** (§6) but have not yet
+   run against a real Navisworks install — that happens on Noah's Windows box.

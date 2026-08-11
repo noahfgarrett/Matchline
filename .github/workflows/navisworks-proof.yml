@@ -3,13 +3,14 @@
 # nothing here runs automatically — it is dispatched by hand, against a model
 # that already sits on the runner's own disk.
 #
-# HONEST SCAFFOLDING NOTICE. Milestone 6 (real Windows proof) owns the scripts
-# under scripts/windows-proof/. Most of them do not exist yet. Every step that
-# calls one checks for it first and FAILS if it is absent — there is deliberately
-# no `continue-on-error` anywhere in this file, because a proof job that goes
-# green without proving anything is worse than no job at all. Until M6 lands,
-# dispatching this workflow is expected to fail at the preflight step, and the
-# failure message says exactly which scripts are missing.
+# HONEST STATUS NOTICE. Milestone 6 (real Windows proof) owns the scripts under
+# scripts/windows-proof/. All seven now exist and are tested against the fake
+# extractor (tests/windows-proof/scripts.test.mjs — no real Navisworks starts
+# there). Every step that calls one still checks for it first and FAILS if it
+# is absent — there is deliberately no `continue-on-error` anywhere in this
+# file, because a proof job that goes green without proving anything is worse
+# than no job at all. Dispatched on a real, labelled runner, this workflow now
+# genuinely proves the real thing.
 #
 # CONFIDENTIALITY. The model is named by a path that already exists on the
 # runner; it is never uploaded, never checked in, and never leaves the machine.

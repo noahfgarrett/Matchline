@@ -622,7 +622,7 @@ own Properties panel for an item you know. They should read the same.
 
 ## 9. The VERIFY-ON-WINDOWS checklist
 
-Every Autodesk API call in `native/navisworks-2025/` is still an educated guess.
+Every Autodesk API call in `native/navisworks-adapter/` is still an educated guess.
 They are marked in the source with `// VERIFY-ON-WINDOWS:`. You do not need to
 check these by reading code — **the build and the run check them for you**. This
 list exists so that when something misbehaves, you know what to look at.

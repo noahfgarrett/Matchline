@@ -172,7 +172,7 @@ ambiguous about which version produced the cache. `--navisworks-version <year>` 
 but no release Matchline has an adapter for" are different errors, and the second one lists
 what it found.
 
-**Verified support.** `SupportedAdapters` in `navisworks-common` is the single source of truth
+**Adapter status — none verified yet.** `SupportedAdapters` in `navisworks-common` is the single source of truth
 and the launcher reads it, so what the code claims and what this table says cannot drift:
 
 | Year       | Status                     | What that means                                                                                        |
@@ -197,5 +197,7 @@ The proof run follows [`docs/WINDOWS-RUNBOOK.md`](WINDOWS-RUNBOOK.md): build the
 drop a real NWD on screen 1, and verify cache integrity, reuse and cancellation through the
 app — then report counts and timings back. The runbook's manual launcher invocation is kept
 as the diagnostic path, for when the app-driven run needs to be taken apart. The C# code was
-authored on the Mac without compilation until that run — treat the first Windows build as
-part of the proof, not a formality.
+authored on the Mac and compiles cleanly there (SDK 8 cross-targeting, WINDOWS-RUNBOOK.md
+"Status of Mac-side verification") — but only against `native/navisworks-stubs`, a
+hand-written stand-in for the real Autodesk assembly. Treat the first build against the
+genuine `Autodesk.Navisworks.Api` on Windows as part of the proof, not a formality.

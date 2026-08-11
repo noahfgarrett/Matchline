@@ -47,7 +47,7 @@ signed application updates, and it must be disableable and must carry no project
 data (PRODUCT.md §2.6, docs/RELEASE-RUNBOOK.md §9). **It is not implemented yet.**
 Today's builds make no network calls at all.
 
-## Navisworks support, as verified today
+## Navisworks support status — nothing is verified yet
 
 Matchline reads a model through an extraction cache written by a Windows-only C#
 worker driving a licensed Navisworks install. Freedom has no API and there is no
