@@ -11,7 +11,7 @@ hard gates are mandatory; if code-complete but hardware-blocked, produce
 
 | # | Hard gate | Status |
 |---|-----------|--------|
-| 1 | Drop one raw NWD → automatic extraction | open |
+| 1 | Drop one raw NWD → automatic extraction | code GREEN (M5: in-app service + fake-launcher protocol tests); real-hardware proof is gate 14 (M6) |
 | 2 | Several NWD/NWC/NWF sources in one project | GREEN for cache sources (engine+store v4+UI, M2); raw-NWD auto-extract is gate 1 (M5) |
 | 3 | Split AND federated model organization | GREEN (M2: equivalence proven engine + desktop service level) |
 | 4 | Duplicate basenames coexist | GREEN (M2: engine + store v4 + session identity rules) |

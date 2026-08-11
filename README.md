@@ -80,8 +80,9 @@ newest installed version and says which one will open the file.
 2. **Add sources.** Drop model files and workbooks onto screen 1. A project can
    hold many model sources at once — split or federated, several NWD/NWC/NWF, files
    that share a basename — and they form one equipment universe.
-3. **Get each model source extracted.** See the note below: this step is not yet
-   in-app.
+3. **Extraction happens automatically on Windows.** See the note below — on Mac, or
+   when a cache came from elsewhere, drop the resulting `.matchline-cache` file
+   instead.
 4. **Work the wizard.** Nine screens: sources → model scan and Property Catalog →
    asset definition → tag anatomy → System Resolver → Hierarchy Composer →
    relationship rules → preview and QA → publish. Each screen says in plain
@@ -92,13 +93,16 @@ newest installed version and says which one will open the file.
 7. **Export.** Generated MEL, template MEL, MEL comparison, EXTO workbook,
    predecessor matrix, revision diff.
 
-**Extraction is a separate step right now.** Dropping a raw `.nwd`/`.nwf`/`.nwc`
-registers the file so the project records which document the site is built from,
-and marks it `requires-windows-extraction`. Producing the cache means running the
-extractor yourself on a Windows machine with Navisworks — docs/WINDOWS-RUNBOOK.md
-walks it end to end — and then dropping the resulting cache file in. Running
-extraction from inside the app is Milestone 5 of the 1.0 campaign and hard gate 1
-in docs/RELEASE-1.0-PLAN.md; it is open.
+**Dropping a raw `.nwd`/`.nwf`/`.nwc` now extracts it, on Windows.** The app detects
+the installed Navisworks that will open the file, runs the extraction in place with
+progress and a Cancel button on the row, and the model joins the equipment universe
+automatically once it is ready — nobody names a cache file. Mac development has no
+Navisworks to drive, so it still works from cache files: drop the `.matchline-cache`
+produced by docs/WINDOWS-RUNBOOK.md's launcher, or by a real Windows machine, in the
+same way. The service (Milestone 5 of the 1.0 campaign) is built and tested against a
+protocol-faithful fake launcher — docs/EXTRACTION.md has the design — and the first
+run against real Navisworks hardware is still ahead of it, docs/RELEASE-1.0-PLAN.md's
+Milestone 6.
 
 ## Layout
 
@@ -280,5 +284,7 @@ docs/ORIGIN.md records what was inherited and what was deliberately changed.
 The repository version is 0.8.1 and the work toward 1.0.0 is in progress on a
 branch. docs/RELEASE-1.0-PLAN.md holds the directive and the live gate tracker;
 docs/STATUS.md holds the build log. Known-open, and stated here so nothing above
-reads as a promise: real Navisworks proof, in-app extraction, code signing, the
-update path, and verification of the 2024/2026 adapters.
+reads as a promise: the real Navisworks hardware proof (in-app extraction is built
+and tested against a protocol-faithful fake, but has never driven the real
+Autodesk API), code signing, the update path, and verification of the 2024/2026
+adapters.

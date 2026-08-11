@@ -65,14 +65,27 @@ resolver subjects never leave the main process.
 Reading a model needs Navisworks on Windows. The C# launcher and the version adapters, the
 cache schema, the NDJSON protocol, cache-hit behaviour and the error vocabulary are all
 documented in **docs/EXTRACTION.md**, with the operator path in
-**docs/WINDOWS-RUNBOOK.md**; this document does not repeat them. What matters at the app
-boundary today is narrow: dropping a `.nwd`/`.nwf`/`.nwc` **registers** the file — so the
-project records which document the site is built from — and marks it
-`requires-windows-extraction`; the app reads the model only once a `.matchline-cache`
-(also accepted as `.sqlite`/`.db`) written by the extractor is added alongside. Running
-extraction from inside the app is Milestone 5 of the 1.0 campaign and hard gate 1 in
-RELEASE-1.0-PLAN.md. It is not implemented, and the wording above is what the app actually
-tells a user.
+**docs/WINDOWS-RUNBOOK.md**; this document does not repeat them. Milestone 5 of the 1.0
+campaign (hard gate 1 in RELEASE-1.0-PLAN.md) put the rest of that pipeline in the app:
+dropping a `.nwd`/`.nwf`/`.nwc` on Windows registers the source and queues it on
+`NavisworksExtractionService` (`apps/desktop/electron/services/extraction-service.ts`), a
+serial queue that streams the file's SHA-256 rather than buffering it, detects the
+Navisworks install that will open the file, and drives `Matchline.Extractor` through the
+same JSON-lines protocol the manual launcher speaks — mirrored in
+`extraction-protocol.ts` and reached through the injectable `ExtractorLauncher` seam in
+`extractor-launcher.ts`, so the whole flow runs against a protocol-faithful fake with no
+Navisworks anywhere. Every launcher error code and service-level failure maps to one
+plain-language sentence in `extraction-messages.ts` — a single table, so a code cannot
+reach a screen without copy. When a run finishes, the service validates the cache, records
+its hash against the source and opens it automatically; nobody names a cache file. A model
+source still lands on `.matchline-cache` files where there is no Navisworks to drive — Mac
+development, or a cache produced by the manual launcher — and those still just get dropped
+in and read.
+
+The service is built and covered by its own suite (`apps/desktop/test/
+extraction-service.test.mjs`, 17 tests) against the fake launcher; the real Autodesk path —
+running this against an actual Navisworks install — is the Milestone 6 proof in
+RELEASE-1.0-PLAN.md and has not happened yet.
 
 ## IPC contract
 

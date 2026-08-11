@@ -111,26 +111,25 @@ up.
    **Choose where to save…**, and pick a folder. You get `<YourSite>.matchline`, one SQLite
    file holding the sources manifest, the site profile, everything the app has learned about
    the site, and every compile it has run.
-2. **Give it the model.** Matchline reads a model through an *extraction cache*: a Windows
-   worker walks the model once, with Navisworks doing the opening, and writes a SQLite file
-   the app can read quickly and repeatedly. In this build that walk is a **separate step
-   you run yourself** — the app does not start Navisworks. So:
-   - **If you already have a cache file** (`<64 hex characters>.sqlite`, or anything named
-     `.matchline-cache`), drag it onto *Drop files here* on the first wizard screen, or use
-     **Choose files…**. The app works out what each file is on its own.
-   - **If you do not**, follow **docs/WINDOWS-RUNBOOK.md** end to end. It builds the
-     extractor, runs it against your NWD, and writes the cache to the folder you name with
-     `--cache-dir`. Then come back here and drop the cache in.
-   - **You can drop the raw `.nwd`/`.nwf`/`.nwc` too.** The project will record which
-     document the site is built from and show the source as *requires Windows extraction* —
-     it is a note to yourself, not a shortcut. The source becomes usable only once its cache
-     is added alongside.
+2. **Give it the model.** Matchline reads a model through an *extraction cache*, and on
+   Windows the app produces that cache itself: drag your `.nwd`/`.nwf`/`.nwc` onto *Drop
+   files here* on the first wizard screen (or use **Choose files…**). The app detects the
+   Navisworks install that will open the file and extracts it in place — a status line and
+   a Cancel button track the run on the source's row — and the model joins the project the
+   moment it is ready. Nobody names a cache file, and nobody starts Navisworks by hand.
+   - **On a Mac, or with a cache produced elsewhere,** drop the cache file directly
+     (`<64 hex characters>.sqlite`, or anything named `.matchline-cache`) the same way. The
+     app works out what each file is on its own. This is also how development and demos
+     work on a Mac, where Navisworks does not exist at all.
+   - **The manual path still exists, as a diagnostic.** **docs/WINDOWS-RUNBOOK.md**'s
+     launcher invocation — build the extractor, run it against your NWD by hand, write the
+     cache to the folder you name with `--cache-dir` — is what you reach for when an
+     in-app run needs to be taken apart, not the normal way to get a model in.
 
-   Running the extraction from inside the app, so that dropping an NWD is the whole of this
-   step, is built but not shipped in this build — it is Milestone 5 and hard gate 1 of the
-   1.0 plan (docs/RELEASE-1.0-PLAN.md), and it is not done. When it lands, cache files stay
-   supported: they are how development and demos work on a Mac, where Navisworks does not
-   exist at all.
+   Running extraction from inside the app is Milestone 5 of the 1.0 plan (hard gate 1 in
+   docs/RELEASE-1.0-PLAN.md): the service is built and tested against a protocol-faithful
+   fake launcher (docs/EXTRACTION.md); the first run against real Navisworks hardware —
+   Milestone 6 — is still ahead of it.
 
    **Drop as many model sources as the site has.** One federated NWD, or a dozen split
    files from different consultants — including two that happen to share a file name. They
@@ -238,7 +237,9 @@ None of these are bugs to report — they are known, and each has a reason.
 - **No auto-update.** There is no update server and this build makes no network calls at
   all. New versions arrive as a new file, installed over the old one. A signed, optional,
   disableable update check is planned for release and is not built yet.
-- **Extraction is a separate step.** Section 4, step 2. Running it from inside the app is
-  planned and not built yet.
+- **Extraction is in-app on Windows now.** Section 4, step 2 — dropping an NWD extracts it
+  in place. The manual launcher path (docs/WINDOWS-RUNBOOK.md) still exists, but only as
+  the diagnostic route for taking an in-app run apart, not the normal way to get a model in.
+  Real Navisworks hardware has not run this path yet — that proof is still ahead.
 - **Windows x64 only.** No 32-bit and no Windows-on-ARM build. The Mac build is
   Apple Silicon only.

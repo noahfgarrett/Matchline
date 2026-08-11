@@ -106,12 +106,24 @@ proof that did not happen; and docs/RELEASE-RUNBOOK.md as the owner-facing relea
 document. Signing itself is still blocked on the certificate, and the `signtool`
 invocations in `release.yml` have never run.
 
+**M5 — integrated extraction service. Complete.** `NavisworksExtractionService`
+(`apps/desktop/electron/services/extraction-service.ts`) makes dropping a raw NWD/NWF/NWC
+the whole of the job on Windows: a serial queue streams the file's SHA-256 rather than
+buffering it, detects the installed Navisworks that will open the file, and drives
+`Matchline.Extractor` through the same JSON-lines protocol the manual launcher speaks
+(mirrored in `extraction-protocol.ts`, reached through the injectable `ExtractorLauncher`
+seam in `extractor-launcher.ts`). Every launcher error code and service-level failure maps
+to one plain-language sentence in `extraction-messages.ts`. 17 tests
+(`apps/desktop/test/extraction-service.test.mjs`) run the whole flow against
+`fake-extractor.mjs` — a second implementation of the launcher's side of the protocol,
+run as a real child process writing a real cache — covering cache-hit reuse, cancellation
+mid-run with partial-file cleanup, every error code, and streaming-hash fidelity on a
+multi-megabyte fixture. Screen 1 shows each source's live status
+(queued/hashing/opening/extracting/finalizing/ready/cache-hit/cancelled/failed) with a
+Cancel button. Gate 1 GREEN for the code; validating it against a real Navisworks install
+is M6, below.
+
 **Not landed.**
-- **M5 — integrated extraction service. Gate 1 open, nothing built.** There is no
-  extraction service in `apps/desktop/electron/services/`. Dropping a raw NWD/NWF/NWC
-  registers the file and marks it `requires-windows-extraction`; producing the cache is
-  still a separate run of the extractor per docs/WINDOWS-RUNBOOK.md. Any document or UI
-  string that says otherwise is wrong.
 - **M6 — real Windows proof.** Blocked on Noah's Windows box. Gates 14, 15, 16 and 21 stay
   BLOCKED; `scripts/windows-proof/*.mjs` is M6's to write, and the proof workflow's
   preflight lists exactly which seven scripts are missing.
