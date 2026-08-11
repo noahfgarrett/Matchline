@@ -4,6 +4,13 @@ This is the step-by-step for running the Phase 1 proof on your Windows machine
 with Navisworks Manage 2025. Follow it in order. It assumes nothing beyond a
 working Windows install and Navisworks.
 
+**The proof drives the app, not the launcher.** Extraction is integrated: you
+drop a model on screen 1 and Matchline runs Navisworks for you (§6). Running
+`Matchline.Extractor.exe` by hand is kept here as the diagnostic path (§6b),
+because when something goes wrong the raw protocol is the fastest way to see it
+— but it is not how anyone extracts a model, and the proof does not pass on it
+alone.
+
 **Read this first — everything except the Autodesk API is now compiled and
 run.** All of `native/` was written on a Mac. It has since been built there with
 the .NET SDK, and the half that does not touch Autodesk has been *executed*. The
@@ -81,8 +88,9 @@ split between "the stub build pinned its shape" and "fully open".
 data. Never copy the NWD into the repo folder, never commit a cache file, never
 paste a real file name, project name, or equipment tag into an issue, a commit
 message, or a chat. Everything in this runbook happens *outside* the repo tree:
-the model stays where it already lives, and the cache is written under
-`%LOCALAPPDATA%`, which is not in the repo and not in git.
+the model stays where it already lives, and caches are written under the app's
+own folder (`%APPDATA%\Matchline\cache\models`) or wherever `--cache-dir`
+says — neither of which is in the repo or in git.
 
 ---
 
@@ -226,7 +234,63 @@ that alongside the timings. Do not copy it anywhere near the repo folder.
 
 ---
 
-## 6. Run the extraction
+## 6. Run the extraction — the normal path, in the app
+
+**This is how extraction is meant to happen, and it is the path the proof must
+exercise.** Matchline drives the launcher itself: you drop the model on screen 1
+and watch the row. Nobody produces a cache file by hand, and nobody is shown one
+(RELEASE-1.0-PLAN P0-2; the architecture is in
+[`docs/EXTRACTION.md`](EXTRACTION.md), "The extraction service").
+
+Point the app at the launcher you just built, then start it:
+
+```
+cd %USERPROFILE%\source\Matchline
+set MATCHLINE_EXTRACTOR_PATH=%USERPROFILE%\source\Matchline\native\extractor\bin\Release\Matchline.Extractor.exe
+npm run dev:desktop
+```
+
+(A packaged build ships the launcher beside itself and needs no variable. The
+variable exists so a machine that has built from source can use what it built.)
+
+Then, in the app:
+
+1. Create a project anywhere outside the repo — `%USERPROFILE%\matchline-proof`
+   is a good place.
+2. On **screen 1**, drop your NWD on the drop zone. Do not look for a cache
+   option; there isn't one, and that is the point.
+3. Watch the row. Time it from the drop to `Ready`.
+
+### What good looks like, in the row
+
+The badge moves through these, and every one of them should appear:
+
+| Badge                 | What is happening                                                    |
+| --------------------- | -------------------------------------------------------------------- |
+| Waiting to extract    | Queued. With one model this is a blink; with several it is the queue. |
+| Checking the file     | Streaming SHA-256 of the NWD, with a percentage.                      |
+| Opening in Navisworks | Detection, then the headless open. **Record the sentence under the bar** — it names the Navisworks and the adapter that will open the file. |
+| Reading the model     | The walk, then the cache write. The record count climbs; there is no percentage, because the walk cannot know its total. |
+| Finishing up          | Integrity check and atomic rename.                                    |
+| Ready                 | The cache was validated and associated. The row says how many objects and source models came out. |
+
+Also record:
+
+- the `Navisworks version has not been proven against a real install` warning —
+  it is expected on this run, and it is what §9 is about;
+- that **screen 2 now shows the model** without you having added anything else;
+- the time from drop to `Ready`, and the model's size in MB.
+
+Then repeat the checks in §8 — they are written against the launcher's own
+output, and §8.1–8.3 have an in-app equivalent noted under each one.
+
+---
+
+## 6b. Run the launcher by hand — the diagnostic path
+
+Use this when something in §6 went wrong and you need to see the raw protocol,
+or when you want to test the launcher without the app in the way. It is not how
+a user extracts a model.
 
 ```
 cd %USERPROFILE%\source\Matchline\native\extractor\bin\Release
@@ -325,23 +389,30 @@ from §4.
 
 ## 8. Verification checklist
 
-These map one-to-one onto the Phase 1 exit criteria. Tick each.
+These map one-to-one onto the Phase 1 exit criteria. Tick each. Each one is
+written against the launcher's raw output (§6b) and carries the in-app
+equivalent (§6) beside it — run both where they differ, because the app and the
+launcher each own half of the promise.
 
 ### 8.1 The cache appears, named by hash
 
+The app writes caches under its own folder:
+
 ```
-dir "%USERPROFILE%\matchline-proof\cache"
+dir "%APPDATA%\Matchline\cache\models"
 ```
 
-Expect exactly one file: 64 hex characters + `.sqlite`. **No `.partial` file
-and no `.ndjson.tmp` file may remain.**
+and a by-hand run writes them wherever `--cache-dir` said. Either way, expect
+one file per model: 64 hex characters + `.sqlite`. **No `.partial` file and no
+`.ndjson.tmp` file may remain.**
 
-- [ ] one `<64 hex>.sqlite`
+- [ ] one `<64 hex>.sqlite` per model extracted
 - [ ] nothing else in the folder
+- [ ] **in the app**: the source row never named that file, and never had to
 
 ### 8.2 Re-run is a cache hit, and Navisworks never starts
 
-Run the **exact same command** from §6 again. Watch Task Manager while it runs.
+Run the **exact same command** from §6b again. Watch Task Manager while it runs.
 
 ```
 {"type":"progress","stage":"hash",...}
@@ -352,6 +423,15 @@ Run the **exact same command** from §6 again. Watch Task Manager while it runs.
 - [ ] it finishes in seconds (only the hash is recomputed)
 - [ ] **no `Roamer.exe` appears in Task Manager**
 - [ ] `objects` matches the first run exactly
+
+**In the app**: drop the same NWD on screen 1 a second time. The row should go
+straight to **Ready — reused**, say so in words, and Navisworks must not start.
+The app checks for the cache before it launches anything, so this one never
+reaches the launcher at all.
+
+- [ ] the badge reads `Ready — reused`
+- [ ] no `Roamer.exe` appears in Task Manager
+- [ ] the object count matches the first run
 
 ### 8.3 Cancelling mid-run leaves nothing behind
 
@@ -380,6 +460,16 @@ Then check the folder and Task Manager:
 
 If Navisworks lingers, note how long — that tells us whether a harder kill is
 needed.
+
+**In the app**: start a fresh extraction and press **Cancel** on the row while
+it reads the model. The app sends the same `cancel` line, and escalates to
+SIGTERM and then SIGKILL only if the launcher ignores it.
+
+- [ ] the badge becomes `Cancelled` and the source stays in the list
+- [ ] the row says how to run it again, in plain language
+- [ ] `Roamer.exe` is gone from Task Manager
+- [ ] the cache folder holds no `.sqlite`, `.partial` or `.ndjson.tmp` for it
+- [ ] dropping the model again starts a fresh extraction that completes
 
 ### 8.4 Spot-check the cache contents
 
@@ -561,8 +651,17 @@ DEPLOY
   Plugins folder that worked: install dir / %APPDATA% / neither
   Command line spelling that worked (§7):
 
-RUN
+RUN — IN THE APP (§6, the normal path)
   Model size (MB):
+  Wall-clock time, drop to Ready:
+  Every badge you saw, in order:
+  The detect sentence under the bar, verbatim (it names the Navisworks + adapter):
+  Warnings shown on the row (codes only):
+  Object and source-model counts the row reported when it went Ready:
+  Did screen 2 show the model without you adding anything else? yes / no
+  Anything the row said that was confusing or wrong:
+
+RUN — BY HAND (§6b, the diagnostic path)
   Wall-clock time, first run:
   Wall-clock time, cache-hit run:
   Peak memory of Roamer.exe during the walk (Task Manager), rough:
@@ -582,9 +681,12 @@ COUNTS (from §8.4)
 
 CHECKLIST
   8.1 cache named by hash, nothing else in the folder:  pass / fail
+  8.1 the app never named a cache file to you:          pass / fail
   8.2 re-run is cache-hit and Roamer.exe never starts:  pass / fail
+  8.2 second drop in the app read "Ready — reused":     pass / fail
   8.3 cancel leaves no .sqlite, no .partial, no .tmp:   pass / fail
   8.3 exit code was 9:                                  pass / fail
+  8.3 Cancel in the app left the source registered:     pass / fail
   8.4 declared object_count equals actual:              pass / fail
 
 ANYTHING ELSE

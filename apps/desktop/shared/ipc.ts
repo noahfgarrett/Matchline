@@ -15,6 +15,7 @@ import {
   draftPatchSchema,
   draftProfileSchema,
   exportResultSchema,
+  extractionJobSchema,
   flowPageSchema,
   flowRootSchema,
   learnedRuleKindSchema,
@@ -509,6 +510,78 @@ export const IPC_CHANNELS = {
     example: {
       request: { sourceId: 'mel:dragon-mel.xlsx' },
       response: { removed: true },
+    },
+  },
+
+  /* ------------------------------------------ screen 1: extraction progress */
+
+  /**
+   * Every extraction this session has run, queued, or failed (P0-2).
+   *
+   * Polled rather than pushed, which is what the rest of this table does with
+   * long-running work: main owns the state, the renderer asks for it, and there
+   * is exactly one shape for "what is happening" whether the window has been
+   * open the whole time or was just reopened on a project mid-extraction.
+   *
+   * Paged like every other list channel. A project with forty models
+   * re-extracting after a re-add is a real page, not a hypothetical one.
+   */
+  'extraction:status': {
+    request: z.object({
+      offset: z.number().int().nonnegative(),
+      limit: z.number().int().positive().max(200),
+    }),
+    response: z.object({
+      total: z.number().int().nonnegative(),
+      /** True while any job is queued or running, so the UI knows to keep polling. */
+      active: z.boolean(),
+      rows: z.array(extractionJobSchema),
+    }),
+    example: {
+      request: { offset: 0, limit: 50 },
+      response: {
+        total: 1,
+        active: true,
+        rows: [
+          {
+            sourceId: 'model:dragon-coordination.nwd',
+            fileName: 'Dragon-Coordination.nwd',
+            status: 'extracting',
+            progress: null,
+            detail: '48,213 records read from the model so far.',
+            note: 'Reading the equipment and properties out of Dragon-Coordination.nwd.',
+            errorCode: null,
+            warnings: [
+              {
+                code: 'ADAPTER_UNVERIFIED',
+                message:
+                  'This Navisworks version has not been proven against a real install yet. ' +
+                  'The extraction ran; treat its counts as unconfirmed until that version is verified.',
+              },
+            ],
+            objectCount: null,
+            startedAt: '2026-08-11T09:00:00.000Z',
+            finishedAt: null,
+            cancellable: true,
+          },
+        ],
+      },
+    },
+  },
+
+  /**
+   * Stops one extraction, by source id.
+   *
+   * The source stays registered and becomes `cancelled` rather than
+   * disappearing: the user asked to stop reading the file, not to forget they
+   * added it. Answers `false` when there was nothing left to stop.
+   */
+  'extraction:cancel': {
+    request: z.object({ sourceId: z.string().min(1) }),
+    response: z.object({ cancelled: z.boolean() }),
+    example: {
+      request: { sourceId: 'model:dragon-coordination.nwd' },
+      response: { cancelled: true },
     },
   },
 

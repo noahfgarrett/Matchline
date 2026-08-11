@@ -939,16 +939,33 @@ code {
   color: var(--success);
 }
 
-.badge--requires-windows-extraction,
-.badge--needs-attention {
+.badge--needs-attention,
+.badge--cancelled {
   border-color: var(--warning);
   color: var(--warning);
 }
 
 .badge--file-missing,
-.badge--file-changed {
+.badge--file-changed,
+.badge--failed {
   border-color: var(--danger);
   color: var(--danger);
+}
+
+/* An extraction in flight: the same accent the app uses for "working on it". */
+.badge--queued,
+.badge--hashing,
+.badge--opening,
+.badge--extracting,
+.badge--finalizing {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* A cache hit is a success, and reads as one. */
+.badge--cache-hit {
+  border-color: var(--success);
+  color: var(--success);
 }
 
 .badge--suggestion {
@@ -1033,6 +1050,78 @@ code {
   margin: 0;
   color: var(--text-muted);
   font-size: 0.8rem;
+}
+
+.source__warnings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dropzone__aside {
+  max-width: 46ch;
+  margin: 0;
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+/* ------------------------------------------------------ extraction progress */
+
+.extraction {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.extraction__track {
+  overflow: hidden;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.extraction__bar {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 200ms linear;
+}
+
+/*
+ * A stage that cannot know its total gets a stripe that travels rather than a
+ * bar that fills: the model walk has no denominator until it finishes, and a
+ * bar drawn from a guess would be most confident when it knew least.
+ */
+.extraction__track--indeterminate .extraction__bar {
+  width: 30%;
+  animation: extraction-sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes extraction-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(333%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .extraction__track--indeterminate .extraction__bar {
+    width: 100%;
+    animation: none;
+    opacity: 0.5;
+  }
+}
+
+.extraction__detail {
+  margin: 0;
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
 }
 
 /* -------------------------------------------------------------- screen 4/5 */

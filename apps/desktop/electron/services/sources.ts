@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
+import { closeSync, createReadStream, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import { detectWorkbook } from '@matchline/connectivity-import';
@@ -45,6 +45,17 @@ export interface SourceRegistration {
   readonly status: WireSourceStatus;
   readonly note: string;
   readonly sheets: readonly WireSheetSummary[];
+  /**
+   * True for a raw Navisworks document, which is registered but not read.
+   *
+   * It decides one thing at the registration site: whether the file's own hash
+   * is also the hash of what the engine reads. For a cache or a workbook it is
+   * — the file IS the data. For an NWD it is not: the data is the extraction
+   * cache the service produces from it, and until then the source has none
+   * (P0-2, "a raw NWD is not a ready source until a valid cache is
+   * associated").
+   */
+  readonly needsExtraction: boolean;
 }
 
 export type SourceIdentification =
@@ -74,12 +85,96 @@ function extensionOf(filePath: string): string {
   return path.extname(fileName);
 }
 
-export function digestFile(absolutePath: string): FileDigest {
-  const bytes = readFileSync(absolutePath);
-  return {
-    sha256: createHash('sha256').update(bytes).digest('hex'),
-    byteSize: statSync(absolutePath).size,
-  };
+/** Bytes read per hashing step. Matches `FileHasher.BufferBytes` in the launcher. */
+const HASH_CHUNK_BYTES = 1 << 20;
+
+/**
+ * Files below this get no progress events: they are hashed inside one tick of
+ * the wizard's own "Reading…" state and a progress bar for them would flicker
+ * rather than inform.
+ */
+const HASH_PROGRESS_THRESHOLD_BYTES = 64 * 1024 * 1024;
+
+/** How much has to be read between progress events on a file large enough to have them. */
+const HASH_PROGRESS_INTERVAL_BYTES = 32 * 1024 * 1024;
+
+export type DigestProgress = (bytesDone: number, bytesTotal: number) => void;
+
+/**
+ * The sha256 of a file, streamed.
+ *
+ * Never `readFileSync`: a source may be a multi-gigabyte NWD, and reading one
+ * into a Buffer to hash it is both a main-process stall and an allocation the
+ * size of the model (RELEASE-1.0-PLAN, "Streaming SHA-256, no full-file
+ * buffers"). The stream reads a megabyte at a time and the event loop is free
+ * between chunks, which is what lets the window keep drawing while a 700 MB
+ * model is hashed.
+ *
+ * Progress is reported for a file big enough for the wait to be noticeable,
+ * which is the same reason the launcher's own hash stage reports it.
+ */
+export function digestFile(absolutePath: string, onProgress?: DigestProgress): Promise<FileDigest> {
+  const byteSize = statSync(absolutePath).size;
+  const reportProgress = onProgress !== undefined && byteSize > HASH_PROGRESS_THRESHOLD_BYTES;
+
+  return new Promise<FileDigest>((resolve, reject): void => {
+    const hash = createHash('sha256');
+    const stream = createReadStream(absolutePath, { highWaterMark: HASH_CHUNK_BYTES });
+    let done = 0;
+    /** How far along the last progress event was, so they land evenly. */
+    let reportedAt = 0;
+
+    if (reportProgress) {
+      onProgress(0, byteSize);
+    }
+
+    stream.on('data', (chunk: string | Buffer): void => {
+      hash.update(chunk);
+      done += typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.length;
+      if (reportProgress && done - reportedAt >= HASH_PROGRESS_INTERVAL_BYTES) {
+        reportedAt = done;
+        onProgress(done, byteSize);
+      }
+    });
+    stream.on('error', (error: Error): void => {
+      reject(error);
+    });
+    stream.on('end', (): void => {
+      if (reportProgress) {
+        onProgress(done, byteSize);
+      }
+      resolve({ sha256: hash.digest('hex'), byteSize });
+    });
+  });
+}
+
+/**
+ * The same digest, for the one caller that cannot wait for a promise.
+ *
+ * Reopening a project re-proves every registered file against the hash the
+ * project recorded, and that happens inside a synchronous `open`. The read is
+ * still chunked — a fixed one-megabyte buffer, reused — so a big source costs
+ * time here but never memory. Everything that can be asynchronous uses
+ * {@link digestFile} instead.
+ */
+export function digestFileSync(absolutePath: string): FileDigest {
+  const hash = createHash('sha256');
+  const buffer = Buffer.allocUnsafe(HASH_CHUNK_BYTES);
+  const handle = openSync(absolutePath, 'r');
+  let byteSize = 0;
+  try {
+    for (;;) {
+      const read = readSync(handle, buffer, 0, HASH_CHUNK_BYTES, null);
+      if (read <= 0) {
+        break;
+      }
+      hash.update(buffer.subarray(0, read));
+      byteSize += read;
+    }
+  } finally {
+    closeSync(handle);
+  }
+  return { sha256: hash.digest('hex'), byteSize };
 }
 
 function messageOf(error: unknown): string {
@@ -134,17 +229,24 @@ function identifyExtractionCache(absolutePath: string): SourceIdentification {
           // the universe is all of them together (P0-1).
           'It joins the equipment universe every other source is matched against.',
         sheets: [],
+        needsExtraction: false,
       },
     ],
   };
 }
 
 /**
- * A raw Navisworks file is registered, not read.
+ * A raw Navisworks file is registered, and then extracted.
  *
- * Reading one needs Navisworks Manage on Windows (docs/WINDOWS-RUNBOOK.md). The
- * file is still recorded so the project knows which document a site is built
- * from; the extractor produces a `.matchline-cache` that gets added alongside.
+ * Registration is instant and extraction is not: the file goes in as a queued
+ * source and the extraction service takes it from there, opening Navisworks in
+ * the background and associating the cache it produces (P0-2). The user never
+ * names a cache file, and never sees one.
+ *
+ * Extraction runs on Windows, because that is where Navisworks runs. On any
+ * other machine the queued job fails immediately with a message that says so —
+ * the honest answer arrives from the job, in the row, rather than being
+ * guessed at here from `process.platform`.
  */
 function identifyNavisworksFile(fileName: string): SourceIdentification {
   return {
@@ -152,13 +254,13 @@ function identifyNavisworksFile(fileName: string): SourceIdentification {
     registrations: [
       {
         role: 'model',
-        status: 'requires-windows-extraction',
+        status: 'queued',
         note:
-          `${fileName} is a Navisworks file. Matchline reads models through an ` +
-          'extraction cache, which is produced by running the Matchline extractor on a ' +
-          'Windows machine with Navisworks Manage. Add the resulting .matchline-cache ' +
-          'file here when you have it.',
+          `${fileName} is a Navisworks model. Matchline is extracting it — that opens the file ` +
+          'in Navisworks in the background and can take a few minutes on a large model. The ' +
+          'row updates as it goes.',
         sheets: [],
+        needsExtraction: true,
       },
     ],
   };
@@ -300,6 +402,7 @@ function identifyWorkbook(absolutePath: string, fileName: string): SourceIdentif
               .map((summary: WireSheetSummary): string => summary.sheet)
               .join(', ')}).`,
       sheets,
+      needsExtraction: false,
     });
   }
   // Deterministic order regardless of sheet order inside the workbook.
@@ -333,6 +436,7 @@ export function identifySource(absolutePath: string): SourceIdentification {
             'Primavera P6 export. Used later for milestone dates and sequencing; ' +
             'it plays no part in screens 1-5.',
           sheets: [],
+          needsExtraction: false,
         },
       ],
     };
@@ -358,15 +462,27 @@ const ACCEPTED_EXTENSIONS: readonly string[] = [
 ];
 
 /**
- * The largest file a drop may name, in bytes.
+ * The largest file a drop may name, in bytes, for the files main reads whole.
  *
- * Not a product limit — a real extraction cache is tens of megabytes and the
- * biggest `.nwd` anyone has dropped is under a gigabyte. It is here so that a
- * path main did not choose cannot make it read something unbounded: workbooks
- * go through `readFileSync`, and "read this 40 GB file into a Buffer" is a
- * denial of service one `invoke` long.
+ * Not a product limit — a real extraction cache is tens of megabytes. It is
+ * here so that a path main did not choose cannot make it read something
+ * unbounded: workbooks go through `readFileSync`, and "read this 40 GB file
+ * into a Buffer" is a denial of service one `invoke` long.
  */
 const MAX_DROPPED_BYTES = 2 * 1024 * 1024 * 1024;
+
+/**
+ * The same cap for a raw Navisworks document, which is a different number
+ * because it is a different risk.
+ *
+ * Nothing ever reads an NWD into memory: main hashes it in a stream and hands
+ * the path to the extractor (P0-2). So the cap here is not protecting a buffer
+ * — it is only refusing something absurd — and it has to sit above the real
+ * models people drop, which on a large site genuinely pass two gigabytes.
+ * Refusing one of those would refuse the whole feature for the projects that
+ * need it most.
+ */
+const MAX_DROPPED_MODEL_BYTES = 64 * 1024 * 1024 * 1024;
 
 /** A dropped path main declined to hand to the project, and why. */
 export interface RejectedDroppedPath {
@@ -415,13 +531,14 @@ export function screenDroppedPaths(paths: readonly string[]): DroppedPathScreeni
   for (const candidate of paths) {
     const absolutePath = path.resolve(candidate);
     const fileName = path.basename(absolutePath);
+    const extension = extensionOf(absolutePath);
 
     if (seen.has(absolutePath)) {
       continue;
     }
     seen.add(absolutePath);
 
-    if (!ACCEPTED_EXTENSIONS.includes(extensionOf(absolutePath))) {
+    if (!ACCEPTED_EXTENSIONS.includes(extension)) {
       rejected.push({
         fileName,
         reason:
@@ -448,7 +565,10 @@ export function screenDroppedPaths(paths: readonly string[]): DroppedPathScreeni
       continue;
     }
 
-    if (stats.size > MAX_DROPPED_BYTES) {
+    const sizeCap = NAVISWORKS_EXTENSIONS.includes(extension)
+      ? MAX_DROPPED_MODEL_BYTES
+      : MAX_DROPPED_BYTES;
+    if (stats.size > sizeCap) {
       rejected.push({
         fileName,
         reason:

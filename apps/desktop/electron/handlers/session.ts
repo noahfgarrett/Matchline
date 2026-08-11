@@ -29,6 +29,8 @@ export type SessionChannel = Extract<
   | 'source:add-dropped'
   | 'source:list'
   | 'source:remove'
+  | 'extraction:status'
+  | 'extraction:cancel'
   | 'model:scan'
   | 'model:property-page'
   | 'model:class-list'
@@ -94,6 +96,28 @@ export type SessionHandlers = {
 function guard<T>(work: () => T): T {
   try {
     return work();
+  } catch (error: unknown) {
+    if (error instanceof IpcHandlerError) {
+      throw error;
+    }
+    throw new IpcHandlerError(
+      'handler-failed',
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
+/**
+ * {@link guard} for the service calls that are asynchronous.
+ *
+ * Registering a source streams a sha256 and so returns a promise; a rejection
+ * has to become the same `handler-failed` envelope carrying the same sentence,
+ * or "no project is open" would reach the renderer as a stack trace on one
+ * channel and as a sentence on every other.
+ */
+async function guardAsync<T>(work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
   } catch (error: unknown) {
     if (error instanceof IpcHandlerError) {
       throw error;
@@ -176,7 +200,7 @@ export function createSessionHandlers(
 
     async 'source:add'(request: IpcRequest<'source:add'>): Promise<IpcResponse<'source:add'>> {
       const paths = request.paths.map(requireGranted);
-      return { results: [...guard(() => service.addSources(paths))] };
+      return { results: [...(await guardAsync(() => service.addSources(paths)))] };
     },
 
     /**
@@ -195,7 +219,7 @@ export function createSessionHandlers(
       request: IpcRequest<'source:add-dropped'>,
     ): Promise<IpcResponse<'source:add-dropped'>> {
       const screening = screenDroppedPaths(request.paths);
-      const added = guard(() => service.addSources(screening.accepted));
+      const added = await guardAsync(() => service.addSources(screening.accepted));
       return {
         results: [
           ...added,
@@ -216,6 +240,19 @@ export function createSessionHandlers(
       request: IpcRequest<'source:remove'>,
     ): Promise<IpcResponse<'source:remove'>> {
       return { removed: guard(() => service.removeSource(request.sourceId)) };
+    },
+
+    async 'extraction:status'(
+      request: IpcRequest<'extraction:status'>,
+    ): Promise<IpcResponse<'extraction:status'>> {
+      const page = guard(() => service.extractionStatus(request.offset, request.limit));
+      return { total: page.total, active: page.active, rows: [...page.rows] };
+    },
+
+    async 'extraction:cancel'(
+      request: IpcRequest<'extraction:cancel'>,
+    ): Promise<IpcResponse<'extraction:cancel'>> {
+      return { cancelled: guard(() => service.cancelExtraction(request.sourceId)) };
     },
 
     async 'model:scan'(): Promise<IpcResponse<'model:scan'>> {

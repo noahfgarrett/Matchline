@@ -155,11 +155,11 @@ function teachDragon(service) {
 }
 
 /** Creates a project, registers `paths`, and teaches it Dragon. */
-function projectOver(name, paths) {
+async function projectOver(name, paths) {
   const path = projectFile(name);
   const service = newService();
   service.create(path, name);
-  const added = service.addSources(paths);
+  const added = await service.addSources(paths);
   teachDragon(service);
   return { path, service, added };
 }
@@ -204,9 +204,9 @@ function canonicalSnapshot(projectPath) {
 
 /* ------------------------------------------- the universe is the union ---- */
 
-test('two split caches scan as one universe whose totals are the federated file', () => {
-  const split = projectOver('Split', [mechanicalPath, controlsPath, melPath]);
-  const federated = projectOver('Federated', [federatedPath, melPath]);
+test('two split caches scan as one universe whose totals are the federated file', async () => {
+  const split = await projectOver('Split', [mechanicalPath, controlsPath, melPath]);
+  const federated = await projectOver('Federated', [federatedPath, melPath]);
 
   try {
     const universe = split.service.modelUniverse();
@@ -243,8 +243,8 @@ test('two split caches scan as one universe whose totals are the federated file'
   }
 });
 
-test('the Property Catalog aggregates the universe and discloses each source', () => {
-  const split = projectOver('Coverage', [mechanicalPath, controlsPath]);
+test('the Property Catalog aggregates the universe and discloses each source', async () => {
+  const split = await projectOver('Coverage', [mechanicalPath, controlsPath]);
   try {
     const page = split.service.propertyPage({
       offset: 0,
@@ -295,8 +295,8 @@ test('the Property Catalog aggregates the universe and discloses each source', (
   }
 });
 
-test('screen 3 breaks the inclusion impact down per model source', () => {
-  const split = projectOver('Impact', [mechanicalPath, controlsPath]);
+test('screen 3 breaks the inclusion impact down per model source', async () => {
+  const split = await projectOver('Impact', [mechanicalPath, controlsPath]);
   try {
     const preview = split.service.assetPreview();
     assert.equal(preview.state, 'ready');
@@ -340,9 +340,9 @@ test('screen 3 breaks the inclusion impact down per model source', () => {
   }
 });
 
-test('a split project compiles to the same hierarchy the federated file does', () => {
-  const split = projectOver('SplitCompile', [mechanicalPath, controlsPath, melPath]);
-  const federated = projectOver('FederatedCompile', [federatedPath, melPath]);
+test('a split project compiles to the same hierarchy the federated file does', async () => {
+  const split = await projectOver('SplitCompile', [mechanicalPath, controlsPath, melPath]);
+  const federated = await projectOver('FederatedCompile', [federatedPath, melPath]);
 
   let splitSummary = null;
   let federatedSummary = null;
@@ -387,7 +387,7 @@ test('a split project compiles to the same hierarchy the federated file does', (
 
 /* --------------------------------------- duplicate basenames coexist ------ */
 
-test('two different files called `Level 1.matchline-cache` are two sources', () => {
+test('two different files called `Level 1.matchline-cache` are two sources', async () => {
   const first = join(workDir, 'consultant-a');
   const second = join(workDir, 'consultant-b');
   mkdirSync(first, { recursive: true });
@@ -397,7 +397,7 @@ test('two different files called `Level 1.matchline-cache` are two sources', () 
   copyFileSync(mechanicalPath, firstPath);
   copyFileSync(controlsPath, secondPath);
 
-  const project = projectOver('Duplicates', [firstPath, secondPath]);
+  const project = await projectOver('Duplicates', [firstPath, secondPath]);
   try {
     assert.deepEqual(
       modelSources(project.service).map((source) => source.sourceId),
@@ -417,7 +417,7 @@ test('two different files called `Level 1.matchline-cache` are two sources', () 
 
     // Re-adding the FIRST file replaces the first source only. Same bytes, so
     // the row is rewritten and no third source appears.
-    project.service.addSources([firstPath]);
+    await project.service.addSources([firstPath]);
     assert.equal(modelSources(project.service).length, 2, 'still two, not three');
   } finally {
     project.service.close();
@@ -426,7 +426,7 @@ test('two different files called `Level 1.matchline-cache` are two sources', () 
 
 /* ----------------------------- replacing one source invalidates one source */
 
-test('replacing one model source re-opens that cache and no other', () => {
+test('replacing one model source re-opens that cache and no other', async () => {
   const own = join(workDir, 'replace-one');
   mkdirSync(own, { recursive: true });
   const ownMechanical = join(own, 'Dragon-Mechanical.matchline-cache');
@@ -434,7 +434,7 @@ test('replacing one model source re-opens that cache and no other', () => {
   copyFileSync(mechanicalPath, ownMechanical);
   copyFileSync(controlsPath, ownControls);
 
-  const project = projectOver('ReplaceOne', [ownMechanical, ownControls]);
+  const project = await projectOver('ReplaceOne', [ownMechanical, ownControls]);
   const mechanicalId = 'model:dragon-mechanical.matchline-cache';
   const controlsId = 'model:dragon-controls.matchline-cache';
 
@@ -450,7 +450,7 @@ test('replacing one model source re-opens that cache and no other', () => {
       [DRAGON_SOURCE_MODEL_IDS.mechanical],
       'Dragon-Mechanical-RevB.nwd',
     );
-    const [readded] = project.service.addSources([ownMechanical]);
+    const [readded] = await project.service.addSources([ownMechanical]);
     assert.equal(readded.outcome, 'added');
     assert.equal(readded.source.sourceId, mechanicalId, 'the same file keeps its source id');
     assert.equal(readded.source.status, 'ready');
@@ -476,8 +476,8 @@ test('replacing one model source re-opens that cache and no other', () => {
   }
 });
 
-test('removing one model source leaves the rest of the universe open', () => {
-  const project = projectOver('RemoveOne', [mechanicalPath, controlsPath]);
+test('removing one model source leaves the rest of the universe open', async () => {
+  const project = await projectOver('RemoveOne', [mechanicalPath, controlsPath]);
   const mechanicalId = 'model:dragon-mechanical.matchline-cache';
   const controlsId = 'model:dragon-controls.matchline-cache';
 
@@ -509,7 +509,7 @@ test('removing one model source leaves the rest of the universe open', () => {
 
 /* ------------------------------------- a hole in the universe is a refusal */
 
-test('a model source whose bytes changed refuses the compile and is named in it', () => {
+test('a model source whose bytes changed refuses the compile and is named in it', async () => {
   const own = join(workDir, 'changed-source');
   mkdirSync(own, { recursive: true });
   const ownMechanical = join(own, 'Dragon-Mechanical.matchline-cache');
@@ -517,7 +517,7 @@ test('a model source whose bytes changed refuses the compile and is named in it'
   copyFileSync(mechanicalPath, ownMechanical);
   copyFileSync(controlsPath, ownControls);
 
-  const setup = projectOver('Changed', [ownMechanical, ownControls, melPath]);
+  const setup = await projectOver('Changed', [ownMechanical, ownControls, melPath]);
   try {
     assert.equal(setup.service.compile().state, 'done', 'it compiles before anything is touched');
   } finally {
@@ -551,7 +551,7 @@ test('a model source whose bytes changed refuses the compile and is named in it'
 
     // Re-adding is the fix, because adding is what records the hash — and the
     // re-added file is the SAME source, not a second one.
-    const [readded] = service.addSources([ownControls]);
+    const [readded] = await service.addSources([ownControls]);
     assert.equal(readded.outcome, 'added');
     assert.equal(readded.source.sourceId, 'model:dragon-controls.matchline-cache');
     assert.equal(readded.source.status, 'ready');
@@ -562,16 +562,28 @@ test('a model source whose bytes changed refuses the compile and is named in it'
   }
 });
 
-test('a raw Navisworks file is a registered source that no compile waits for', () => {
+/**
+ * A raw model whose extraction cannot run — this machine is not Windows and the
+ * default launcher says so — is still a registered source, and still not part
+ * of the universe.
+ *
+ * The extraction service itself is proven in `extraction-service.test.mjs`
+ * against a fake launcher. What matters here is the multi-model promise: a
+ * model source with no cache is a row, not a hole, and it does not stop the
+ * sources that do have one from compiling.
+ */
+test('a raw Navisworks file is a registered source that no compile waits for', async () => {
   const rawPath = join(workDir, 'Dragon-Architectural.nwd');
   writeFileSync(rawPath, 'not a real NWD, and nothing here opens one');
 
-  const project = projectOver('RawDrop', [mechanicalPath, rawPath, melPath]);
+  const project = await projectOver('RawDrop', [mechanicalPath, rawPath, melPath]);
   try {
+    await project.service.extractionIdle();
     const raw = project.service
       .listSources()
       .find((source) => source.sourceId === 'model:dragon-architectural.nwd');
-    assert.equal(raw.status, 'requires-windows-extraction');
+    assert.equal(raw.status, 'failed', 'extraction cannot run on this machine, and says so');
+    assert.match(raw.note, /Windows/);
     assert.equal(
       raw.derivedCacheSha256,
       null,
@@ -589,8 +601,8 @@ test('a raw Navisworks file is a registered source that no compile waits for', (
 
 /* ----------------------------------------------- single-source parity ----- */
 
-test('a one-source project reports exactly what it did before the universe existed', () => {
-  const project = projectOver('Parity', [federatedPath, melPath]);
+test('a one-source project reports exactly what it did before the universe existed', async () => {
+  const project = await projectOver('Parity', [federatedPath, melPath]);
   try {
     const universe = project.service.modelUniverse();
     assert.equal(universe.sourceCount, 1);

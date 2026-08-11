@@ -6,7 +6,7 @@ licensed Navisworks Manage/Simulate required, .NET Framework 4.8, no NWD forward
 ## Process model
 
 ```
-Electron main (later)                     Windows, this phase: run by hand
+Electron main: NavisworksExtractionService (apps/desktop)
 └── launches → Matchline.Extractor.exe (net48 console, "the launcher")
                ├── sha256(input.nwd) → cache hit? exit early with result
                ├── launches Navisworks -NoGUI -ExecuteAddInPlugin MatchlineExtract ...
@@ -33,6 +33,48 @@ Design calls, and why:
 5. **Determinism.** Objects are recorded in depth-first document order with explicit
    `(parent_id, path_index)`; properties in encounter order per object. Same NWD → same
    cache content (excluding `extracted_at_utc`).
+
+## The extraction service (Electron main)
+
+`apps/desktop/electron/services/extraction-service.ts` is the half of the pipeline that
+lives in the app, and it is what makes "drop an NWD" the whole of the user's job
+(RELEASE-1.0-PLAN P0-2). Dropping an `.nwd`, `.nwf` or `.nwc` on screen 1 registers a model
+source with no cache and queues an extraction for it; the row then carries the job's own
+status — `queued`, `hashing`, `opening`, `extracting`, `finalizing`, then `ready`,
+`cache-hit`, `cancelled` or `failed` — with a progress fraction where the stage knows its
+total, the launcher's `detect` sentence naming the Navisworks that will open the file, any
+forwarded warnings, and a Cancel button. When the run finishes the service validates the
+cache (it opens, it holds objects, and its `meta.input_sha256` is the file that was
+hashed), records the cache's hash against the source and opens it. Nobody names a cache
+file, and none has to be produced by hand.
+
+Four rules the service keeps, and why:
+
+- **Serial by default.** One headless Navisworks at a time. Two on a real machine is slower
+  than two in sequence and can fail outright, so the rest of the queue says so in the row.
+- **Streaming SHA-256 everywhere.** A model may be gigabytes; nothing reads one into a
+  buffer to hash it, and the main process keeps drawing while it does.
+- **Cache reuse before anything is launched.** The service checks
+  `<cache dir>/<sha256>.sqlite` itself, so re-adding an unchanged model never starts
+  Navisworks. The launcher checks again on its own, for the same reason, when it is run
+  directly.
+- **Cancellation is the launcher's own.** A `cancel` line on stdin, which makes the launcher
+  kill the Navisworks it started and delete its partials; SIGTERM and then SIGKILL only if
+  that is ignored. The service then checks no `.partial` survived, because a killed
+  launcher never got to.
+
+Every launcher error code and every service-level failure maps to one plain-language
+sentence that names what the user can do, in
+`apps/desktop/electron/services/extraction-messages.ts` — one table, so a code cannot reach
+a screen without copy. Extraction runs on Windows; on any other machine the queued job fails
+immediately with `extraction-unavailable-on-this-platform`, whose sentence says extraction
+happens on Windows and that a `.matchline-cache` produced elsewhere can be added instead.
+
+The launcher is reached through an injectable seam
+(`ExtractorLauncher = (args, callbacks) => ExtractorChild`), so the whole flow is exercised
+on a machine with no Navisworks: `apps/desktop/test/fake-extractor.mjs` is a second
+implementation of the launcher's side of the protocol, run as a real child process, writing
+a real cache.
 
 ## Protocol (launcher stdout, JSON lines)
 
@@ -113,9 +155,11 @@ Real NWDs and caches derived from them are client data: never committed, never n
 code/tests/fixtures. Committed fixtures use the invented **Dragon** site only. The cache
 stores file *names*, never directories, to avoid leaking local paths into portable packages.
 
-## Phase 1 validation (Windows, by hand)
+## Validation (Windows)
 
 The proof run follows [`docs/WINDOWS-RUNBOOK.md`](WINDOWS-RUNBOOK.md): build the solution,
-extract a real NWD, verify cache integrity + reuse + cancellation, and report counts and
-timings back. The C# code is authored on the Mac without compilation until that run — treat
-the first Windows build as part of the proof, not a formality.
+drop a real NWD on screen 1, and verify cache integrity, reuse and cancellation through the
+app — then report counts and timings back. The runbook's manual launcher invocation is kept
+as the diagnostic path, for when the app-driven run needs to be taken apart. The C# code was
+authored on the Mac without compilation until that run — treat the first Windows build as
+part of the proof, not a formality.

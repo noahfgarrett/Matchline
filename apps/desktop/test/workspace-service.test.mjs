@@ -315,9 +315,9 @@ function newService() {
 }
 
 /** Screens 1-7, exactly as the wizard writes them. */
-function configureThroughScreen7(service) {
+async function configureThroughScreen7(service) {
   service.create(projectPath, 'Dragon');
-  service.addSources([cachePath, melPath, easyPowerPath]);
+  await service.addSources([cachePath, melPath, easyPowerPath]);
   service.updateDraft({
     propertyMappings: PROPERTY_MAPPINGS,
     assetFilters: ASSET_FILTERS,
@@ -433,9 +433,9 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     second.close();
   });
 
-  await t.test('screen 7 offers the roles and disciplines the model really has', () => {
+  await t.test('screen 7 offers the roles and disciplines the model really has', async () => {
     rmSync(projectPath, { force: true });
-    configureThroughScreen7(service);
+    await configureThroughScreen7(service);
 
     assert.deepEqual(
       service.roleValues(),
@@ -1521,7 +1521,7 @@ test('a v1 profile package written by an older build imports and migrates', () =
   }
 });
 
-test('a connectivity source whose file has gone is named, not skipped', () => {
+test('a connectivity source whose file has gone is named, not skipped', async () => {
   const service = newService();
   try {
     const path = join(workDir, 'Missing.matchline');
@@ -1529,7 +1529,7 @@ test('a connectivity source whose file has gone is named, not skipped', () => {
     writeFileSync(movedPath, easyPowerBytes());
 
     service.create(path, 'Missing');
-    service.addSources([cachePath, movedPath]);
+    await service.addSources([cachePath, movedPath]);
     service.updateDraft({
       propertyMappings: PROPERTY_MAPPINGS,
       assetFilters: ASSET_FILTERS,

@@ -159,9 +159,9 @@ const DRAGON_RESOLVER = {
 };
 
 /** A project registered against the cache and mapped far enough to compile. */
-function configure(service, projectPath) {
+async function configure(service, projectPath) {
   service.create(projectPath, 'Dragon');
-  service.addSources([cachePath]);
+  await service.addSources([cachePath]);
   service.updateDraft({
     propertyMappings: PROPERTY_MAPPINGS,
     assetFilters: ASSET_FILTERS,
@@ -169,14 +169,14 @@ function configure(service, projectPath) {
   });
 }
 
-test('the ledger is written, reloaded and honoured across a tag correction', (t) => {
+test('the ledger is written, reloaded and honoured across a tag correction', async (t) => {
   const projectPath = join(workDir, 'Identity.matchline');
   let service = newService();
   t.after(() => {
     service.close();
   });
 
-  configure(service, projectPath);
+  await configure(service, projectPath);
 
   /* --- the first compile mints the ids and writes them down ------------- */
 
@@ -231,7 +231,7 @@ test('the ledger is written, reloaded and honoured across a tag correction', (t)
   retag(cachePath, TYPO_TAG, CORRECT_TAG);
   // Re-registering is what a person does after a model is reissued; the project
   // refuses to compile against bytes it has not recorded.
-  service.addSources([cachePath]);
+  await service.addSources([cachePath]);
 
   const third = summaryOf(service.compile());
   assert.equal(third.assetCount, DRAGON_ASSET_COUNT, 'still the same equipment');
@@ -303,14 +303,14 @@ test('the ledger is written, reloaded and honoured across a tag correction', (t)
   );
 });
 
-test('a decision naming equipment no compile has becomes a review item, not a silence', (t) => {
+test('a decision naming equipment no compile has becomes a review item, not a silence', async (t) => {
   const projectPath = join(workDir, 'Orphan.matchline');
   const service = newService();
   t.after(() => {
     service.close();
   });
 
-  configure(service, projectPath);
+  await configure(service, projectPath);
   summaryOf(service.compile());
 
   service.setRelationshipOverride(
@@ -360,10 +360,10 @@ test('a decision naming equipment no compile has becomes a review item, not a si
  * `@matchline/project-store`'s own test (it holds the frozen DDL), and what this
  * one is about is who gets asked before it runs.
  */
-function writeV4Project(name) {
+async function writeV4Project(name) {
   const olderPath = join(workDir, name);
   const service = newService();
-  configure(service, olderPath);
+  await configure(service, olderPath);
   summaryOf(service.compile());
   service.close();
 
@@ -378,8 +378,8 @@ function writeV4Project(name) {
   return olderPath;
 }
 
-test('a v4 project is not upgraded to v5 until the user says so', (t) => {
-  const olderPath = writeV4Project('Older-v4.matchline');
+test('a v4 project is not upgraded to v5 until the user says so', async (t) => {
+  const olderPath = await writeV4Project('Older-v4.matchline');
   const service = newService();
   t.after(() => {
     service.close();

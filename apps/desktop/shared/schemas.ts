@@ -291,11 +291,39 @@ export type WireRecentProject = z.infer<typeof recentProjectSchema>;
 /* ------------------------------------------------------------------- sources */
 
 /**
+ * Where one extraction job has got to (RELEASE-1.0-PLAN P0-2).
+ *
+ * The five running states are the launcher's stages, folded into what a person
+ * cares about: `hashing` is "checking whether this has been extracted before",
+ * `opening` covers picking the Navisworks that will open the file and opening
+ * it, `extracting` covers the model walk and the cache write, and `finalizing`
+ * is the integrity check.
+ *
+ * `cache-hit` is a success with a different story behind it — these bytes had
+ * been extracted before and Navisworks was never started — and it is kept
+ * distinct from `ready` because "that took no time at all" is a fact the user
+ * is entitled to rather than a suspicious absence.
+ */
+export const extractionStatusSchema = z.enum([
+  'queued',
+  'hashing',
+  'opening',
+  'extracting',
+  'finalizing',
+  'ready',
+  'cache-hit',
+  'cancelled',
+  'failed',
+]);
+export type WireExtractionStatus = z.infer<typeof extractionStatusSchema>;
+
+/**
  * How usable a registered source is right now.
  *
- * `requires-windows-extraction` is not an error: a raw `.nwd` has to go through
- * the Navisworks extractor on Windows (docs/WINDOWS-RUNBOOK.md) before Matchline
- * can read it, and Mac development works from the produced cache files directly.
+ * A raw Navisworks file carries its extraction job's status, because that IS
+ * its state: a `.nwd` is not a ready source until a valid cache is associated
+ * with it (P0-2), and the row is where the user watches that happen. Every
+ * value of {@link extractionStatusSchema} is therefore also a source status.
  *
  * `file-changed` is deliberately distinct from `file-missing`. The file is right
  * where it was, but its bytes no longer hash to what the project recorded, so it
@@ -304,12 +332,56 @@ export type WireRecentProject = z.infer<typeof recentProjectSchema>;
  */
 export const sourceStatusSchema = z.enum([
   'ready',
-  'requires-windows-extraction',
   'needs-attention',
   'file-missing',
   'file-changed',
+  'queued',
+  'hashing',
+  'opening',
+  'extracting',
+  'finalizing',
+  'cache-hit',
+  'cancelled',
+  'failed',
 ]);
 export type WireSourceStatus = z.infer<typeof sourceStatusSchema>;
+
+/** One warning an extraction forwarded, already in plain language. */
+export const extractionWarningSchema = z.object({
+  code: z.string().min(1),
+  message: z.string(),
+});
+export type WireExtractionWarning = z.infer<typeof extractionWarningSchema>;
+
+/**
+ * One extraction job, as screen 1 draws it.
+ *
+ * Summary only, like every other wire type here: the cache never crosses IPC,
+ * and neither does the launcher's raw output. `progress` is a fraction when the
+ * stage knows its total and `null` when it does not — the model walk cannot
+ * know how many objects there are until it has finished finding them, and a
+ * bar that invented a denominator would be lying at exactly the moment the user
+ * is deciding whether to wait.
+ */
+export const extractionJobSchema = z.object({
+  sourceId: z.string().min(1),
+  /** The raw document being extracted. Never a cache file name. */
+  fileName: z.string().min(1),
+  status: extractionStatusSchema,
+  progress: z.number().min(0).max(1).nullable(),
+  /** The technical line under the bar: which Navisworks, how many records. */
+  detail: z.string(),
+  /** The plain-language sentence the source row shows. */
+  note: z.string(),
+  errorCode: z.string().nullable(),
+  warnings: z.array(extractionWarningSchema),
+  objectCount: z.number().int().nonnegative().nullable(),
+  startedAt: z.string().min(1),
+  finishedAt: z.string().nullable(),
+  /** True while there is something a Cancel button could stop. */
+  cancellable: z.boolean(),
+});
+export type WireExtractionJob = z.infer<typeof extractionJobSchema>;
 
 /** One recognized sheet inside a workbook source. */
 export const sheetSummarySchema = z.object({

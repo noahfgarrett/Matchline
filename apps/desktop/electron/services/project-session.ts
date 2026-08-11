@@ -40,6 +40,7 @@ import { applyAnatomy } from '@matchline/tag-anatomy';
 import type {
   WireAddSourceResult,
   WireAnatomyPreview,
+  WireExtractionJob,
   WireAssetPreview,
   WireAttributeChoice,
   WireClassCount,
@@ -88,6 +89,17 @@ import {
   type CompileView,
   type Page,
 } from './compile-service.js';
+import {
+  createExtractionService,
+  type ExtractionOutcome,
+  type ExtractionService,
+} from './extraction-service.js';
+import { cacheFileName } from './extraction-protocol.js';
+import {
+  defaultExtractorPath,
+  resolveExtractorLauncher,
+  type ExtractorLauncher,
+} from './extractor-launcher.js';
 import {
   applyPatch,
   emptyDraft,
@@ -140,6 +152,7 @@ import {
 import { catalogPage, type PropertyPageRequest } from './property-page.js';
 import {
   digestFile,
+  digestFileSync,
   identifySource,
   melSheetDescriptor,
   readMelCatalogRows,
@@ -186,6 +199,19 @@ import {
 export interface ProjectServiceOptions {
   readonly userDataDir: string;
   readonly appVersion: string;
+  /**
+   * Where extraction caches are written and looked for. Defaults to
+   * `<userDataDir>/cache/models`, which is this installation's own folder and
+   * never inside a project.
+   */
+  readonly extractionCacheDir?: string;
+  /**
+   * How the extractor is run. Defaults to the real one for this machine — the
+   * launcher executable on Windows, and a refusal that explains itself
+   * everywhere else. The tests supply a launcher that speaks the same protocol
+   * without needing Navisworks (see `extractor-launcher.ts`).
+   */
+  readonly extractionLauncher?: ExtractorLauncher;
 }
 
 export interface PropertyPageResult {
@@ -201,6 +227,13 @@ export interface DraftState {
 export interface SaveProfileResult {
   readonly revision: number;
   readonly savedAt: string;
+}
+
+export interface ExtractionStatusPage {
+  readonly total: number;
+  /** True while anything is queued or running, so the UI knows to keep asking. */
+  readonly active: boolean;
+  readonly rows: readonly WireExtractionJob[];
 }
 
 /**
@@ -228,10 +261,37 @@ export interface ProjectService {
   current(): WireProjectSummary | null;
   recentProjects(): readonly WireRecentProject[];
 
-  addSources(paths: readonly string[]): readonly WireAddSourceResult[];
+  /**
+   * Registers files, and starts extracting the Navisworks documents among them.
+   *
+   * Asynchronous because every registration begins with a streamed sha256, and
+   * a source may be a multi-gigabyte model: hashing one on the main loop would
+   * stop the window drawing for as long as it took (RELEASE-1.0-PLAN,
+   * "Main process never blocked by hashing"). The result is returned once the
+   * rows exist; the extraction each raw model needs runs on behind them and is
+   * followed through {@link extractionStatus}.
+   */
+  addSources(paths: readonly string[]): Promise<readonly WireAddSourceResult[]>;
   listSources(): readonly WireSourceSummary[];
   /** Removes one registered source by id. Names cannot be used: they repeat. */
   removeSource(sourceId: string): boolean;
+
+  /* ------------------------------------------------- extraction (P0-2) */
+
+  /** One page of the extraction jobs this session has run, oldest first. */
+  extractionStatus(offset: number, limit: number): ExtractionStatusPage;
+  /** Stops one extraction. The source stays registered, as `cancelled`. */
+  cancelExtraction(sourceId: string): boolean;
+  /**
+   * Resolves when no extraction is queued or running.
+   *
+   * Not read by any screen. It exists for the same reason `cacheHandleIds`
+   * does: the promises this milestone makes — one job at a time, a second add
+   * of the same bytes never launching anything — are promises about work that
+   * finishes after the call that started it returns, and a test that waited by
+   * sleeping would be asserting against a guess.
+   */
+  extractionIdle(): Promise<void>;
 
   /** Every ready model source and the totals over them, or `null` when none is. */
   modelUniverse(): WireModelUniverse | null;
@@ -341,6 +401,16 @@ interface SourceDetail {
   readonly status: WireSourceStatus;
   readonly note: string;
   readonly sheets: readonly WireSheetSummary[];
+  /**
+   * The extraction cache this source is read through, when that is not the
+   * file itself.
+   *
+   * A `.matchline-cache` added by hand IS the data, so this stays `null` and
+   * `absolutePath` is used. A raw `.nwd` is not: its data is the cache the
+   * extraction service wrote under the app's cache folder, and the user is
+   * never told where that is (P0-2, "the user never sees .matchline-cache").
+   */
+  readonly cachePath: string | null;
 }
 
 /** One open model source: its cache handle and the object scan over it. */
@@ -472,10 +542,24 @@ function messageOf(error: unknown): string {
  */
 function bytesStillMatch(absolutePath: string, expectedSha256: string): boolean {
   try {
-    return digestFile(absolutePath).sha256 === expectedSha256;
+    // The synchronous digest, because opening a project is synchronous. It is
+    // still chunked rather than a whole-file read, so a big model costs time
+    // here and never memory (sources.ts).
+    return digestFileSync(absolutePath).sha256 === expectedSha256;
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether a source in this state has a cache the engine may read.
+ *
+ * `cache-hit` sits beside `ready` because it is the same fact with a shorter
+ * story: the bytes had been extracted before, so nothing was launched. Both
+ * mean a validated cache is associated.
+ */
+function isReadableStatus(status: WireSourceStatus): boolean {
+  return status === 'ready' || status === 'cache-hit';
 }
 
 /**
@@ -505,7 +589,23 @@ function openRefusal(error: unknown): WireProjectOpenResult | null {
 
 export function createProjectService(options: ProjectServiceOptions): ProjectService {
   const appState: AppStateStore = createAppStateStore(options.userDataDir);
+  const extractionCacheDir =
+    options.extractionCacheDir ?? path.join(options.userDataDir, 'cache', 'models');
+  const extractionLauncher: ExtractorLauncher =
+    options.extractionLauncher ??
+    resolveExtractorLauncher({
+      platform: process.platform,
+      executablePath: defaultExtractorPath(),
+    });
   let session: Session | null = null;
+  /**
+   * The extraction queue for the open project, or `null` when none is open.
+   *
+   * One per session rather than one per installation, because cancelling
+   * everything is part of closing a project: a Navisworks the user can no
+   * longer see the progress of is a Navisworks nobody asked for.
+   */
+  let extraction: ExtractionService | null = null;
   /**
    * Distinguishes one opened cache handle from the next.
    *
@@ -522,6 +622,95 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       throw new Error('No project is open. Create or open one first.');
     }
     return session;
+  }
+
+  /* ------------------------------------------------------------ extraction */
+
+  /**
+   * Mirrors a running job into the source row it belongs to.
+   *
+   * Status and note only. The cache is associated in {@link settleExtraction},
+   * once there is a validated one to associate — a row that said `ready`
+   * before then would be a model source the compile could not open.
+   */
+  function trackExtraction(job: WireExtractionJob): void {
+    const active = session;
+    if (active === null || job.status === 'ready' || job.status === 'cache-hit') {
+      return;
+    }
+    const detail = active.details.get(job.sourceId);
+    if (detail === undefined) {
+      return;
+    }
+    active.details.set(job.sourceId, { ...detail, status: job.status, note: job.note });
+  }
+
+  /**
+   * Records what a finished extraction produced.
+   *
+   * The success path is the whole of P0-2's "associate automatically": the
+   * project records the cache hash against the source, the session learns
+   * where the cache is, and `syncModels` opens it — after which the universe,
+   * the Property Catalog and every preview include it, with nobody having
+   * named a cache file.
+   */
+  function settleExtraction(job: WireExtractionJob, outcome: ExtractionOutcome | null): void {
+    const active = session;
+    if (active === null) {
+      return;
+    }
+    const detail = active.details.get(job.sourceId);
+    if (detail === undefined) {
+      return;
+    }
+    if (outcome === null) {
+      active.details.set(job.sourceId, { ...detail, status: job.status, note: job.note });
+      return;
+    }
+
+    try {
+      active.store.setSourceCache(job.sourceId, outcome.cacheSha256);
+    } catch {
+      // The source was removed while its extraction ran. The cache stays on
+      // disk under its content hash and costs one file; re-adding the model
+      // finds it again as a cache hit.
+      return;
+    }
+    active.details.set(job.sourceId, {
+      ...detail,
+      status: job.status,
+      note: job.note,
+      cachePath: outcome.cachePath,
+    });
+    syncModels(active);
+  }
+
+  /** Starts a queue for the project being opened, and retires the previous one. */
+  function startExtraction(): ExtractionService {
+    let created: ExtractionService | null = null;
+    const isCurrent = (): boolean => extraction === created;
+    created = createExtractionService({
+      cacheDirectory: extractionCacheDir,
+      launcher: extractionLauncher,
+      onChanged(job: WireExtractionJob): void {
+        if (isCurrent()) {
+          trackExtraction(job);
+        }
+      },
+      onSettled(job: WireExtractionJob, outcome: ExtractionOutcome | null): void {
+        if (isCurrent()) {
+          settleExtraction(job, outcome);
+        }
+      },
+    });
+    return created;
+  }
+
+  function requireExtraction(): ExtractionService {
+    if (extraction === null) {
+      throw new Error('No project is open. Create or open one first.');
+    }
+    return extraction;
   }
 
   /** Closes every open cache. Used when the project closes, never per source. */
@@ -658,6 +847,9 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         ? emptyDraft(store.meta().projectName)
         : fromSiteProfile(stored.profile);
     const moved = mergeLegacyConfigSections(store, rehydrated);
+    // Before the session exists, because rehydrating one is what queues the
+    // extractions a reopened project still owes.
+    extraction = startExtraction();
     const active: Session = {
       store,
       projectPath,
@@ -702,6 +894,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
             `Matchline recorded ${source.rawFileName} but cannot find it on this machine. ` +
             'Add the file again to work with it.',
           sheets: [],
+          cachePath: null,
         });
         continue;
       }
@@ -717,6 +910,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
             `The file at ${knownPath} has changed since it was added to this project. ` +
             'Add it again to use the new version.',
           sheets: [],
+          cachePath: null,
         });
         continue;
       }
@@ -728,6 +922,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           status: 'needs-attention',
           note: identification.reason,
           sheets: [],
+          cachePath: null,
         });
         continue;
       }
@@ -738,16 +933,62 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       if (registration === undefined) {
         continue;
       }
+      if (registration.needsExtraction) {
+        restoreExtraction(active, source, knownPath);
+        continue;
+      }
       active.details.set(source.sourceId, {
         absolutePath: knownPath,
         status: registration.status,
         note: registration.note,
         sheets: registration.sheets,
+        cachePath: null,
       });
     }
 
     syncModels(active);
     loadMelRows(active);
+  }
+
+  /**
+   * Puts a reopened raw model source back where it was.
+   *
+   * Three cases, and the third is why this is not simply "queue everything
+   * again": the cache is still on disk and is picked up without touching
+   * Navisworks; the cache the project recorded is gone, so the model is
+   * re-extracted; or nothing was ever extracted, so it is extracted now. The
+   * queue's own cache-hit check makes the second and third cheap when the
+   * bytes have in fact been extracted before, so reopening a project never
+   * launches Navisworks for work already done.
+   */
+  function restoreExtraction(active: Session, source: ProjectSource, rawPath: string): void {
+    const cachePath = path.join(extractionCacheDir, cacheFileName(source.rawSha256));
+    if (source.derivedCacheSha256 !== null && existsSync(cachePath)) {
+      active.details.set(source.sourceId, {
+        absolutePath: rawPath,
+        status: 'ready',
+        note:
+          `Extracted from ${source.rawFileName}. It joins the equipment universe every other ` +
+          'source is matched against.',
+        sheets: [],
+        cachePath,
+      });
+      return;
+    }
+
+    active.details.set(source.sourceId, {
+      absolutePath: rawPath,
+      status: 'queued',
+      note: `${source.rawFileName} is queued for extraction.`,
+      sheets: [],
+      cachePath: null,
+    });
+    extraction?.enqueue({
+      sourceId: source.sourceId,
+      fileName: source.rawFileName,
+      inputPath: rawPath,
+      rawSha256: source.rawSha256,
+    });
   }
 
   /* -------------------------------------------------------- model universe */
@@ -756,11 +997,11 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
    * The extraction cache a model source is currently readable through, or
    * `null` when it is not readable at all.
    *
-   * A raw `.nwd` answers `null` today — it is registered but has no cache until
-   * the extraction service (P0-2, milestone 5) has produced one, which is what
-   * its `requires-windows-extraction` status says on screen 1. Everything else
-   * uses the source's own recorded cache hash, so "the file this handle was
-   * opened for" is a fact the session can compare against later.
+   * A raw `.nwd` answers `null` until its extraction has produced a cache and
+   * the session has recorded where it went (P0-2) — which is what its queued,
+   * extracting or failed status says on screen 1. Everything else uses the
+   * source's own recorded cache hash, so "the file this handle was opened for"
+   * is a fact the session can compare against later.
    */
   function readableCacheOf(
     active: Session,
@@ -770,10 +1011,16 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       return null;
     }
     const detail = active.details.get(source.sourceId);
-    if (detail === undefined || detail.status !== 'ready' || detail.absolutePath === '') {
+    if (detail === undefined || !isReadableStatus(detail.status)) {
       return null;
     }
-    return { absolutePath: detail.absolutePath, cacheSha256: source.derivedCacheSha256 };
+    // The cache, not the file: a raw model is read through the extraction the
+    // service wrote for it, and only a hand-added cache is its own data.
+    const cachePath = detail.cachePath ?? detail.absolutePath;
+    if (cachePath === '') {
+      return null;
+    }
+    return { absolutePath: cachePath, cacheSha256: source.derivedCacheSha256 };
   }
 
   /**
@@ -1101,6 +1348,11 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
   }
 
   function closeSession(): boolean {
+    // Unconditionally, and first: a project that failed to finish opening can
+    // still have left a queue behind, and a Navisworks nobody can see the
+    // progress of must not outlive the project that started it.
+    extraction?.shutdown();
+    extraction = null;
     if (session === null) {
       return false;
     }
@@ -1594,7 +1846,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       }));
     },
 
-    addSources(paths: readonly string[]): readonly WireAddSourceResult[] {
+    async addSources(paths: readonly string[]): Promise<readonly WireAddSourceResult[]> {
       const active = requireSession();
       const results: WireAddSourceResult[] = [];
 
@@ -1617,7 +1869,9 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           continue;
         }
 
-        const digest = digestFile(absolutePath);
+        // Streamed, never read whole: this is the one place a gigabyte-scale
+        // model enters the app, and the window keeps drawing while it hashes.
+        const digest = await digestFile(absolutePath);
         appState.rememberSourcePath(digest.sha256, absolutePath);
 
         for (const registration of identification.registrations) {
@@ -1646,16 +1900,28 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
             // Navisworks file is not: it has no cache until the extraction
             // service produces one (P0-2), so the key is left out entirely and
             // `upsertSourceV4` records "no cache associated".
-            ...(registration.status === 'requires-windows-extraction'
-              ? {}
-              : { derivedCacheSha256: digest.sha256 }),
+            ...(registration.needsExtraction ? {} : { derivedCacheSha256: digest.sha256 }),
           });
           active.details.set(sourceId, {
             absolutePath,
             status: registration.status,
             note: registration.note,
             sheets: registration.sheets,
+            cachePath: null,
           });
+
+          if (registration.needsExtraction) {
+            // Adding a raw model IS asking for it to be extracted; there is no
+            // second button, and the queue is what the row reports from here on
+            // (P0-2). Re-adding a changed file lands on the same source id, so
+            // this also supersedes any run still going for the old bytes.
+            extraction?.enqueue({
+              sourceId,
+              fileName,
+              inputPath: absolutePath,
+              rawSha256: digest.sha256,
+            });
+          }
 
           const stored = active.store.getSource(sourceId);
           if (stored !== undefined) {
@@ -1669,12 +1935,35 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       return results;
     },
 
+    extractionStatus(offset: number, limit: number): ExtractionStatusPage {
+      const jobs = requireExtraction().jobs();
+      return {
+        total: jobs.length,
+        active: jobs.some(
+          (job: WireExtractionJob): boolean => job.cancellable,
+        ),
+        rows: jobs.slice(offset, offset + limit),
+      };
+    },
+
+    cancelExtraction(sourceId: string): boolean {
+      return requireExtraction().cancel(sourceId);
+    },
+
+    extractionIdle(): Promise<void> {
+      return extraction === null ? Promise.resolve() : extraction.whenIdle();
+    },
+
     listSources(): readonly WireSourceSummary[] {
       return requireSession().store.listSources().map(summarizeSource);
     },
 
     removeSource(sourceId: string): boolean {
       const active = requireSession();
+      // Before the row goes: an extraction still running for a source that no
+      // longer exists would have nothing to associate its cache with, and
+      // would go on holding a Navisworks open to produce it.
+      extraction?.forget(sourceId);
       const removed = active.store.removeSource(sourceId);
       active.details.delete(sourceId);
       // Both, unconditionally: which role the row held is no longer knowable

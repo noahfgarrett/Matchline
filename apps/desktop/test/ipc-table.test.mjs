@@ -143,6 +143,28 @@ test('the round-3 channels are all declared', () => {
   }
 });
 
+/**
+ * Extraction is a channel pair, not a screen-local trick (RELEASE-1.0-PLAN
+ * P0-2): the queue lives in main, and the renderer can only ask what it is
+ * doing and ask it to stop.
+ */
+test('the extraction channels are declared, and address jobs by source id', () => {
+  for (const channel of ['extraction:status', 'extraction:cancel']) {
+    assert.ok(IPC_CHANNEL_NAMES.includes(channel), `"${channel}" is missing from the table`);
+  }
+
+  const [job] = IPC_CHANNELS['extraction:status'].example.response.rows;
+  assert.ok(job.sourceId.length > 0, 'a job names the source it belongs to');
+  assert.ok(job.note.length > 0, 'and carries the plain-language line the row shows');
+  assert.doesNotMatch(job.note, /[A-Z]{3,}_[A-Z]/, 'which never leaks a machine code');
+
+  assert.deepEqual(
+    Object.keys(IPC_CHANNELS['extraction:cancel'].example.request),
+    ['sourceId'],
+    'cancel takes an id and nothing else: a name could name two rows',
+  );
+});
+
 test('every paged channel caps its page size, so paging cannot be defeated', () => {
   const paged = [
     'model:property-page',
@@ -153,6 +175,7 @@ test('every paged channel caps its page size, so paging cannot be defeated', () 
     'flow:walk',
     'review:page',
     'compile:ledger-events',
+    'extraction:status',
   ];
 
   for (const channel of paged) {

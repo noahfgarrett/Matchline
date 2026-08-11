@@ -134,8 +134,8 @@ test('the full screens 1-5 flow, over the Dragon fixture', async (t) => {
     assert.equal(project.hasModel, false);
   });
 
-  await t.test('screen 1 identifies the cache and the MEL by opening them', () => {
-    const results = service.addSources([cachePath, melPath]);
+  await t.test('screen 1 identifies the cache and the MEL by opening them', async () => {
+    const results = await service.addSources([cachePath, melPath]);
     assert.equal(results.length, 2, 'one registration per recognized role');
 
     const added = results.filter((entry) => entry.outcome === 'added').map((entry) => entry.source);
@@ -162,10 +162,10 @@ test('the full screens 1-5 flow, over the Dragon fixture', async (t) => {
     assert.equal(service.current().sourceCount, 2);
   });
 
-  await t.test('an unreadable file is reported, not registered', () => {
+  await t.test('an unreadable file is reported, not registered', async () => {
     const junkPath = join(workDir, 'notes.txt');
     writeFileSync(junkPath, 'not a source');
-    const [result] = service.addSources([junkPath]);
+    const [result] = await service.addSources([junkPath]);
     assert.equal(result.outcome, 'rejected');
     assert.match(result.reason, /does not read/);
     assert.equal(service.listSources().length, 2, 'nothing was recorded');
@@ -525,7 +525,7 @@ function teachDragon(service) {
   service.updateDraft({ systemResolver: DRAGON_RESOLVER });
 }
 
-test('a source whose bytes changed is reported as changed, not read anyway', () => {
+test('a source whose bytes changed is reported as changed, not read anyway', async () => {
   // Its own copies of everything: this test edits a source file, and the
   // fixtures above are shared with every test in this file.
   const ownMelPath = join(workDir, 'Changed-MEL.xlsx');
@@ -535,7 +535,7 @@ test('a source whose bytes changed is reported as changed, not read anyway', () 
   const setup = newService();
   try {
     setup.create(ownProjectPath, 'Changed');
-    setup.addSources([cachePath, ownMelPath]);
+    await setup.addSources([cachePath, ownMelPath]);
     teachDragon(setup);
     assert.equal(setup.compile().state, 'done', 'it compiles before anything is touched');
   } finally {
@@ -579,7 +579,7 @@ test('a source whose bytes changed is reported as changed, not read anyway', () 
     assert.match(refused.reason, /changed on disk/);
 
     // Re-adding is the fix, because adding is what records the hash.
-    const [readded] = service.addSources([ownMelPath]);
+    const [readded] = await service.addSources([ownMelPath]);
     assert.equal(readded.outcome, 'added');
     assert.equal(readded.source.status, 'ready');
     assert.equal(service.listSources().find((source) => source.role === 'mel').status, 'ready');
@@ -592,12 +592,12 @@ test('a source whose bytes changed is reported as changed, not read anyway', () 
 
 /* ------------------------------------------ the recorded revision is the real one */
 
-test('a compile records the revision it compiled, not the last one saved', () => {
+test('a compile records the revision it compiled, not the last one saved', async () => {
   const ownProjectPath = join(workDir, 'Revisions.matchline');
   const service = newService();
   try {
     service.create(ownProjectPath, 'Revisions');
-    service.addSources([cachePath, melPath]);
+    await service.addSources([cachePath, melPath]);
     teachDragon(service);
 
     const saved = service.saveProfile('Screens 1-5');
