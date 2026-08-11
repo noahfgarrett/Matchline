@@ -41,7 +41,7 @@ file passes in full:
    replace both with `node --test tests/acceptance-1.0/*.test.mjs` under one
    name and delete the other.
 
-   As of milestone 4 all six staged files are green and the two scripts *do*
+   As of milestone 10 all seven files are green and the two scripts *do*
    describe the same set — and they are still kept apart, on purpose. The areas
    listed under "What is *not* covered here" get their own files as their
    milestones come up, and each arrives red. One script would make the next
@@ -66,6 +66,7 @@ required above. Never discard provenance or review items to make tests pass."
 | `default-hierarchy.test.mjs` | P0-5 Default hierarchy | 11 | 4 — Hierarchy+profile semantics — **green, wired into `npm test`** |
 | `level-key-display.test.mjs` | P0-6 Level key vs display | 8 | 4 — Hierarchy+profile semantics — **green, wired into `npm test`** |
 | `profile-v2.test.mjs` | SiteProfileV2 | 13 (partly) | 4 — Hierarchy+profile semantics — **green, wired into `npm test`** |
+| `zero-eight-one-migration.test.mjs` | P0-9 + SiteProfileV2, end to end | 13 (in full) | 10 — RC ("the 0.8.1 end-to-end migration test") — **green, wired into `npm test`** |
 
 `support.mjs` is not a test file. It holds the Dragon fixtures and the failure
 vocabulary.
@@ -103,8 +104,15 @@ vocabulary.
 
 ## What is *not* covered here
 
-This directory holds the six areas milestone 1 stages. The plan's acceptance
-areas A–G also include the extraction service (P0-2), the real Windows proof
-(P0-3), derived attributes (P0-7), source assignments and per-source mappings
-(P0-8), migration and distribution. Those get their own files as their
-milestones come up; the wiring instructions above apply unchanged.
+This directory holds the six areas milestone 1 stages, plus the migration gate
+milestone 10 added. The plan's acceptance areas A–G also include the extraction
+service (P0-2), the real Windows proof (P0-3), derived attributes (P0-7), and
+source assignments and per-source mappings (P0-8) and distribution. Those get
+their own files as their milestones come up; the wiring instructions above apply
+unchanged.
+
+Two of those are covered elsewhere rather than here, and deliberately so: the
+extraction service is exercised end to end against a protocol-faithful fake
+launcher in `apps/desktop/test/extraction-service.test.mjs`, and the real
+Windows proof is a runbook plus `scripts/windows-proof/*.mjs`, because no
+assertion on this machine can stand in for an Autodesk install.

@@ -196,7 +196,12 @@ function statusForStage(stage: string): WireExtractionStatus | null {
     case 'detect':
     case 'open':
       return 'opening';
+    // Resolving the saved sets is still reading the model, as far as the row is
+    // concerned: it happens with the document open and before anything is
+    // written, and a status of its own would make a source row flicker through
+    // a fourth word for a step the user cannot act on.
     case 'walk':
+    case 'sets':
     case 'convert':
       return 'extracting';
     case 'finalize':
@@ -209,14 +214,16 @@ function statusForStage(stage: string): WireExtractionStatus | null {
 /**
  * The fraction a stage can honestly claim, or `null` for "no denominator".
  *
- * Only the hash has one. `detect` and `finalize` report `1 of 1` because they
- * are single steps, not because they are measurements — drawing a full bar
- * from that would tell the user an extraction was finished at the moment
- * Navisworks was about to open the file. The walk and the convert report a
- * total of `0`, which the protocol defines as "not known yet".
+ * The hash and the saved-set resolution are the two that have one: bytes read
+ * of bytes to read, and sets resolved of sets counted. `detect` and `finalize`
+ * report `1 of 1` because they are single steps, not because they are
+ * measurements — drawing a full bar from that would tell the user an extraction
+ * was finished at the moment Navisworks was about to open the file. The walk and
+ * the convert report a total of `0`, which the protocol defines as "not known
+ * yet".
  */
 function progressForStage(stage: string, done: number, total: number): number | null {
-  if (stage !== 'hash' || total <= 0) {
+  if ((stage !== 'hash' && stage !== 'sets') || total <= 0) {
     return null;
   }
   return Math.min(1, done / total);
@@ -247,6 +254,14 @@ function detailForStage(stage: string, done: number, total: number, sent: string
       return total > 0 ? `Read ${megabytes(done)} of ${megabytes(total)}.` : '';
     case 'walk':
       return done > 0 ? `${thousands(done)} records read from the model so far.` : '';
+    // Named rather than folded into the walk's line: the several silent minutes
+    // a set-heavy model spends here are otherwise unexplained, and "0 of 19" on
+    // the first line is what says the wait is finite.
+    case 'sets':
+      return total > 0
+        ? `Working out what is in the saved selection and search sets: ${thousands(done)} of ` +
+            `${thousands(total)}.`
+        : 'Working out what is in the saved selection and search sets.';
     case 'convert':
       return done > 0 ? `${thousands(done)} records written to the cache.` : '';
     case 'finalize':

@@ -5,7 +5,12 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test, { after, before } from 'node:test';
 
-import { writeDragonFixture } from '@matchline/model-schema/fixtures/dragon';
+import {
+  DRAGON_UNRESOLVED_SET_NAME,
+  EXTRACTION_CACHE_DDL_V1,
+  writeDragonFixture,
+  writeDragonFixtureWithUnresolvedSearch,
+} from '@matchline/model-schema/fixtures/dragon';
 import { PROJECT_SCHEMA_VERSION } from '@matchline/project-store';
 import { writeWorkbook } from '@matchline/spreadsheet-import';
 
@@ -729,6 +734,195 @@ test('creating a project over an existing file is refused in plain language', ()
       /already a file called Taken\.matchline/,
     );
     assert.equal(service.current(), null);
+  } finally {
+    service.close();
+  }
+});
+
+/* ---------------------------------------- the search-set publication gate */
+
+/**
+ * A profile whose filters name a set nobody resolved is refused at publish
+ * (RELEASE-1.0-PLAN P0-3).
+ *
+ * > Search Sets: preferred = resolve real membership [...]; fallback = mark
+ * > unusable for filtering + block profile publication + explain; never return
+ * > empty-as-answer.
+ *
+ * The engine half of that already holds: `buildAssetCatalog` throws
+ * `unresolved-selection-set` rather than filtering a project down to nothing.
+ * These tests are the other half — the refusal has to reach the person while
+ * they can still act on it, because a stored revision naming such a set is a
+ * revision that can never produce a register. The gate lives in `saveProfile`
+ * rather than on screen 9 so that Quick Setup, an imported profile package and
+ * a headless caller all meet it; screen 9 additionally reads
+ * `publishBlockers()` so the button is off before it is pressed.
+ */
+
+/** Enough of screens 3-5 that the draft is publishable but for its filters. */
+function teachEnoughToPublish(service) {
+  service.updateDraft({
+    propertyMappings: {
+      equipmentTag: { category: 'Dragon Data', name: 'Tag' },
+      description: null,
+      equipmentType: null,
+      building: null,
+      nativeDiscipline: null,
+    },
+  });
+  service.updateDraft({ tagAnatomy: DRAGON_ANATOMY });
+}
+
+function filterOnSets(service, names) {
+  const { draft } = service.draftState();
+  service.updateDraft({ assetFilters: { ...draft.assetFilters, selectionSetNames: names } });
+}
+
+test('a profile filtering on an unresolved search set cannot be published', async () => {
+  const searchCachePath = join(workDir, 'Dragon-Search.matchline-cache');
+  writeDragonFixtureWithUnresolvedSearch(searchCachePath);
+
+  const service = newService();
+  try {
+    service.create(join(workDir, 'UnresolvedSet.matchline'), 'Unresolved Set');
+    await service.addSources([searchCachePath]);
+    teachEnoughToPublish(service);
+    filterOnSets(service, [DRAGON_UNRESOLVED_SET_NAME]);
+
+    const blockers = service.publishBlockers();
+    assert.equal(blockers.length, 1, 'one filter, one refusal');
+    const [blocker] = blockers;
+    assert.equal(blocker.kind, 'unresolved-selection-set');
+    assert.equal(blocker.setName, DRAGON_UNRESOLVED_SET_NAME, 'the blocker names the set');
+    assert.equal(blocker.sourceNames.length, 1, 'and the source whose copy is unresolved');
+
+    // The explanation, in the words of the job: what is wrong, why Matchline
+    // will not just carry on, and the two things that fix it.
+    assert.match(blocker.message, new RegExp(DRAGON_UNRESOLVED_SET_NAME));
+    assert.match(blocker.message, /saved search/);
+    assert.match(blocker.message, /extract it again/);
+    assert.match(blocker.message, /screen 3/);
+    assert.doesNotMatch(
+      blocker.message,
+      /[A-Z]{3,}_[A-Z]|membership_resolved|unresolved-selection-set/,
+      'and never a machine code',
+    );
+
+    // Publishing anyway is refused with that same sentence, not a different one.
+    assert.throws(
+      () => service.saveProfile('published over an unresolved set'),
+      new RegExp(DRAGON_UNRESOLVED_SET_NAME),
+    );
+    assert.equal(service.current().savedRevision, null, 'and nothing was written');
+  } finally {
+    service.close();
+  }
+});
+
+test('a profile filtering on a set that did resolve publishes normally', async () => {
+  const searchCachePath = join(workDir, 'Dragon-Search-Ok.matchline-cache');
+  writeDragonFixtureWithUnresolvedSearch(searchCachePath);
+
+  const service = newService();
+  try {
+    service.create(join(workDir, 'ResolvedSet.matchline'), 'Resolved Set');
+    await service.addSources([searchCachePath]);
+    teachEnoughToPublish(service);
+    // The same cache: `Air Handling` is a fixed selection with members, and
+    // `PLC Panels` is a saved search that DID resolve. Neither is the gate's
+    // business, and a gate that fired on them would refuse every real project.
+    filterOnSets(service, ['Air Handling', 'PLC Panels']);
+
+    assert.deepEqual(service.publishBlockers(), []);
+    assert.equal(service.saveProfile('filtered on a resolved set').revision, 1);
+  } finally {
+    service.close();
+  }
+});
+
+test('a set no source in this project has is not a publication blocker', async () => {
+  const service = newService();
+  try {
+    service.create(join(workDir, 'UnknownSet.matchline'), 'Unknown Set');
+    await service.addSources([cachePath]);
+    teachEnoughToPublish(service);
+    // A filter naming a set that will exist once the model holding it is added.
+    // That is `unknown-selection-set` in the engine and it is a different
+    // situation from an unresolved one: refusing to publish over it would make
+    // the wizard unusable in the order people actually work.
+    filterOnSets(service, ['A Set From The Model Nobody Has Added Yet']);
+
+    assert.deepEqual(service.publishBlockers(), []);
+    assert.ok(service.saveProfile('filters ahead of the sources').revision > 0);
+  } finally {
+    service.close();
+  }
+});
+
+/**
+ * A schema-v1 cache: no `membership_resolved` column at all.
+ *
+ * A v1 writer never resolved a saved search — it recorded searches without
+ * members, so "members absent" meant "unknown" rather than "empty". The reader
+ * carries that meaning forward (`readV1MembershipResolved`), and the gate has
+ * to honour it: a project still holding a v1 cache must be refused for exactly
+ * the same reason a v2 cache with the flag set to 0 is.
+ */
+function writeV1Cache(name) {
+  const path = join(workDir, name);
+  rmSync(path, { force: true });
+  const db = new DatabaseSync(path);
+  try {
+    db.exec(EXTRACTION_CACHE_DDL_V1);
+    const meta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)');
+    for (const [key, value] of [
+      ['schema_version', '1'],
+      ['input_file_name', 'Legacy.nwd'],
+      ['input_sha256', '1'.repeat(64)],
+      ['input_bytes', '2048'],
+      ['extracted_at_utc', '2026-01-15T09:30:00Z'],
+      ['extractor_version', '0.1.0'],
+      ['adapter_version', 'navisworks-2025'],
+      ['navisworks_version', '25.0.1234.56'],
+      ['object_count', '1'],
+    ]) {
+      meta.run(key, value);
+    }
+    db.exec(
+      'INSERT INTO objects (id, source_model_id, parent_id, path_index, depth, display_name, class_name) ' +
+        "VALUES (1, NULL, NULL, 0, 0, 'Legacy root', 'File')",
+    );
+    db.exec(
+      "INSERT INTO selection_sets (id, parent_id, name, kind) VALUES (1, NULL, 'Legacy Fixed', 'selection')",
+    );
+    db.exec(
+      "INSERT INTO selection_sets (id, parent_id, name, kind) VALUES (2, NULL, 'Legacy Search', 'search')",
+    );
+    db.exec('INSERT INTO selection_set_members (set_id, object_id) VALUES (1, 1)');
+  } finally {
+    db.close();
+  }
+  return path;
+}
+
+test('a v1 cache’s saved search blocks publication, and its fixed selection does not', async () => {
+  const legacyCachePath = writeV1Cache('Legacy.matchline-cache');
+
+  const service = newService();
+  try {
+    service.create(join(workDir, 'LegacyCache.matchline'), 'Legacy Cache');
+    await service.addSources([legacyCachePath]);
+    teachEnoughToPublish(service);
+
+    filterOnSets(service, ['Legacy Search']);
+    const blockers = service.publishBlockers();
+    assert.equal(blockers.length, 1, 'a v1 search set is unknown membership, not an empty set');
+    assert.equal(blockers[0].setName, 'Legacy Search');
+    assert.throws(() => service.saveProfile('over a v1 search'), /Legacy Search/);
+
+    filterOnSets(service, ['Legacy Fixed']);
+    assert.deepEqual(service.publishBlockers(), [], 'a v1 fixed selection is a real answer');
+    assert.ok(service.saveProfile('over a v1 fixed selection').revision > 0);
   } finally {
     service.close();
   }

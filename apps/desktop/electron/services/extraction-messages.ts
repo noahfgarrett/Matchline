@@ -111,8 +111,16 @@ const WARNING_COPY: Readonly<Record<string, string>> = {
   STALE_CACHE_DISCARDED:
     'An earlier cache for these bytes was there but did not pass its checks, so it was ' +
     'discarded and the model was extracted again.',
-  SEARCH_SET_NOT_RESOLVED:
-    'A Search Set was recorded without its members, so it cannot be used to filter equipment.',
+  // `WarningCodes.SearchSetUnresolved` in
+  // native/navisworks-common/Records/ExtractionRecords.cs. The set is refused
+  // for filtering, not merely noted: an unresolved set is not an empty one, and
+  // a profile that filters on it cannot compile at all (P0-3, and
+  // `AssetCatalogConfigReason.unresolved-selection-set`).
+  SEARCH_SET_UNRESOLVED:
+    'This saved search would not run, so Navisworks never said which equipment is in it. ' +
+    'Matchline will not filter on a set whose contents nobody found out — a profile naming ' +
+    'it is refused rather than compiled against an empty answer. Resolve it in Navisworks ' +
+    'and extract the model again, or filter on something else.',
   SELECTION_SET_MEMBER_UNRESOLVED:
     'Some Selection Set members did not match anything in the model and were left out of the set.',
   SOURCE_MODEL_READ_FAILED:

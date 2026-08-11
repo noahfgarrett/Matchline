@@ -19,8 +19,26 @@
  * Stage names the launcher emits, in the order a full run produces them
  * (`ExtractionStages`). `detect` names the Navisworks that will open the file
  * and is the only stage that always carries a `detail` sentence.
+ *
+ * `sets` sits between the walk and the convert because that is where
+ * `DocumentWalker` emits it: the saved sets are resolved after the tree has
+ * been walked and before the stream is turned into a cache. It is its own stage
+ * rather than part of the walk because resolving one saved search re-runs that
+ * search over the whole model — a document with a few dozen of them sits here
+ * for minutes after the last object record was written, and without a line of
+ * its own the walk counter simply stops moving and the run looks hung. Unlike
+ * the walk and the convert it knows its total, because the set tree is counted
+ * before the first one is resolved.
  */
-export const EXTRACTION_STAGES = ['hash', 'detect', 'open', 'walk', 'convert', 'finalize'] as const;
+export const EXTRACTION_STAGES = [
+  'hash',
+  'detect',
+  'open',
+  'walk',
+  'sets',
+  'convert',
+  'finalize',
+] as const;
 export type ExtractionStage = (typeof EXTRACTION_STAGES)[number];
 
 /**

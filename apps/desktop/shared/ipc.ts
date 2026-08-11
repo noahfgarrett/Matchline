@@ -27,6 +27,7 @@ import {
   modelUniverseSchema,
   overrideRowSchema,
   profileSectionSchema,
+  publishBlockerSchema,
   projectConfigSchema,
   projectOpenResultSchema,
   projectSummarySchema,
@@ -1616,10 +1617,22 @@ export const IPC_CHANNELS = {
 
   /* ----------------------------------------- screen 9: profile packages */
 
-  /** What is configured and what is not, in the wizard's own words. */
+  /**
+   * What is configured and what is not, in the wizard's own words — and what
+   * stops this profile being published at all.
+   *
+   * The two travel together because screen 9 needs both at the same moment and
+   * for the same reason: they are what a person reads before pressing Save
+   * revision. `blockers` is empty for a profile that can be published; a
+   * non-empty list is a refusal the screen prints and the service repeats if
+   * anything calls `profile:save` anyway.
+   */
   'profile:sections': {
     request: z.void(),
-    response: z.object({ sections: z.array(profileSectionSchema) }),
+    response: z.object({
+      sections: z.array(profileSectionSchema),
+      blockers: z.array(publishBlockerSchema),
+    }),
     example: {
       request: undefined,
       response: {
@@ -1631,6 +1644,7 @@ export const IPC_CHANNELS = {
             detail: '4 segments taught.',
           },
         ],
+        blockers: [],
       },
     },
   },

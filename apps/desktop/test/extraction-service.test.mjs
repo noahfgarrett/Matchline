@@ -22,6 +22,7 @@ import {
   failureCodesWithCopy,
 } from '../dist/electron/services/extraction-messages.js';
 import {
+  EXTRACTION_STAGES,
   LAUNCHER_ERROR_CODES,
   SERVICE_ERROR_CODES,
   extractorArguments,
@@ -961,6 +962,75 @@ test('an upper-case hash is folded rather than rejected', async () => {
   assert.equal(exit.code, 0, exit.diagnostics);
   const result = messages.find((message) => message.type === 'result');
   assert.equal(result.cachePath, join(cacheDir, `${'c'.repeat(64)}.sqlite`));
+});
+
+/* ------------------------------------------------------------ the sets stage */
+
+/**
+ * Saved-set resolution is a stage of its own, and the row says so.
+ *
+ * `ExtractionStages.Sets` (native/navisworks-common/Protocol/
+ * ExtractionProtocol.cs) exists because resolving one saved search re-runs that
+ * search over the whole model: a set-heavy document sits there for minutes
+ * after the last object record was written, and a build that dropped the stage
+ * — which this one did, by not listing it — showed the user a walk counter that
+ * had stopped moving. It is asserted here in three places at once, because a
+ * stage that only one side knows about is the bug: the launcher emits it, the
+ * protocol lists it in the launcher's own order, and the service turns it into
+ * a row a person can read.
+ */
+test('the saved-set stage is emitted, listed, and turned into a line in the row', async (t) => {
+  assert.deepEqual(
+    [...EXTRACTION_STAGES],
+    ['hash', 'detect', 'open', 'walk', 'sets', 'convert', 'finalize'],
+    'the stage list is the launcher order, sets between the walk and the convert',
+  );
+
+  const cacheDir = newCacheDir('sets');
+  const modelPath = writeModel('Dragon-Sets.nwd', { walkTicks: 1 });
+
+  const changes = [];
+  const extraction = createExtractionService({
+    cacheDirectory: cacheDir,
+    launcher: fakeLauncher(),
+    onChanged: (job) => changes.push({ status: job.status, detail: job.detail, progress: job.progress }),
+    onSettled: () => {},
+  });
+  t.after(() => {
+    extraction.shutdown();
+  });
+
+  extraction.enqueue({
+    sourceId: 'model:sets',
+    fileName: 'Dragon-Sets.nwd',
+    inputPath: modelPath,
+    rawSha256: null,
+  });
+  await extraction.whenIdle();
+  assert.equal(extraction.job('model:sets').status, 'ready');
+
+  // Every announcement, in order, so "between the walk and the convert" is
+  // checked against what actually reached the row rather than against the fake.
+  const walkAt = changes.findIndex((change) => change.detail.includes('records read from the model'));
+  const setsAt = changes.findIndex((change) => change.detail.includes('saved selection and search sets'));
+  const convertAt = changes.findIndex((change) => change.detail.includes('records written to the cache'));
+  assert.ok(walkAt >= 0, 'the walk reported');
+  assert.ok(setsAt > walkAt, `the sets stage reached the row after the walk (saw ${setsAt})`);
+  assert.ok(convertAt > setsAt, 'and before the convert');
+
+  const setLines = changes.filter((change) => change.detail.includes('saved selection and search sets'));
+  for (const line of setLines) {
+    assert.equal(line.status, 'extracting', 'resolving sets is still reading the model');
+    assert.doesNotMatch(line.detail, /[A-Z]{3,}_[A-Z]/, 'and never leaks the stage name');
+  }
+  // The one stage besides the hash that knows its denominator: it counts the
+  // set tree before resolving any of it, so it can honestly draw a bar.
+  assert.deepEqual(
+    setLines.map((line) => line.progress),
+    [0, 0.5, 1],
+    'reported as a real fraction of a real total, not as "unknown"',
+  );
+  assert.match(setLines.at(-1).detail, /2 of 2/);
 });
 
 /* ------------------------------------------------------------- removal, close */

@@ -31,8 +31,9 @@ import { writeDragonFixture } from '@matchline/model-schema/fixtures/dragon';
  *   the file is not read for it, and the value addresses the cache;
  * - the same order of events: hash → cache-hit check → detect (+ the
  *   `ADAPTER_UNVERIFIED` warning, because no year is verified yet) → open →
- *   walk → convert → finalize → result;
- * - the same `total: 0` for the stages that cannot know their total;
+ *   walk → sets → convert → finalize → result;
+ * - the same `total: 0` for the stages that cannot know their total, and a real
+ *   total for `sets`, which counts the set tree before resolving any of it;
  * - the same atomic commit: `<sha>.sqlite.partial`, then rename;
  * - the same cancellation: one `cancel` line on stdin kills the run, deletes
  *   the partials and exits `CANCELLED` with code 9;
@@ -76,6 +77,15 @@ const EXIT_FOR_CODE = {
   CACHE_WRITE_FAILED: EXIT.cacheWriteFailed,
   CANCELLED: EXIT.cancelled,
 };
+
+/**
+ * Saved sets in the Dragon cache this fake commits, folders excluded.
+ *
+ * `Dragon Systems` is a folder and does not count; `Air Handling` and
+ * `PLC Panels` do — the same rule `CountSelectionSets` applies in the adapter
+ * (native/navisworks-adapter/DocumentWalker.cs).
+ */
+const DRAGON_SAVED_SET_COUNT = 2;
 
 const USAGE =
   'Matchline.Extractor --input <file.nwd> [--cache-dir <dir>] [--navisworks-dir <dir>]\n' +
@@ -357,6 +367,20 @@ async function main() {
     }
     // total 0 = unknown: the record count is not knowable until the walk ends.
     progress('walk', tick * 25000, 0);
+  }
+
+  // The saved sets, after the walk and before the convert, exactly where
+  // DocumentWalker puts them. The denominator is real: it is the number of
+  // saved sets — folders excluded — in the Dragon cache this run is about to
+  // commit, counted before the first is resolved, which is what lets this stage
+  // report a fraction where the walk and the convert cannot.
+  progress('sets', 0, DRAGON_SAVED_SET_COUNT);
+  for (let resolved = 1; resolved <= DRAGON_SAVED_SET_COUNT; resolved += 1) {
+    await sleep(scenario.tickMs);
+    if (stopIfCancelled(null)) {
+      return;
+    }
+    progress('sets', resolved, DRAGON_SAVED_SET_COUNT);
   }
 
   progress('convert', 0, 0);

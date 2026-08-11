@@ -1840,6 +1840,30 @@ export const profilePackageV1Schema = z.object({
 });
 export type WireProfilePackageV1 = z.infer<typeof profilePackageV1Schema>;
 
+/**
+ * A reason this profile cannot be published, in the words screen 9 shows.
+ *
+ * Not a validation error and not a warning: a blocker is a decision in the
+ * draft that the engine will refuse to compile, so publishing it would store a
+ * revision that can never produce a register. The only one today is a filter
+ * naming a selection set no source could resolve (RELEASE-1.0-PLAN P0-3 —
+ * "fallback = mark unusable for filtering + block profile publication +
+ * explain"); the shape is a list because the next one will not be.
+ *
+ * `setName` and `sourceNames` are carried beside the sentence rather than only
+ * inside it so a screen can emphasize the name the person has to go and change.
+ */
+export const publishBlockerSchema = z.object({
+  kind: z.literal('unresolved-selection-set'),
+  /** The name the profile's asset filters ask for. */
+  setName: z.string().min(1),
+  /** The sources whose copy of it is unresolved, by their short label. */
+  sourceNames: z.array(z.string().min(1)).min(1),
+  /** The whole explanation, ready to print. */
+  message: z.string().min(1),
+});
+export type WirePublishBlocker = z.infer<typeof publishBlockerSchema>;
+
 /** What screen 9 prints about the profile as it stands. */
 export const profileSectionSchema = z.object({
   name: z.string().min(1),

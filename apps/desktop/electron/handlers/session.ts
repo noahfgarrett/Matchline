@@ -532,7 +532,10 @@ export function createSessionHandlers(
     },
 
     async 'profile:sections'(): Promise<IpcResponse<'profile:sections'>> {
-      return { sections: [...guard(() => service.profileSections())] };
+      return {
+        sections: [...guard(() => service.profileSections())],
+        blockers: [...guard(() => service.publishBlockers())],
+      };
     },
 
     async 'profile:export'(

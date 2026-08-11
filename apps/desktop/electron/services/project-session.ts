@@ -23,6 +23,7 @@ import type { GeneratedMelAsset } from '@matchline/mel-export';
 import {
   openExtractionCache,
   type ExtractionCache,
+  type SelectionSetNode,
   type SourceModelNode,
 } from '@matchline/model-schema';
 import {
@@ -73,6 +74,7 @@ import type {
   WireProjectOpenResult,
   WirePropertyCatalogRow,
   WireProjectSummary,
+  WirePublishBlocker,
   WireQuickSetupSuggestions,
   WireRecentProject,
   WireReparentPreview,
@@ -441,6 +443,13 @@ export interface ProjectService {
   exportRevisionDiff(filePath: string, previousCompileId: number): WireExportResult;
 
   profileSections(): readonly WireProfileSection[];
+  /**
+   * Why this draft cannot be published, or an empty list when it can.
+   *
+   * The same check `saveProfile` refuses on, exposed so screen 9 can say it
+   * before the button is pressed rather than after (P0-3).
+   */
+  publishBlockers(): readonly WirePublishBlocker[];
   exportProfilePackage(filePath: string): WireExportResult;
   importProfilePackage(filePath: string): { draft: WireDraftProfile; config: WireProjectConfig };
 
@@ -1337,6 +1346,105 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
   /** Compact per-source names for the rows that name several sources at once. */
   function modelLabels(active: Session): ReadonlyMap<string, string> {
     return shortSourceLabels(orderedModels(active).map((model) => model.sourceId));
+  }
+
+  /**
+   * Whether naming this set in a filter would name something nobody resolved.
+   *
+   * A folder means its contents, so the whole subtree is walked: an unresolved
+   * saved search inside a named folder makes that folder's membership
+   * incomplete too. Deliberately the same reading `@matchline/asset-catalog`'s
+   * own `selectionSetMembers` performs — the point of this function is to refuse
+   * BEFORE the engine has to, and a gate that disagreed with the engine would
+   * either block a profile that compiles or pass one that cannot.
+   */
+  function unresolvedSetsBeneath(roots: readonly SelectionSetNode[], name: string): boolean {
+    const stack: SelectionSetNode[] = [...roots];
+    const seen = new Set<number>();
+    /** Set to true by the first unresolved node in a subtree that matched. */
+    let unresolved = false;
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (node === undefined || seen.has(node.id)) {
+        continue;
+      }
+      seen.add(node.id);
+      if (node.name === name) {
+        // Several sets may share a name; naming it means all of them, so the
+        // whole of each matching subtree has to answer.
+        const subtree: SelectionSetNode[] = [node];
+        const walked = new Set<number>();
+        while (subtree.length > 0) {
+          const inner = subtree.pop();
+          if (inner === undefined || walked.has(inner.id)) {
+            continue;
+          }
+          walked.add(inner.id);
+          if (!inner.membershipResolved) {
+            unresolved = true;
+          }
+          subtree.push(...inner.children);
+        }
+      }
+      stack.push(...node.children);
+    }
+    return unresolved;
+  }
+
+  /**
+   * Every reason this project's draft cannot be published (P0-3).
+   *
+   * One reason today: an asset filter naming a selection set that at least one
+   * open source recorded WITHOUT its membership — a saved search Navisworks
+   * would not run, which schema v2 stores as `membership_resolved = 0` and
+   * which a v1 cache expresses by having recorded a search with no members at
+   * all. The compiler already refuses such a profile
+   * (`AssetCatalogConfigReason.unresolved-selection-set`), so publishing one
+   * would store a revision that can never produce a register; this is the same
+   * refusal, moved to the moment the person can still do something about it.
+   *
+   * A set no open source has is NOT a blocker here. That is `unknown-selection-
+   * set` in the engine, and it is a different situation: a project whose model
+   * sources are not all added yet has filters naming sets that will exist once
+   * they are, and refusing to publish over one would make the wizard unusable
+   * in the order people actually work.
+   */
+  function publishBlockersFor(active: Session): readonly WirePublishBlocker[] {
+    const names = active.draft.assetFilters.selectionSetNames;
+    if (names.length === 0 || active.models.size === 0) {
+      return [];
+    }
+    const labels = modelLabels(active);
+    const blockers: WirePublishBlocker[] = [];
+    for (const name of names) {
+      const sourceNames: string[] = [];
+      for (const model of orderedModels(active)) {
+        if (unresolvedSetsBeneath(model.cache.selectionSets(), name)) {
+          sourceNames.push(labels.get(model.sourceId) ?? model.displayName);
+        }
+      }
+      if (sourceNames.length === 0) {
+        continue;
+      }
+      const where =
+        sourceNames.length === 1
+          ? `${sourceNames.join('')} has it`
+          : `${sourceNames.join(', ')} have it`;
+      blockers.push({
+        kind: 'unresolved-selection-set',
+        setName: name,
+        sourceNames,
+        message:
+          `This profile keeps only the equipment in the set '${name}', and ${where} recorded ` +
+          'without its contents — it is a saved search, and the extraction never got Navisworks ' +
+          'to run it. Matchline will not treat a set nobody resolved as an empty one, so a ' +
+          'compile against this profile is refused rather than returning no equipment at all. ' +
+          'Open the model in Navisworks, check the search still finds what it should, and ' +
+          `extract it again — or take '${name}' off the filter on screen 3 and keep the ` +
+          'equipment some other way.',
+      });
+    }
+    return blockers;
   }
 
   /**
@@ -2516,6 +2624,16 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         );
       }
 
+      // Checked here rather than only on screen 9, because screen 9 is not the
+      // only way in: Quick Setup, an imported profile package and a headless
+      // call all reach this method, and a gate that lived in the renderer would
+      // be a gate one of them walks around.
+      const blockers = publishBlockersFor(active);
+      const blocked = blockers[0];
+      if (blocked !== undefined) {
+        throw new Error(blocked.message);
+      }
+
       let profile: SiteProfileV2;
       try {
         profile = toSiteProfile(active.draft);
@@ -3056,6 +3174,10 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     profileSections(): readonly WireProfileSection[] {
       const active = requireSession();
       return describeSections(active.draft);
+    },
+
+    publishBlockers(): readonly WirePublishBlocker[] {
+      return publishBlockersFor(requireSession());
     },
 
     exportProfilePackage(filePath: string): WireExportResult {

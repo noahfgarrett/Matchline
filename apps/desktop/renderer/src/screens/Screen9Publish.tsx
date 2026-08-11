@@ -4,6 +4,7 @@ import type {
   WireAttributeChoice,
   WireHierarchyLevel,
   WireProfileSection,
+  WirePublishBlocker,
 } from '../../../shared/schemas';
 import { call, messageOf } from '../api';
 import { Callout, Panel, TableScroll } from '../components/Panel';
@@ -53,6 +54,15 @@ export function Screen9Publish({
   readonly onImported: () => Promise<void>;
 }): JSX.Element {
   const [sections, setSections] = useState<readonly WireProfileSection[]>([]);
+  /**
+   * Decisions in this draft the engine will refuse to compile (P0-3).
+   *
+   * Read from the same call as the sections, and re-read on every draft change,
+   * because a blocker is a fact about the draft AND about the models currently
+   * open — taking a set off the filter on screen 3 clears it, and so does
+   * re-extracting the model that could not resolve it.
+   */
+  const [blockers, setBlockers] = useState<readonly WirePublishBlocker[]>([]);
   const [attributes, setAttributes] = useState<readonly WireAttributeChoice[]>([]);
   /**
    * Whether the person has confirmed the boundary summary for THIS publish
@@ -72,6 +82,7 @@ export function Screen9Publish({
     try {
       const data = await call(window.matchline.profile.sections());
       setSections(data.sections);
+      setBlockers(data.blockers);
     } catch (caught: unknown) {
       setError(messageOf(caught));
     }
@@ -191,6 +202,19 @@ export function Screen9Publish({
 
       {error === null ? null : <Callout tone="error">{error}</Callout>}
       {message === null ? null : <Callout tone="success">{message}</Callout>}
+
+      {blockers.map((blocker: WirePublishBlocker, index: number): JSX.Element => (
+        // Addressed by position rather than by set name: a Navisworks set name
+        // is whatever somebody typed, spaces and quotes included, and a test id
+        // built from one is not a selector.
+        <Callout
+          key={`${blocker.kind}:${blocker.setName}`}
+          tone="error"
+          data-testid={`publish-blocker-${String(index)}`}
+        >
+          {blocker.message}
+        </Callout>
+      ))}
 
       <Panel
         title="What this profile says"
@@ -315,7 +339,7 @@ export function Screen9Publish({
             className="button button--primary"
             type="button"
             data-testid="publish-save"
-            disabled={busy || !boundariesConfirmed}
+            disabled={busy || !boundariesConfirmed || blockers.length > 0}
             onClick={(): void => {
               void save();
             }}
@@ -328,7 +352,17 @@ export function Screen9Publish({
             ? 'Nothing saved yet.'
             : `Latest saved revision: ${String(savedRevision)}.`}
         </p>
-        {boundariesConfirmed ? null : (
+        {blockers.length > 0 ? (
+          <p className="muted" data-testid="publish-blocked-by-filter">
+            {blockers.length === 1
+              ? `Saving is off until the '${blockers[0]?.setName ?? ''}' filter is dealt with — ` +
+                'a profile that names an unresolved set cannot be compiled, so publishing it ' +
+                'would store a revision that never produces a register.'
+              : 'Saving is off until the filters named above are dealt with — a profile that ' +
+                'names an unresolved set cannot be compiled, so publishing it would store a ' +
+                'revision that never produces a register.'}
+          </p>
+        ) : boundariesConfirmed ? null : (
           <p className="muted" data-testid="publish-blocked">
             Confirm the boundaries above first. They are the decisions this profile makes that
             nothing downstream can undo.

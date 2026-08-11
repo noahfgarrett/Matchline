@@ -24,7 +24,7 @@
     "test:integration": "node --test tests/integration/*.test.mjs",
     "test:windows-proof": "node --test tests/windows-proof/*.test.mjs",
     "test:acceptance10": "node --test tests/acceptance-1.0/*.test.mjs",
-    "test:acceptance10:green": "node --test tests/acceptance-1.0/multi-model.test.mjs tests/acceptance-1.0/stable-identity.test.mjs tests/acceptance-1.0/manual-parent-boundaries.test.mjs tests/acceptance-1.0/default-hierarchy.test.mjs tests/acceptance-1.0/level-key-display.test.mjs tests/acceptance-1.0/profile-v2.test.mjs",
+    "test:acceptance10:green": "node --test tests/acceptance-1.0/multi-model.test.mjs tests/acceptance-1.0/stable-identity.test.mjs tests/acceptance-1.0/manual-parent-boundaries.test.mjs tests/acceptance-1.0/default-hierarchy.test.mjs tests/acceptance-1.0/level-key-display.test.mjs tests/acceptance-1.0/profile-v2.test.mjs tests/acceptance-1.0/zero-eight-one-migration.test.mjs",
     "test:scale": "node --test tests/scale/*.test.mjs"
   },
   "devDependencies": {
