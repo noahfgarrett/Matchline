@@ -83,9 +83,7 @@ let revisionB = null;
 function compileWith(description) {
   return compileProject({
     sources: oneSource(handle.cache),
-    profile: siteProfile(),
-    hierarchy: HIERARCHY_V2,
-    roleGraph: ROLE_GRAPH,
+    profile: siteProfile({ hierarchy: HIERARCHY_V2 }),
     melWorkbook: melWorkbook(description),
   });
 }

@@ -78,6 +78,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test, { after, before } from 'node:test';
 
 import { compileProject } from '@matchline/compiler';
+import { migrateSiteProfileV1 } from '@matchline/domain';
 import { openExtractionCache } from '@matchline/model-schema';
 import { writeDragonFixture } from '@matchline/model-schema/fixtures/dragon';
 import { readWorkbook, sheetAoa, writeWorkbook } from '@matchline/spreadsheet-import';
@@ -162,16 +163,30 @@ const HIERARCHY = {
   ],
 };
 
+/**
+ * The E3 site's whole rule set, as one `SiteProfileV2`.
+ *
+ * Built through the published migration rather than written out longhand: this
+ * is the same lift every stored V1 profile takes, so an integration test cannot
+ * accidentally prove the pipeline against a profile shape only it can make.
+ */
 function siteProfile() {
-  return {
-    profileId: 'dragon-e3',
-    name: 'Dragon E3',
-    version: 1,
-    propertyMappings: PROPERTY_MAPPINGS,
-    assetFilters: ASSET_FILTERS,
-    tagAnatomy: DRAGON_ANATOMY,
-    systemResolver: SYSTEM_RESOLVER,
-  };
+  return migrateSiteProfileV1(
+    {
+      profileId: 'dragon-e3',
+      name: 'Dragon E3',
+      version: 1,
+      propertyMappings: PROPERTY_MAPPINGS,
+      assetFilters: ASSET_FILTERS,
+      tagAnatomy: DRAGON_ANATOMY,
+      systemResolver: SYSTEM_RESOLVER,
+    },
+    {
+      hierarchy: HIERARCHY,
+      roleGraph: ROLE_GRAPH,
+      ssmDisciplineProjection: [{ from: 'I&C', to: 'Mechanical' }],
+    },
+  );
 }
 
 /** `tag:<canonicalTag>` -- `asset-catalog`'s id for an unduplicated tag. */
@@ -476,10 +491,7 @@ function mainInput(cache, overrides = {}) {
   return {
     sources: [{ sourceId: MODEL_SOURCE_ID, cache }],
     profile: siteProfile(),
-    hierarchy: HIERARCHY,
-    roleGraph: ROLE_GRAPH,
     connectivityWorkbooks: connectivityWorkbooks(),
-    ssmDisciplineProjection: new Map([['I&C', 'Mechanical']]),
     ...overrides,
   };
 }

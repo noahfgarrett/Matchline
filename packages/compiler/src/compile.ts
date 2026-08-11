@@ -20,12 +20,18 @@
  * other order is the same compile; every per-asset cache read goes through the
  * asset's own source, because an object ordinal addresses nothing without one.
  */
-import { chainFor, migratePropertyMappings } from '@matchline/domain';
+import {
+  chainFor,
+  migrateDerivedAttributes,
+  migratePropertyMappings,
+  migrateSourceAssignmentRules,
+} from '@matchline/domain';
 import type {
   DeadClaimRuleReviewItem,
   ManualRelationshipOverride,
   PropertyChain,
   PropertyMappings,
+  PropertyRef,
   Provenance,
   ResolvedAssetNode,
   ReviewItem,
@@ -107,6 +113,7 @@ import type {
   MelWorkbookInput,
   ModelSourceInput,
   SourceAssetCount,
+  SsmDisciplineProjection,
 } from './types.js';
 
 /**
@@ -279,7 +286,15 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     chainFor(mappings.equipmentTag, sourceId);
   // Refused before a single cache is read: a definition that shadowed a built-in
   // attribute key would change where equipment is filed without saying so.
-  const derivedDefinitions = validateDerivedAttributes(input.derivedAttributes ?? []);
+  const derivedDefinitions = validateDerivedAttributes(
+    migrateDerivedAttributes(profile.derivedAttributes),
+  );
+  // The projection as the attribute helpers read it. Always built, never
+  // optional: an empty table rewrites nothing, which is exactly what "this site
+  // stated no rewrites" has always meant.
+  const disciplineProjection: SsmDisciplineProjection = new Map(
+    profile.ssmDisciplineProjection.map((rewrite) => [rewrite.from, rewrite.to] as const),
+  );
 
   // The universe, in the one order every stage reads it in. `orderCatalogSources`
   // is `@matchline/asset-catalog`'s own ordering and validation, borrowed rather
@@ -293,7 +308,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     sources,
     profile.propertyMappings,
     profile.assetFilters,
-    input.sourceAssignmentRules ?? [],
+    migrateSourceAssignmentRules(profile.sourceAssignments),
   );
   // One streaming pass per cache, for a value only a property picker reads. Not
   // run unless it was asked for (see `includePropertyCatalog`).
@@ -340,9 +355,9 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   // is taken ONLY when the site mapped one: holding every asset's whole bag in
   // memory to save that pass would be a per-asset property map for a project
   // with 40k assets and a million property rows.
-  const stableIdProperty = input.stableIdProperty;
+  const stableIdProperty = profile.stableIdProperty;
   const stableIds: ReadonlyArray<string | undefined> =
-    stableIdProperty === undefined
+    stableIdProperty === null
       ? []
       : modelCatalog.assets.map((asset) => {
           const bag = readAssetProperties(
@@ -370,7 +385,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     sourceFiles.set(asset.assetId, sourceFile);
     subjects.push(resolverSubjectOf(asset, bag, sourceFile));
     claimSubjects.push(
-      claimSubjectOf(asset, bag, sourceFile, anatomy, input.parentTagProperty),
+      claimSubjectOf(asset, bag, sourceFile, anatomy, profile.parentTagProperty ?? undefined),
     );
   }
   /** The document an asset was read from. Filled for every catalog asset above. */
@@ -419,8 +434,20 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   // The profile's anatomy enables the anatomy tier unless the caller states its
   // own: one taught tag shape should not have to be configured twice.
   const identityConfig: IdentityConfig = {
-    ...input.identityConfig,
-    ...(input.identityConfig?.anatomy === undefined && anatomy !== undefined ? { anatomy } : {}),
+    ...(profile.identityConfig.tagNormalization.length === 0
+      ? {}
+      : { tagNormalization: profile.identityConfig.tagNormalization }),
+    ...(profile.identityConfig.aliases.length === 0
+      ? {}
+      : {
+          aliases: new Map(
+            profile.identityConfig.aliases.map((alias) => [alias.from, alias.to] as const),
+          ),
+        }),
+    ...(profile.identityConfig.fuzzyMaxDistance === undefined
+      ? {}
+      : { fuzzyMaxDistance: profile.identityConfig.fuzzyMaxDistance }),
+    ...(anatomy === undefined ? {} : { anatomy }),
   };
   const identityIndex = buildIdentityIndex(
     catalog.assets.map((asset) => ({
@@ -490,7 +517,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
       : proposeNestings(
           input.learnedRules,
           catalog.assets.map((asset) =>
-            nestingAssetOf(asset, resolutionOf(asset.assetId), anatomy, input),
+            nestingAssetOf(asset, resolutionOf(asset.assetId), anatomy, disciplineProjection),
           ),
         );
   const learned: LearnedClaimInput[] = learnedProposals.map((proposal) => ({
@@ -509,9 +536,12 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   const manualOverrides: ReadonlyArray<ManualRelationshipOverride> = manualParents.overrides;
 
   const claims = assembleRelationshipClaims(claimSubjects, {
-    ...(input.roleGraph === undefined ? {} : { roleGraph: input.roleGraph }),
-    ...(input.profileLookup === undefined ? {} : { profileLookup: input.profileLookup }),
-    ...(input.priorSsm === undefined ? {} : { priorSsm: input.priorSsm }),
+    // Passed only when the site stated something. An empty role graph behaves
+    // like an absent one, but saying "no rules" and saying nothing are the same
+    // fact and the assembler should be handed one of them, not both.
+    ...(profile.roleGraph.rules.length === 0 ? {} : { roleGraph: profile.roleGraph }),
+    ...(profile.profileLookup.length === 0 ? {} : { profileLookup: profile.profileLookup }),
+    ...(profile.priorSsm.length === 0 ? {} : { priorSsm: profile.priorSsm }),
     flowEdges,
     learned,
     manualOverrides,
@@ -576,7 +606,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
       attributes: attributesFor(
         asset,
         resolutionOf(asset.assetId),
-        input.ssmDisciplineProjection,
+        disciplineProjection,
         derivedByAsset.get(asset.assetId),
       ),
       ...(modelTreeParentId === undefined ? {} : { modelTreeParentId }),
@@ -585,12 +615,15 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   const snapshot = compileSnapshot({
     subjects: compileSubjects,
     claims,
-    hierarchy: input.hierarchy,
-    ...(input.ladder === undefined ? {} : { ladder: input.ladder }),
+    hierarchy: profile.hierarchy,
+    // An empty tier list is not a preference -- it would disable every rung and
+    // root the whole site -- so it falls through to the compiler's own default,
+    // which is what an absent ladder has always done.
+    ...(profile.ladder.tiers.length === 0 ? {} : { ladder: profile.ladder }),
   });
 
   // --- 10. projections ----------------------------------------------------------
-  const tree = hierarchyTree(snapshot, input.hierarchy, compileSubjects);
+  const tree = hierarchyTree(snapshot, profile.hierarchy, compileSubjects);
 
   const tagByAssetId = new Map<string, string>();
   for (const asset of catalog.assets) {
@@ -606,7 +639,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
       snapshot.nodes.get(asset.assetId),
       tagByAssetId,
       sourceFileFor(asset),
-      input.ssmDisciplineProjection,
+      disciplineProjection,
     ),
   );
   const generatedMel = {
@@ -711,7 +744,7 @@ function claimSubjectOf(
   bag: AssetPropertyBag,
   sourceFile: string,
   anatomy: TagAnatomyConfig | undefined,
-  parentTagProperty: CompileProjectInput['parentTagProperty'],
+  parentTagProperty: PropertyRef | undefined,
 ): ClaimSubject {
   const segments = anatomyOf(anatomy, asset.canonicalTag);
   if (parentTagProperty === undefined) {
@@ -749,10 +782,10 @@ function nestingAssetOf(
   asset: ModelAsset,
   resolution: SystemResolution | null,
   anatomy: TagAnatomyConfig | undefined,
-  input: CompileProjectInput,
+  projection: SsmDisciplineProjection,
 ): NestingAsset {
   const segments = anatomyOf(anatomy, asset.canonicalTag);
-  const discipline = ssmDisciplineOf(asset.nativeDiscipline, input.ssmDisciplineProjection);
+  const discipline = ssmDisciplineOf(asset.nativeDiscipline, projection);
   return {
     assetId: asset.assetId,
     description: asset.description ?? '',
@@ -777,7 +810,7 @@ function generatedMelAssetOf(
   node: ResolvedAssetNode | undefined,
   tagByAssetId: ReadonlyMap<string, string>,
   sourceModelFile: string,
-  projection: CompileProjectInput['ssmDisciplineProjection'],
+  projection: SsmDisciplineProjection,
 ): GeneratedMelAsset {
   const parentAssetId = node?.parent.parentAssetId ?? null;
   const parentTag = parentAssetId === null ? undefined : tagByAssetId.get(parentAssetId);

@@ -20,7 +20,7 @@
 import { existsSync, unlinkSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import type { ManualRelationshipOverride, SiteProfile } from '@matchline/domain';
+import type { ManualRelationshipOverride, SiteProfileV2 } from '@matchline/domain';
 
 import { backupBeforeMigration } from './backup.js';
 import { ProjectStoreError } from './errors.js';
@@ -33,7 +33,7 @@ import {
   type StoredOverride,
 } from './overrides.js';
 import { MIGRATION_STEPS, type MigrationStep } from './migrations.js';
-import { validateSiteProfile } from './profile-json.js';
+import { validateSiteProfileV2 } from './profile-json.js';
 import { optionalText, requireInteger, requireText, type SqlRow } from './rows.js';
 import {
   CONFIG_KEYS,
@@ -150,8 +150,8 @@ export interface SourceInputV4 {
 
 /** One stored profile revision. */
 export interface ProfileRevision {
-  readonly profile: SiteProfile;
-  /** Monotonic within this project; unrelated to `SiteProfile.version`. */
+  readonly profile: SiteProfileV2;
+  /** Monotonic within this project; unrelated to `SiteProfileV2.version`. */
   readonly revision: number;
 }
 
@@ -284,7 +284,7 @@ export interface ProjectStore {
   removeSource(sourceId: string): boolean;
 
   /** Validates and stores a profile as a new revision. Returns the revision. */
-  saveProfile(profile: SiteProfile, revisionNote?: string): number;
+  saveProfile(profile: SiteProfileV2, revisionNote?: string): number;
   /** The newest revision, or `undefined` when none has been saved. */
   getProfile(): ProfileRevision | undefined;
   /** Every revision, newest first. Old revisions are never deleted. */
@@ -361,6 +361,8 @@ export interface ProjectStore {
    * reads the current one.
    */
   saveConfig(key: ConfigKey, value: unknown): void;
+  /** Removes one section. `true` when a row was there to remove. */
+  deleteConfig(key: ConfigKey): boolean;
   /** One section, or `undefined` when it has never been written. */
   getConfig(key: ConfigKey): ConfigEntry | undefined;
   /** Every stored section, ordered by key. Empty means nothing was configured. */
@@ -925,10 +927,10 @@ class SqliteProjectStore implements ProjectStore {
     });
   }
 
-  saveProfile(profile: SiteProfile, revisionNote?: string): number {
+  saveProfile(profile: SiteProfileV2, revisionNote?: string): number {
     // §13.3: every save validates before publication. A profile that cannot be
     // read back is never written.
-    const validated = validateSiteProfile(profile);
+    const validated = validateSiteProfileV2(profile);
     const json = canonicalJson(validated, 'profile');
     const note =
       revisionNote === undefined ? null : requireFilledArgument(revisionNote, 'revisionNote');
@@ -969,7 +971,10 @@ class SqliteProjectStore implements ProjectStore {
 
   #readProfileRow(row: SqlRow): ProfileRevision {
     return {
-      profile: validateSiteProfile(
+      // A revision written before the consolidation carries no `formatVersion`
+      // and is lifted here rather than refused: every profile a project has ever
+      // stored stays readable, and nothing is rewritten on upgrade.
+      profile: validateSiteProfileV2(
         parseStoredJson(requireText(row, 'profile', 'profile_json'), 'profile'),
       ),
       revision: requireInteger(row, 'profile', 'revision'),
@@ -1256,6 +1261,22 @@ class SqliteProjectStore implements ProjectStore {
              updated_at = excluded.updated_at`,
         )
         .run(checkedKey, json, updatedAt);
+    });
+  }
+
+  /**
+   * Removes one configuration row.
+   *
+   * Returns whether a row was there, so a caller migrating a section OUT of this
+   * table can report what it actually moved rather than what it attempted.
+   */
+  deleteConfig(key: ConfigKey): boolean {
+    const checkedKey = requireMemberArgument(key, CONFIG_KEYS, 'key');
+    return this.#mutate(() => {
+      const { changes } = this.#open()
+        .prepare('DELETE FROM config WHERE key = ?')
+        .run(checkedKey);
+      return Number(changes) > 0;
     });
   }
 

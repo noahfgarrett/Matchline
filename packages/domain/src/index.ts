@@ -75,6 +75,32 @@ export type {
 } from './profile.js';
 
 export {
+  emptyIdentityConfig,
+  isSiteProfileV2,
+  migrateAttributeResolver,
+  migrateDerivedAttributes,
+  migrateSiteProfileV1,
+  migrateSourceAssignmentRules,
+  migrateSourceAssignments,
+} from './profile-v2.js';
+export type {
+  AttributeResolverInput,
+  AuthorityRule,
+  DerivedAttributeDefinitionInput,
+  DisciplineRewrite,
+  ManualAttributeAssignment,
+  ParentPair,
+  ProfileIdentityConfig,
+  ProfileMapEntry,
+  ProfileTestExample,
+  SiteProfileV2,
+  SiteProfileV2Sections,
+  SourceAssignmentRuleInput,
+  SourceAssignmentsInput,
+  TagAlias,
+} from './profile-v2.js';
+
+export {
   ATTRIBUTE_RESOLVER_KINDS,
   DERIVED_ATTRIBUTE_ID_PATTERN,
   isDerivedAttributeId,

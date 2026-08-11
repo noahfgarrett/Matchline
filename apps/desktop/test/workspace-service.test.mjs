@@ -324,7 +324,7 @@ function configureThroughScreen7(service) {
     tagAnatomy: DRAGON_ANATOMY,
     systemResolver: DRAGON_RESOLVER,
   });
-  service.updateConfig({
+  service.updateDraft({
     roleGraph: { rules: [{ parentRole: 'PNL', childRole: 'RIO' }] },
     ssmDisciplineProjection: [{ from: 'I&C', to: 'Electrical' }],
   });
@@ -340,7 +340,9 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
 
   await t.test('screen 6 opens on the standard commissioning stack', () => {
     service.create(projectPath, 'Dragon');
-    const config = service.config();
+    // Screen 6 reads the PROFILE now: the level stack is a section of the site's
+    // rule set, not a row in the project's configuration table (SiteProfileV2).
+    const config = service.draftState().draft;
 
     assert.deepEqual(
       config.hierarchy.levels.map((level) => level.attributeKey),
@@ -376,15 +378,23 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     service.close();
   });
 
-  await t.test('a config write survives closing and reopening the project', () => {
+  await t.test('a profile write survives closing and reopening the project', () => {
     const first = newService();
     first.create(join(workDir, 'Reopen.matchline'), 'Reopen');
-    first.updateConfig({ roleGraph: { rules: [{ parentRole: 'PNL', childRole: 'RIO' }] } });
+    first.updateDraft({
+      propertyMappings: PROPERTY_MAPPINGS,
+      roleGraph: { rules: [{ parentRole: 'PNL', childRole: 'RIO' }] },
+    });
+    // A section only reaches the file when the profile is published: a draft is
+    // in memory until somebody saves it.
+    first.saveProfile('screen 7');
     first.close();
 
     const second = newService();
     second.open(join(workDir, 'Reopen.matchline'));
-    assert.deepEqual(second.config().roleGraph.rules, [{ parentRole: 'PNL', childRole: 'RIO' }]);
+    assert.deepEqual(second.draftState().draft.roleGraph.rules, [
+      { parentRole: 'PNL', childRole: 'RIO' },
+    ]);
     second.close();
   });
 
@@ -396,7 +406,8 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     const path = join(workDir, 'KeySpelling.matchline');
     const first = newService();
     first.create(path, 'Key spelling');
-    first.updateConfig({
+    first.updateDraft({
+      propertyMappings: PROPERTY_MAPPINGS,
       hierarchy: {
         levels: [
           {
@@ -411,11 +422,12 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
         ],
       },
     });
+    first.saveProfile('engine spelling');
     first.close();
 
     const second = newService();
     second.open(path);
-    const [level] = second.config().hierarchy.levels;
+    const [level] = second.draftState().draft.hierarchy.levels;
     assert.equal(level.attributeKey, 'systemKey', 'the key survived the round trip');
     assert.equal(level.displayAttributeKey, 'systemLabel', 'and so did the display attribute');
     second.close();
@@ -990,10 +1002,12 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     assert.ok(existsSync(target));
 
     const written = JSON.parse(readFileSync(target, 'utf8'));
-    assert.equal(written.formatVersion, 1);
+    assert.equal(written.formatVersion, 2);
     assert.equal(written.appVersion, '0.5.0');
-    assert.deepEqual(written.config.roleGraph.rules, [{ parentRole: 'PNL', childRole: 'RIO' }]);
-    assert.deepEqual(written.draft.propertyMappings.equipmentTag, {
+    assert.equal(written.draft, undefined, 'one versioned profile, not a draft/config pair');
+    assert.equal(written.config, undefined);
+    assert.deepEqual(written.profile.roleGraph.rules, [{ parentRole: 'PNL', childRole: 'RIO' }]);
+    assert.deepEqual(written.profile.propertyMappings.equipmentTag, {
       category: 'Dragon Data',
       name: 'Tag',
     });
@@ -1007,13 +1021,13 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     try {
       const otherPath = join(workDir, 'Other.matchline');
       other.create(otherPath, 'Other Site');
-      assert.deepEqual(other.config().roleGraph.rules, []);
+      assert.deepEqual(other.draftState().draft.roleGraph.rules, []);
 
       const imported = other.importProfilePackage(target);
       assert.equal(imported.draft.name, 'Other Site', 'the project keeps its own identity');
       assert.deepEqual(imported.draft.tagAnatomy.segments, DRAGON_ANATOMY.segments);
-      assert.deepEqual(imported.config.roleGraph.rules, [{ parentRole: 'PNL', childRole: 'RIO' }]);
-      assert.deepEqual(imported.config.ssmDisciplineProjection, [
+      assert.deepEqual(imported.draft.roleGraph.rules, [{ parentRole: 'PNL', childRole: 'RIO' }]);
+      assert.deepEqual(imported.draft.ssmDisciplineProjection, [
         { from: 'I&C', to: 'Electrical' },
       ]);
       assert.equal(other.compileStatus().state, 'never-run', 'nothing is compiled against it yet');
@@ -1068,8 +1082,16 @@ test('a compile with no model fails with something a person can act on', () => {
 
 /* ============================== the configuration travels with the file ==== */
 
-/** All five screens 6-7 sections, each set to something not its default. */
-const FULL_CONFIG_PATCH = {
+/**
+ * Every section screens 6-7 configure, each set to something not its default.
+ *
+ * A draft patch now, not a config patch: these are the site's rules, and since
+ * SiteProfileV2 they are stored as profile revisions rather than as `config`
+ * rows. `propertyMappings` rides along because a profile has to be publishable
+ * to be saved at all.
+ */
+const FULL_PROFILE_PATCH = {
+  propertyMappings: PROPERTY_MAPPINGS,
   hierarchy: {
     levels: [
       {
@@ -1107,7 +1129,7 @@ const FULL_CONFIG_PATCH = {
       ],
     },
   ],
-  sourceAssignmentRules: [
+  sourceAssignments: [
     {
       scope: 'filename-pattern',
       match: 'Dragon-*.nwc',
@@ -1135,8 +1157,9 @@ test('a moved project file carries its whole configuration with it', () => {
   let configured;
   try {
     writer.create(originalPath, 'Portable');
-    configured = writer.updateConfig(FULL_CONFIG_PATCH);
+    configured = writer.updateDraft(FULL_PROFILE_PATCH);
     assert.deepEqual(configured.ladder.tiers, ['manual', 'flow-family']);
+    writer.saveProfile('portable');
   } finally {
     writer.close();
   }
@@ -1153,7 +1176,25 @@ test('a moved project file carries its whole configuration with it', () => {
     assert.equal(project.path, movedPath);
     assert.equal(notice.migration, null, 'the file was already current');
     assert.equal(notice.adoptedAppStateConfig, false, 'nothing machine-local was involved');
-    assert.deepEqual(reader.config(), configured, 'every section came back off the file');
+    // Every section the writer set, read back off a file on a different machine.
+    // Compared section by section rather than whole: the rehydrated draft also
+    // carries the defaults for mappings nobody set, and "the file remembered
+    // what I configured" is the claim, not "the object is byte-identical".
+    for (const section of [
+      'hierarchy',
+      'roleGraph',
+      'ladder',
+      'ssmDisciplineProjection',
+      'parentTagProperty',
+      'derivedAttributes',
+      'sourceAssignments',
+    ]) {
+      assert.deepEqual(
+        reader.draftState().draft[section],
+        configured[section],
+        `${section} came back off the file`,
+      );
+    }
   } finally {
     reader.close();
   }
@@ -1178,7 +1219,7 @@ test('the level-attribute menu offers the project’s derived attributes beside 
       'a new project defines none',
     );
 
-    service.updateConfig({ derivedAttributes: FULL_CONFIG_PATCH.derivedAttributes });
+    service.updateDraft({ derivedAttributes: FULL_PROFILE_PATCH.derivedAttributes });
     const choices = service.attributeChoices();
     assert.equal(
       choices.length,
@@ -1206,8 +1247,7 @@ test('an imported profile package is written into the project, not just held', (
   const exporter = newService();
   try {
     exporter.create(join(workDir, 'Exporter.matchline'), 'Exporter');
-    exporter.updateConfig(FULL_CONFIG_PATCH);
-    exporter.updateDraft({ propertyMappings: PROPERTY_MAPPINGS, tagAnatomy: DRAGON_ANATOMY });
+    exporter.updateDraft({ ...FULL_PROFILE_PATCH, tagAnatomy: DRAGON_ANATOMY });
     assert.equal(exporter.exportProfilePackage(packagePath).written, true);
   } finally {
     exporter.close();
@@ -1217,7 +1257,9 @@ test('an imported profile package is written into the project, not just held', (
   try {
     importer.create(targetPath, 'Imported');
     const imported = importer.importProfilePackage(packagePath);
-    assert.deepEqual(imported.config.ladder.tiers, ['manual', 'flow-family']);
+    assert.deepEqual(imported.draft.ladder.tiers, ['manual', 'flow-family']);
+    // An import replaces the draft in memory; publishing is what puts it on disk.
+    importer.saveProfile('imported');
   } finally {
     importer.close();
   }
@@ -1226,9 +1268,9 @@ test('an imported profile package is written into the project, not just held', (
   try {
     reopened.open(targetPath);
     assert.deepEqual(
-      reopened.config().parentTagProperty,
+      reopened.draftState().draft.parentTagProperty,
       { category: 'Dragon Data', name: 'Parent Tag' },
-      'the import landed in the config table, so it survived the close',
+      'the import landed in a profile revision, so it survived the close',
     );
   } finally {
     reopened.close();
@@ -1255,12 +1297,20 @@ test('a config left in the app-state file is copied into the project once', () =
   const statePath = join(legacyUserData, 'app-state.json');
   const state = JSON.parse(readFileSync(statePath, 'utf8'));
   const legacyConfig = {
-    hierarchy: FULL_CONFIG_PATCH.hierarchy,
-    roleGraph: FULL_CONFIG_PATCH.roleGraph,
-    ladder: FULL_CONFIG_PATCH.ladder,
-    ssmDisciplineProjection: FULL_CONFIG_PATCH.ssmDisciplineProjection,
-    parentTagProperty: FULL_CONFIG_PATCH.parentTagProperty,
+    hierarchy: FULL_PROFILE_PATCH.hierarchy,
+    roleGraph: FULL_PROFILE_PATCH.roleGraph,
+    ladder: FULL_PROFILE_PATCH.ladder,
+    ssmDisciplineProjection: FULL_PROFILE_PATCH.ssmDisciplineProjection,
+    parentTagProperty: FULL_PROFILE_PATCH.parentTagProperty,
   };
+  /** The same sections as the profile carries them once the merge has run. */
+  const asProfileSections = (draft) => ({
+    hierarchy: draft.hierarchy,
+    roleGraph: draft.roleGraph,
+    ladder: draft.ladder,
+    ssmDisciplineProjection: draft.ssmDisciplineProjection,
+    parentTagProperty: draft.parentTagProperty,
+  });
   state.projectConfigs = { [projectPathHere]: legacyConfig };
   writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
 
@@ -1268,16 +1318,19 @@ test('a config left in the app-state file is copied into the project once', () =
   try {
     const { notice } = first.open(projectPathHere);
     assert.equal(notice.adoptedAppStateConfig, true, 'the copy is reported, not silent');
+    // Not merged into a stored revision yet: this project never picked an
+    // equipment tag property, so there is no publishable profile to write the
+    // sections into. They are live in the draft and the rows stay where they
+    // are, to be moved on the open after somebody completes screen 3 — deferring
+    // is the honest answer, and destroying them would not be.
+    assert.equal(notice.mergedLegacyConfig, false);
     // The legacy entry predates EXTO template capture, the derived attribute
     // registry (P0-7) and the assignment rules (P0-8), so it carries no key for
     // any of them. An absent key means "none captured, none defined", and the
     // schema's defaults are what say so — an older entry must still be adoptable.
-    assert.deepEqual(first.config(), {
-      ...legacyConfig,
-      extoTemplate: null,
-      derivedAttributes: [],
-      sourceAssignmentRules: [],
-    });
+    assert.deepEqual(first.config(), { extoTemplate: null }, 'only the project’s own layout');
+    // The sections themselves went where they belong: into the profile.
+    assert.deepEqual(asProfileSections(first.draftState().draft), legacyConfig);
   } finally {
     first.close();
   }
@@ -1292,18 +1345,179 @@ test('a config left in the app-state file is copied into the project once', () =
   try {
     const { notice } = second.open(projectPathHere);
     assert.equal(notice.adoptedAppStateConfig, false, 'there is nothing left to adopt');
+    assert.equal(notice.mergedLegacyConfig, false, 'and nothing left to merge either');
     assert.deepEqual(
-      second.config(),
-      {
-        ...legacyConfig,
-        extoTemplate: null,
-        derivedAttributes: [],
-        sourceAssignmentRules: [],
-      },
+      asProfileSections(second.draftState().draft),
+      legacyConfig,
       'and the project answers on its own now',
     );
   } finally {
     second.close();
+  }
+});
+
+/**
+ * The config→profile move, on a project that has a profile to move them into.
+ *
+ * A project written before SiteProfileV2 keeps the hierarchy, the role graph,
+ * the ladder, the projection and the parent-tag property in its `config` table.
+ * Opening it once moves them into a NEW profile revision — a revision, so the
+ * one the last compile ran against is untouched — and only then clears the rows.
+ */
+test('a pre-v2 project moves its config sections into a new profile revision', () => {
+  const projectPathHere = join(workDir, 'PreV2.matchline');
+  const userData = join(workDir, 'prev2-userdata');
+
+  const creator = createProjectService({ userDataDir: userData, appVersion: '0.6.0' });
+  try {
+    creator.create(projectPathHere, 'Pre V2');
+    // A publishable profile, saved the way a 0.8.1 build would have.
+    creator.updateDraft({ propertyMappings: PROPERTY_MAPPINGS, tagAnatomy: DRAGON_ANATOMY });
+    creator.saveProfile('as 0.8.1 wrote it');
+  } finally {
+    creator.close();
+  }
+
+  // The config table as that build left it: the five sections beside the profile.
+  const statePath = join(userData, 'app-state.json');
+  const state = JSON.parse(readFileSync(statePath, 'utf8'));
+  state.projectConfigs = {
+    [projectPathHere]: {
+      hierarchy: FULL_PROFILE_PATCH.hierarchy,
+      roleGraph: FULL_PROFILE_PATCH.roleGraph,
+      ladder: FULL_PROFILE_PATCH.ladder,
+      ssmDisciplineProjection: FULL_PROFILE_PATCH.ssmDisciplineProjection,
+      parentTagProperty: FULL_PROFILE_PATCH.parentTagProperty,
+    },
+  };
+  writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+
+  const opener = createProjectService({ userDataDir: userData, appVersion: '0.6.0' });
+  let revisionAfterMerge = null;
+  try {
+    const { notice, project } = opener.open(projectPathHere);
+    assert.equal(notice.mergedLegacyConfig, true, 'the move is reported, not silent');
+    const { draft } = opener.draftState();
+    assert.deepEqual(draft.hierarchy, FULL_PROFILE_PATCH.hierarchy);
+    assert.deepEqual(draft.ladder, FULL_PROFILE_PATCH.ladder);
+    assert.deepEqual(draft.parentTagProperty, FULL_PROFILE_PATCH.parentTagProperty);
+    assert.deepEqual(
+      draft.propertyMappings.equipmentTag,
+      PROPERTY_MAPPINGS.equipmentTag,
+      'and the profile it merged into is still the profile',
+    );
+    revisionAfterMerge = project.savedRevision;
+    assert.equal(revisionAfterMerge, 2, 'a new revision — the first one is untouched');
+    // Only the project's own configuration is left in the table.
+    assert.deepEqual(opener.config(), { extoTemplate: null });
+  } finally {
+    opener.close();
+  }
+
+  // Once is once: reopening finds nothing left to move and writes no revision.
+  const again = createProjectService({ userDataDir: userData, appVersion: '0.6.0' });
+  try {
+    const { notice, project } = again.open(projectPathHere);
+    assert.equal(notice.mergedLegacyConfig, false);
+    assert.equal(project.savedRevision, revisionAfterMerge, 'no second revision was written');
+    assert.deepEqual(again.draftState().draft.hierarchy, FULL_PROFILE_PATCH.hierarchy);
+  } finally {
+    again.close();
+  }
+});
+
+/**
+ * The other half of the same migration: a package a 0.8.1 build exported.
+ *
+ * "v1 imports migrate, never refused" (RELEASE-1.0-PLAN). Written here as bytes
+ * rather than produced by an API, because the shape being tested is one no
+ * current code path can still write — which is exactly why it has to be pinned.
+ */
+test('a v1 profile package written by an older build imports and migrates', () => {
+  const packagePath = join(workDir, 'legacy.matchline-profile.json');
+  writeFileSync(
+    packagePath,
+    `${JSON.stringify(
+      {
+        formatVersion: 1,
+        exportedAt: '2026-08-01T09:00:00.000Z',
+        appVersion: '0.8.1',
+        draft: {
+          profileId: 'legacy-site',
+          name: 'Legacy Site',
+          version: 3,
+          propertyMappings: {
+            equipmentTag: { category: 'Dragon Data', name: 'Tag' },
+            description: null,
+            equipmentType: null,
+            building: { category: 'Dragon Data', name: 'Building' },
+            nativeDiscipline: null,
+          },
+          assetFilters: {
+            includedClasses: [],
+            excludedClasses: [],
+            requireTagProperty: true,
+            acceptedTagPatterns: [],
+            selectionSetNames: [],
+            includedSourceModelFiles: [],
+            collapseComponents: false,
+            separatelyCommissionableClasses: [],
+          },
+          tagAnatomy: {
+            separators: ['-'],
+            ignoredSuffixes: [],
+            segments: [{ segment: 'role', extractor: { kind: 'alphaPrefix', token: 0 } }],
+            familyKeyTemplate: '{system}-{token:1}-{token:2}',
+            localFamilyTemplate: '',
+          },
+          systemResolver: {
+            keyChain: [{ kind: 'tag-segment', segment: 'system' }],
+            descriptionChain: [],
+            normalization: [],
+            conflictPolicy: 'review',
+            labelTemplate: '',
+          },
+        },
+        config: {
+          hierarchy: FULL_PROFILE_PATCH.hierarchy,
+          roleGraph: FULL_PROFILE_PATCH.roleGraph,
+          ladder: FULL_PROFILE_PATCH.ladder,
+          ssmDisciplineProjection: FULL_PROFILE_PATCH.ssmDisciplineProjection,
+          parentTagProperty: FULL_PROFILE_PATCH.parentTagProperty,
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  );
+
+  const service = newService();
+  try {
+    service.create(join(workDir, 'ImportsV1.matchline'), 'Imports V1');
+    const { draft } = service.importProfilePackage(packagePath);
+
+    // The draft's own four sections.
+    assert.deepEqual(draft.propertyMappings.equipmentTag, {
+      category: 'Dragon Data',
+      name: 'Tag',
+    });
+    assert.equal(draft.tagAnatomy.familyKeyTemplate, '{system}-{token:1}-{token:2}');
+    // And the five that were in the config half, now sections of one profile.
+    assert.deepEqual(draft.hierarchy, FULL_PROFILE_PATCH.hierarchy);
+    assert.deepEqual(draft.roleGraph, FULL_PROFILE_PATCH.roleGraph);
+    assert.deepEqual(draft.ladder, FULL_PROFILE_PATCH.ladder);
+    assert.deepEqual(draft.ssmDisciplineProjection, FULL_PROFILE_PATCH.ssmDisciplineProjection);
+    assert.deepEqual(draft.parentTagProperty, FULL_PROFILE_PATCH.parentTagProperty);
+    // Sections a v1 package could not carry are present and empty, not missing.
+    assert.deepEqual(draft.sourceAssignments, []);
+    assert.deepEqual(draft.profileTestExamples, []);
+    assert.equal(draft.stableIdProperty, null);
+
+    // And it is publishable, which is the point of migrating rather than refusing.
+    assert.ok(service.saveProfile('imported from a v1 package').revision > 0);
+  } finally {
+    service.close();
   }
 });
 

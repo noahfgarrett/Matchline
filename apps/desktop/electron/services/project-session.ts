@@ -14,7 +14,7 @@ import {
   type ConnectivityWorkbookInput,
   type MelWorkbookInput,
 } from '@matchline/compiler';
-import type { ManualRelationshipOverride, SiteProfile } from '@matchline/domain';
+import type { ManualRelationshipOverride, SiteProfileV2 } from '@matchline/domain';
 import { validateLearnedRuleSet, type LearnedRuleSet } from '@matchline/learned-rules';
 import type { GeneratedMelAsset } from '@matchline/mel-export';
 import {
@@ -124,11 +124,19 @@ import { buildAnatomyPreview, buildAssetPreview, buildResolverPreview } from './
 import {
   applyConfigPatch,
   attributeChoices,
+  clearLegacyConfigSections,
   defaultProjectConfig,
+  readLegacyProjectConfig,
   readProjectConfig,
+  writeLegacyProjectConfig,
   writeProjectConfig,
 } from './project-config.js';
-import { describeSections, readPackage, writePackage } from './profile-package.js';
+import {
+  describeSections,
+  mergeLegacyConfig,
+  readPackage,
+  writePackage,
+} from './profile-package.js';
 import { catalogPage, type PropertyPageRequest } from './property-page.js';
 import {
   digestFile,
@@ -549,7 +557,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
   }
 
   /**
-   * The screens 6-7 sections for a project that is being opened.
+   * The project's own configuration for a project that is being opened.
    *
    * Three cases, in order: the project file says what it is configured to; an
    * older build left the answer in this installation's state file, in which
@@ -559,6 +567,10 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
    * The copy is deliberately not attempted for a project being *created*: a new
    * file at a path some deleted project once used would silently inherit its
    * configuration, which is a surprise nobody asked for.
+   *
+   * Only the EXTO template is left in this table. The sections that used to
+   * share it are profile material and are moved by {@link mergeLegacyConfig}
+   * below, the first time a pre-SiteProfileV2 project is opened.
    */
   function adoptConfig(
     store: ProjectStore,
@@ -578,21 +590,80 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     if (legacy === undefined) {
       return { config: defaultProjectConfig(), adopted: false };
     }
-    writeProjectConfig(store, legacy);
-    return { config: legacy, adopted: true };
+    // Written back verbatim, sections and all: the merge below is what moves
+    // the profile material out of this table, and running it through the one
+    // migration is what keeps a state-file project and a v6 project from taking
+    // two different routes into the profile.
+    writeLegacyProjectConfig(store, legacy);
+    return { config: { extoTemplate: legacy.extoTemplate }, adopted: true };
   }
 
-  function adopt(store: ProjectStore, projectPath: string, config: WireProjectConfig): Session {
+  /**
+   * Moves a pre-SiteProfileV2 project's `config` sections into its profile.
+   *
+   * Runs at most once per project, on open, and only when there is something to
+   * move: the `config` table still holds a `hierarchy` row. The flow is
+   * deliberately in this order, and nothing about it is optional --
+   *
+   * 1. read the sections out of `config`;
+   * 2. join them onto the draft the stored profile rehydrated to;
+   * 3. save that as a NEW profile revision, with a note that says what happened;
+   * 4. only then delete the rows that moved.
+   *
+   * A new revision rather than an edit, because a profile is republished and
+   * never edited in place -- the revision the last compile ran against stays
+   * exactly as it was, and the merge is a visible line in the profile history
+   * rather than a silent rewrite. The rows are removed last so that a crash
+   * between steps leaves the decisions in the place this function will look
+   * again; a value in two places is a value that can disagree with itself, and
+   * a value in no place is a decision destroyed.
+   */
+  function mergeLegacyConfigSections(
+    store: ProjectStore,
+    draft: WireDraftProfile,
+  ): { draft: WireDraftProfile; revision: number | null; merged: boolean } {
+    const legacy = readLegacyProjectConfig(store);
+    if (legacy === null) {
+      return { draft, revision: null, merged: false };
+    }
+
+    const merged = mergeLegacyConfig(draft, legacy);
+    let revision: number;
+    try {
+      revision = store.saveProfile(
+        toSiteProfile(merged),
+        'Site Profile v2: the hierarchy, relationships and rules this project kept in its ' +
+          'configuration are now sections of the profile itself.',
+      );
+    } catch {
+      // The merged profile is not publishable -- most often because this
+      // project never picked an equipment tag property, so there is no valid
+      // profile to write at all. The sections stay exactly where they are and
+      // the wizard opens on them; the merge is retried on the next open, once
+      // the draft is complete enough to save.
+      return { draft: merged, revision: null, merged: false };
+    }
+    clearLegacyConfigSections(store);
+    return { draft: merged, revision, merged: true };
+  }
+
+  function adopt(
+    store: ProjectStore,
+    projectPath: string,
+    config: WireProjectConfig,
+  ): { session: Session; mergedLegacyConfig: boolean } {
     const stored = store.getProfile();
+    const rehydrated =
+      stored === undefined
+        ? emptyDraft(store.meta().projectName)
+        : fromSiteProfile(stored.profile);
+    const moved = mergeLegacyConfigSections(store, rehydrated);
     const active: Session = {
       store,
       projectPath,
-      draft:
-        stored === undefined
-          ? emptyDraft(store.meta().projectName)
-          : fromSiteProfile(stored.profile),
+      draft: moved.draft,
       config,
-      savedRevision: stored?.revision ?? null,
+      savedRevision: moved.revision ?? stored?.revision ?? null,
       details: new Map<string, SourceDetail>(),
       models: new Map<string, ModelState>(),
       melRows: [],
@@ -601,7 +672,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       view: null,
       compile: { state: 'never-run' },
     };
-    return active;
+    return { session: active, mergedLegacyConfig: moved.merged };
   }
 
   /**
@@ -1354,7 +1425,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     const startedAtMs = Date.now();
     const startedAt = new Date(startedAtMs).toISOString();
 
-    let profile: SiteProfile;
+    let profile: SiteProfileV2;
     let profileRevision: number;
     try {
       profile = toSiteProfile(active.draft);
@@ -1386,7 +1457,6 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       project = runCompile({
         sources: compileSources(active),
         profile,
-        config: active.config,
         connectivityWorkbooks: connectivityInputs(active),
         melWorkbook: melInput(active),
         learnedRules: storedNestingRules(active),
@@ -1402,7 +1472,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
 
     const finishedAtMs = Date.now();
     const finishedAt = new Date(finishedAtMs).toISOString();
-    const view = createCompileView(project, active.config);
+    const view = createCompileView(project, active.draft.hierarchy);
 
     // Keyed by `sourceId`, which is unique by construction — two sources of one
     // basename used to collapse into a single entry here, recording one hash
@@ -1471,7 +1541,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       } catch (error: unknown) {
         throw new Error(`Matchline could not create that project: ${messageOf(error)}`);
       }
-      const active = adopt(store, projectPath, defaultProjectConfig());
+      const { session: active } = adopt(store, projectPath, defaultProjectConfig());
       session = active;
       rememberOpened(active);
       return summarize(active);
@@ -1492,14 +1562,18 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         throw new Error(`Matchline could not open that project: ${messageOf(error)}`);
       }
       const { config, adopted } = adoptConfig(store, projectPath);
-      const active = adopt(store, projectPath, config);
+      const { session: active, mergedLegacyConfig } = adopt(store, projectPath, config);
       session = active;
       rehydrateSources(active);
       rememberOpened(active);
       return {
         outcome: 'opened',
         project: summarize(active),
-        notice: { migration: store.migration, adoptedAppStateConfig: adopted },
+        notice: {
+          migration: store.migration,
+          adoptedAppStateConfig: adopted,
+          mergedLegacyConfig,
+        },
       };
     },
 
@@ -1712,7 +1786,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         );
       }
 
-      let profile: SiteProfile;
+      let profile: SiteProfileV2;
       try {
         profile = toSiteProfile(active.draft);
       } catch (error: unknown) {
@@ -1795,7 +1869,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       // attribute unreachable.
       return attributeChoices(
         active === null ? null : distinctAttributeValues(active),
-        active === null ? [] : active.config.derivedAttributes,
+        active === null ? [] : active.draft.derivedAttributes,
       );
     },
 
@@ -2116,7 +2190,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
 
     profileSections(): readonly WireProfileSection[] {
       const active = requireSession();
-      return describeSections(active.draft, active.config);
+      return describeSections(active.draft);
     },
 
     exportProfilePackage(filePath: string): WireExportResult {
@@ -2135,13 +2209,17 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       config: WireProjectConfig;
     } {
       const active = requireSession();
+      // A v1 package is migrated on the way in rather than refused; `readPackage`
+      // is where that happens, so nothing below has two shapes to handle.
       const imported = readPackage(filePath);
       // The project keeps its own identity: a package is a set of rules, not a
-      // rename. Everything else is adopted whole.
-      const draft = { ...imported.draft, profileId: active.draft.profileId, name: active.draft.name };
-      writeProjectConfig(active.store, imported.config);
-      active.draft = draft;
-      active.config = imported.config;
+      // rename. Everything else is adopted whole. The project's own captured
+      // EXTO template is untouched — a package carries none, by design.
+      active.draft = {
+        ...imported.profile,
+        profileId: active.draft.profileId,
+        name: active.draft.name,
+      };
       // A wholesale replacement of the draft, so the stored revision is no
       // longer what is in memory (see Session.savedRevision).
       active.savedRevision = null;

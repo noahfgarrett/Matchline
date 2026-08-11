@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type JSX, type ReactNode } from 'react';
 
 import type {
+  WireDraftPatch,
   WireDisciplineRewrite,
   WireLadderSource,
   WireLearnedGrade,
@@ -52,8 +53,6 @@ export function Screen7Relationships({
   const [learned, setLearned] = useState<readonly WireLearnedSummary[]>([]);
   const [training, setTraining] = useState<WireLearnedRuleKind | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const config = context.config;
 
   const refreshLearned = useCallback(async (): Promise<void> => {
     const data = await call(window.matchline.learned.list());
@@ -128,10 +127,10 @@ export function Screen7Relationships({
         description="Roles come from the tag anatomy you taught on screen 4. Rules are one-way: MAH parents PLC does not let a PLC parent a MAH."
       >
         <RoleGraphEditor
-          rules={config.roleGraph.rules}
+          rules={context.draft.roleGraph.rules}
           roles={roles}
           onChange={(rules): void => {
-            void context.updateConfig({ roleGraph: { rules: [...rules] } });
+            void context.update((): WireDraftPatch => ({ roleGraph: { rules: [...rules] } }));
           }}
         />
       </Panel>
@@ -141,9 +140,9 @@ export function Screen7Relationships({
         description="Strongest evidence at the top. Drag to reorder; clear a rung to switch it off entirely."
       >
         <LadderEditor
-          tiers={config.ladder.tiers}
+          tiers={context.draft.ladder.tiers}
           onChange={(tiers): void => {
-            void context.updateConfig({ ladder: { tiers: [...tiers] } });
+            void context.update((): WireDraftPatch => ({ ladder: { tiers: [...tiers] } }));
           }}
         />
       </Panel>
@@ -158,10 +157,10 @@ export function Screen7Relationships({
           example="I&C becomes Mechanical, so a PLC files under the Mechanical Dry branch it is commissioned with"
         >
           <ProjectionEditor
-            rewrites={config.ssmDisciplineProjection}
+            rewrites={context.draft.ssmDisciplineProjection}
             disciplines={disciplines}
             onChange={(rewrites): void => {
-              void context.updateConfig({ ssmDisciplineProjection: [...rewrites] });
+              void context.update((): WireDraftPatch => ({ ssmDisciplineProjection: [...rewrites] }));
             }}
           />
         </Field>
@@ -174,10 +173,10 @@ export function Screen7Relationships({
           <PropertyPicker
             id="parent-tag-property"
             properties={context.properties}
-            value={config.parentTagProperty}
+            value={context.draft.parentTagProperty}
             noneLabel="Not mapped — infer parentage instead"
             onChange={(ref): void => {
-              void context.updateConfig({ parentTagProperty: ref });
+              void context.update((): WireDraftPatch => ({ parentTagProperty: ref }));
             }}
           />
         </Field>

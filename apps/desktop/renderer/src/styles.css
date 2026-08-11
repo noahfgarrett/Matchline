@@ -1608,3 +1608,17 @@ code {
     position: static;
   }
 }
+
+/* P0-6's second and third questions, folded away until a level answers them
+   differently from its grouping key. A disclosure rather than two more selects
+   on every card: the collapsed case is the one almost every level is in. */
+.level-card__advanced > summary {
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  padding: var(--space-1) 0;
+}
+
+.level-card__advanced[open] > summary {
+  color: var(--text-muted);
+}

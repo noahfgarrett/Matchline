@@ -31,6 +31,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
+import { migrateSiteProfileV1 } from '@matchline/domain';
 import { openExtractionCache } from '@matchline/model-schema';
 import {
   DRAGON_SOURCE_MODEL_IDS,
@@ -124,18 +125,30 @@ export const HIERARCHY = {
   ],
 };
 
-/** One Site Profile. `overrides` replaces whole sections, never merges them. */
+/**
+ * One `SiteProfileV2`. `overrides` replaces whole sections, never merges them.
+ *
+ * Built through `migrateSiteProfileV1` rather than written out longhand, so this
+ * fixture exercises the same lift every stored profile goes through and cannot
+ * drift into a shape only the tests can produce. The two sections a Dragon
+ * compile needs beyond the V1 half -- the level stack and the role graph -- are
+ * supplied as the migration's `sections`, which is exactly how the desktop hands
+ * over the rows its config table used to hold.
+ */
 export function siteProfile(overrides = {}) {
-  return {
-    profileId: 'dragon',
-    name: 'Dragon',
-    version: 1,
-    propertyMappings: PROPERTY_MAPPINGS,
-    assetFilters: ASSET_FILTERS,
-    tagAnatomy: DRAGON_ANATOMY,
-    systemResolver: SYSTEM_RESOLVER,
-    ...overrides,
-  };
+  const base = migrateSiteProfileV1(
+    {
+      profileId: 'dragon',
+      name: 'Dragon',
+      version: 1,
+      propertyMappings: PROPERTY_MAPPINGS,
+      assetFilters: ASSET_FILTERS,
+      tagAnatomy: DRAGON_ANATOMY,
+      systemResolver: SYSTEM_RESOLVER,
+    },
+    { hierarchy: HIERARCHY, roleGraph: ROLE_GRAPH },
+  );
+  return { ...base, ...overrides };
 }
 
 /* ------------------------------------------------------------------ MEL --- */
@@ -686,13 +699,17 @@ export function oneSource(cache) {
   return [{ sourceId: 'dragon', cache }];
 }
 
-/** The full input: the universe, profile, hierarchy, both workbooks, the role graph. */
+/**
+ * The full input: the universe, the whole profile, both workbooks.
+ *
+ * The hierarchy and the role graph are no longer arguments of their own -- they
+ * are sections of the profile, and `siteProfile()` already carries them. A test
+ * that wants different ones passes `profile: siteProfile({ hierarchy })`.
+ */
 export function fullInput(cache, overrides = {}) {
   return {
     sources: oneSource(cache),
     profile: siteProfile(),
-    hierarchy: HIERARCHY,
-    roleGraph: ROLE_GRAPH,
     melWorkbook: melWorkbook(),
     connectivityWorkbooks: connectivityWorkbooks(),
     ...overrides,

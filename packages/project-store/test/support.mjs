@@ -14,6 +14,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
+import { migrateSiteProfileV1 } from '@matchline/domain';
+
 /** A clock that advances one second per call from 2026-01-15T09:30:00Z. */
 export function steppingClock(startIso = '2026-01-15T09:30:00.000Z', stepMs = 1000) {
   let tick = 0;
@@ -39,8 +41,11 @@ export function tempDirectory(label) {
   };
 }
 
-/** A valid Dragon Site Profile. */
-export function dragonProfile(overrides = {}) {
+/**
+ * A valid Dragon Site Profile, in the V1 shape every stored project already
+ * holds. `dragonProfileV2` is the same profile as the store now returns it.
+ */
+export function dragonProfileV1(overrides = {}) {
   return {
     profileId: 'dragon',
     name: 'Dragon',
@@ -84,6 +89,16 @@ export function dragonProfile(overrides = {}) {
     },
     ...overrides,
   };
+}
+
+/**
+ * The same profile as one `SiteProfileV2`.
+ *
+ * The store stores V2 and lifts a stored V1 on the way out, so this -- not the
+ * V1 -- is what `getProfile()` returns for either.
+ */
+export function dragonProfile(overrides = {}) {
+  return migrateSiteProfileV1(dragonProfileV1(overrides));
 }
 
 const DRAGON_PROVENANCE = {

@@ -40,6 +40,14 @@ file passes in full:
 3. When the last file is wired in, the two scripts describe the same set;
    replace both with `node --test tests/acceptance-1.0/*.test.mjs` under one
    name and delete the other.
+
+   As of milestone 4 all six staged files are green and the two scripts *do*
+   describe the same set — and they are still kept apart, on purpose. The areas
+   listed under "What is *not* covered here" get their own files as their
+   milestones come up, and each arrives red. One script would make the next
+   staged gate turn `npm test` red the day it is written, which is the exact
+   failure the split exists to prevent. Collapse them when the last area has its
+   file, not when the last *current* file passes.
 4. Update the gate tracker table in `docs/RELEASE-1.0-PLAN.md` in the same
    commit. A gate is closed when a test holds it closed, not when a person
    remembers it.
@@ -57,7 +65,7 @@ required above. Never discard provenance or review items to make tests pass."
 | `manual-parent-boundaries.test.mjs` | P0-4 Manual parents honor boundaries | 9, 10 | 4 — Hierarchy+profile semantics — **green, wired into `npm test`** |
 | `default-hierarchy.test.mjs` | P0-5 Default hierarchy | 11 | 4 — Hierarchy+profile semantics — **green, wired into `npm test`** |
 | `level-key-display.test.mjs` | P0-6 Level key vs display | 8 | 4 — Hierarchy+profile semantics — **green, wired into `npm test`** |
-| `profile-v2.test.mjs` | SiteProfileV2 | 13 (partly) | 4 — Hierarchy+profile semantics |
+| `profile-v2.test.mjs` | SiteProfileV2 | 13 (partly) | 4 — Hierarchy+profile semantics — **green, wired into `npm test`** |
 
 `support.mjs` is not a test file. It holds the Dragon fixtures and the failure
 vocabulary.

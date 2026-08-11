@@ -148,12 +148,19 @@ observations + identity + anatomy + role graph + learned rules
   entry no asset claimed is flagged `disappeared` and never deleted. Plain JSON, because
   the project persists it.
 - **`@matchline/compiler`** — the orchestrator that owns the E1 property-bag seam:
-  extraction cache + spreadsheets + SiteProfile → asset catalog → **identity ledger** →
+  model universe + spreadsheets + **SiteProfileV2** → asset catalog → **identity ledger** →
   subjects (property bags) → system resolution → identity → observations → claims →
   snapshot → outputs. The only package that knows the whole pipeline order. The ledger is
   spliced immediately after the catalog and before any stage keys on an id, so every stage
   below it reads ledger ids; stored manual decisions are re-addressed through the ledger in
   the same place, and one that cannot be becomes an `orphaned-decision` review item.
+  `compileProject` takes the site's whole rule set as ONE value: `SiteProfileV2` carries the
+  mappings and their chains, the filters, the anatomy, the resolver, the derived attribute
+  registry, the hierarchy levels, the role graph, the ladder, the discipline projection, the
+  explicit parent and stable-id properties and identity. What remains a separate input is what
+  belongs to the PROJECT rather than the site — its sources, its workbooks, its people's manual
+  decisions and its ledger. A profile stored before the consolidation is lifted by
+  `migrateSiteProfileV1` (`@matchline/domain`); nothing inside the engine sees a V1.
 
 ## Binding semantics (all stages)
 

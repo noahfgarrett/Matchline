@@ -1,7 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { projectConfigSchema, type WireProjectConfig } from '../../shared/schemas.js';
+import {
+  legacyProjectConfigSchema,
+  type WireLegacyProjectConfig,
+} from '../../shared/schemas.js';
 
 /**
  * The app's own small state file, kept in `app.getPath('userData')`.
@@ -53,7 +56,7 @@ interface AppState {
    * Read-and-remove only. Persisted under the key an older build wrote,
    * `projectConfigs`, and omitted from the file once empty.
    */
-  readonly legacyProjectConfigs: Readonly<Record<string, WireProjectConfig>>;
+  readonly legacyProjectConfigs: Readonly<Record<string, WireLegacyProjectConfig>>;
 }
 
 const STATE_FILE_NAME = 'app-state.json';
@@ -83,7 +86,7 @@ export interface AppStateStore {
    * point — two copies of a configuration is exactly the problem schema v2
    * exists to end.
    */
-  takeLegacyProjectConfig(projectPath: string): WireProjectConfig | undefined;
+  takeLegacyProjectConfig(projectPath: string): WireLegacyProjectConfig | undefined;
 }
 
 /** Reads one entry, returning `null` rather than throwing on anything odd. */
@@ -149,10 +152,10 @@ function parseState(text: string): AppState {
   // read is dropped rather than half-applied, and the project opens on the
   // defaults instead.
   const rawConfigs = record['projectConfigs'];
-  const legacyProjectConfigs: Record<string, WireProjectConfig> = {};
+  const legacyProjectConfigs: Record<string, WireLegacyProjectConfig> = {};
   if (typeof rawConfigs === 'object' && rawConfigs !== null) {
     for (const [projectPath, value] of Object.entries(rawConfigs as Record<string, unknown>)) {
-      const parsed = projectConfigSchema.safeParse(value);
+      const parsed = legacyProjectConfigSchema.safeParse(value);
       if (projectPath.length > 0 && parsed.success) {
         legacyProjectConfigs[projectPath] = parsed.data;
       }
@@ -225,7 +228,7 @@ export function createAppStateStore(userDataDir: string): AppStateStore {
       persist();
     },
 
-    takeLegacyProjectConfig(projectPath: string): WireProjectConfig | undefined {
+    takeLegacyProjectConfig(projectPath: string): WireLegacyProjectConfig | undefined {
       const config = state.legacyProjectConfigs[projectPath];
       if (config === undefined) {
         return undefined;

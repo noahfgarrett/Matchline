@@ -75,8 +75,6 @@ function compileUniverse(what, sources) {
     compileProject({
       sources,
       profile: siteProfile(),
-      hierarchy: HIERARCHY,
-      roleGraph: ROLE_GRAPH,
       melWorkbook: melWorkbook(),
     }),
   );
@@ -110,8 +108,6 @@ test('the split caches partition the federated one exactly', () => {
     compileProject({
       sources: [modelSource('only', 'The only source', 'Dragon.nwd', cache)],
       profile: siteProfile(),
-      hierarchy: HIERARCHY,
-      roleGraph: ROLE_GRAPH,
       melWorkbook: melWorkbook(),
     });
   assert.equal(single(federated.cache).stats.assetCount, 34);

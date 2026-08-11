@@ -3,6 +3,7 @@ import { useCallback, type JSX } from 'react';
 import type {
   WireAssetFilters,
   WireClassCount,
+  WireDraftPatch,
   WireFilterStage,
   WirePropertyMappings,
   WirePropertyRef,
@@ -225,6 +226,28 @@ export function Screen3Assets({ context }: { readonly context: WizardContext }):
               noneLabel="Not mapped — learn it"
               onChange={(ref): void => {
                 setMapping('equipmentClassification', ref);
+              }}
+            />
+          </Field>
+        </Panel>
+
+        <Panel
+          title="The number that follows a piece of equipment"
+          description="Optional, and worth mapping when the site keeps one. It is what lets Matchline recognise the same equipment after somebody corrects its tag, moves it in the model, or issues it in a different document."
+        >
+          <Field
+            label="Site-wide asset number"
+            what="A site-wide asset number that follows equipment between documents — the number a person maintains, not one the authoring tool generated. Matchline trusts it above everything the model says about identity."
+            example="Dragon Data > Asset Number holding REG-000123, still REG-000123 after the tag is corrected"
+            htmlFor="map-stable-id"
+          >
+            <PropertyPicker
+              id="map-stable-id"
+              properties={properties}
+              value={context.draft.stableIdProperty}
+              noneLabel="Not mapped — recognise equipment by the model's own ids"
+              onChange={(ref): void => {
+                void context.update((): WireDraftPatch => ({ stableIdProperty: ref }));
               }}
             />
           </Field>

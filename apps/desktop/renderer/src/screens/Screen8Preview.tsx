@@ -280,7 +280,7 @@ export function Screen8Preview({
         </>
       )}
 
-      {context.config.hierarchy.levels.length === 0 ? (
+      {context.draft.hierarchy.levels.length === 0 ? (
         <Callout tone="warning">
           No hierarchy levels are configured on screen 6, so this compile groups nothing and no
           boundary stops anything nesting.

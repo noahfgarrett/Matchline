@@ -3,7 +3,14 @@ import test, { after, beforeEach } from 'node:test';
 
 import { createProject, deriveSourceId, ProjectStoreError } from '../dist/index.js';
 
-import { digest, dragonProfile, dragonSnapshot, steppingClock, tempDirectory } from './support.mjs';
+import {
+  digest,
+  dragonProfile,
+  dragonProfileV1,
+  dragonSnapshot,
+  steppingClock,
+  tempDirectory,
+} from './support.mjs';
 
 /**
  * Every accessor and mutator: the happy path, and the edge each one is most
@@ -311,6 +318,83 @@ test('a profile that would not read back is never written', () => {
 test('a profile round-trips through canonical JSON unchanged', () => {
   store.saveProfile(dragonProfile());
   assert.deepEqual(store.getProfile().profile, dragonProfile());
+});
+
+test('a stored V1 revision is lifted on the way out, never refused', () => {
+  // A row a 0.8.1 build wrote: no `formatVersion`, and none of the sections
+  // that lived in the config table. It has to stay readable forever, and it has
+  // to come back as the one shape the engine takes (gate 13, no silent loss).
+  const v1 = dragonProfileV1();
+  store.saveProfile(v1);
+  const read = store.getProfile().profile;
+  assert.equal(read.formatVersion, 2);
+  assert.deepEqual(read.propertyMappings, v1.propertyMappings);
+  assert.deepEqual(read.tagAnatomy, v1.tagAnatomy);
+  assert.deepEqual(read.hierarchy, { levels: [] }, 'a V1 profile stated no levels');
+});
+
+test('every V2 section survives the round trip, in the spelling it was written', () => {
+  // The sections that had nowhere to live before the consolidation. Each one is
+  // a decision, and a validator that dropped one would lose it silently.
+  const profile = {
+    ...dragonProfile(),
+    hierarchy: {
+      levels: [
+        {
+          levelId: 'system',
+          displayName: 'System',
+          attributeKey: 'systemKey',
+          displayAttributeKey: 'systemLabel',
+          boundary: true,
+          missingValuePolicy: 'unassigned-group',
+          sort: 'key',
+        },
+      ],
+    },
+    roleGraph: { rules: [{ parentRole: 'MAH', childRole: 'PLC' }] },
+    ladder: { tiers: ['manual', 'flow-family'] },
+    ssmDisciplineProjection: [{ from: 'I&C', to: 'Mechanical' }],
+    parentTagProperty: { category: 'Dragon Data', name: 'Parent Tag' },
+    stableIdProperty: { category: 'Dragon Data', name: 'Asset Number' },
+    derivedAttributes: [
+      {
+        attributeId: 'zone',
+        displayName: 'Zone',
+        resolverChain: [
+          { kind: 'model-property', chain: [{ category: 'Dragon Data', name: 'Zone' }] },
+          { kind: 'manual', assignments: [{ assetId: 'tag:MAH001-10-01', value: 'Z1' }] },
+        ],
+      },
+    ],
+    sourceAssignments: [
+      {
+        scope: 'filename-pattern',
+        match: 'Dragon-*.nwc',
+        assign: { nativeDiscipline: '$1', custom: [{ key: 'area', value: 'North' }] },
+      },
+    ],
+    identityConfig: {
+      tagNormalization: [{ kind: 'uppercase' }],
+      aliases: [{ from: 'MAH-001', to: 'MAH001-10-01' }],
+      fuzzyMaxDistance: 3,
+    },
+    profileLookup: [{ childTag: 'PLC001-10-01', parentTag: 'MAH001-10-01' }],
+    priorSsm: [{ childTag: 'VFD001-10-01', parentTag: 'PLC001-10-01' }],
+    authorityRules: [{ field: 'building', authority: 'model', note: 'the model is the survey' }],
+    profileTestExamples: [
+      { description: 'MAH001-10-01 in D1', expectation: 'roots under Building D1' },
+    ],
+  };
+  store.saveProfile(profile);
+  assert.deepEqual(store.getProfile().profile, profile);
+});
+
+test('a V2 section that is wrong is refused by the field that is wrong', () => {
+  const broken = { ...dragonProfile(), ladder: { tiers: ['manual', 'telepathy'] } };
+  const failure = reason(() => store.saveProfile(broken));
+  assert.equal(failure.kind, 'invalid-profile');
+  assert.equal(failure.field, 'profile.ladder.tiers[1]');
+  assert.equal(store.getProfile(), undefined, 'nothing was published');
 });
 
 test('every mapped role survives the round trip, register fields included', () => {

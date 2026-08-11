@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
+import { migrateSiteProfileV1 } from '@matchline/domain';
 import { openExtractionCache } from '@matchline/model-schema';
 import { writeDragonFixture } from '@matchline/model-schema/fixtures/dragon';
 import { writeWorkbook } from '@matchline/spreadsheet-import';
@@ -173,17 +174,28 @@ export const HIERARCHY = {
   ],
 };
 
+/**
+ * The Dragon site's whole rule set, as one `SiteProfileV2`.
+ *
+ * Built through the published `migrateSiteProfileV1` rather than written out
+ * longhand: that is the lift every stored V1 profile and every imported v1
+ * package takes, so a gate here cannot pass against a profile shape only this
+ * file can construct. `overrides` replaces whole sections, never merges them.
+ */
 export function siteProfile(overrides = {}) {
-  return {
-    profileId: 'dragon',
-    name: 'Dragon',
-    version: 1,
-    propertyMappings: PROPERTY_MAPPINGS,
-    assetFilters: ASSET_FILTERS,
-    tagAnatomy: DRAGON_ANATOMY,
-    systemResolver: SYSTEM_RESOLVER,
-    ...overrides,
-  };
+  const base = migrateSiteProfileV1(
+    {
+      profileId: 'dragon',
+      name: 'Dragon',
+      version: 1,
+      propertyMappings: PROPERTY_MAPPINGS,
+      assetFilters: ASSET_FILTERS,
+      tagAnatomy: DRAGON_ANATOMY,
+      systemResolver: SYSTEM_RESOLVER,
+    },
+    { hierarchy: HIERARCHY, roleGraph: ROLE_GRAPH },
+  );
+  return { ...base, ...overrides };
 }
 
 /** `tag:<canonicalTag>` -- `asset-catalog`'s id for an unduplicated tag. */

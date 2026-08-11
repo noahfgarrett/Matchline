@@ -63,8 +63,6 @@ function baseInput(overrides) {
   return {
     sources: oneSource(handle.cache),
     profile: siteProfile({ systemResolver: MODEL_ONLY_RESOLVER }),
-    hierarchy: HIERARCHY,
-    roleGraph: ROLE_GRAPH,
     melWorkbook: melWorkbook(),
     // The panel really does feed the RIO, so the fold has a physical chain to
     // leave alone and the flow assertion is about a projection that exists.

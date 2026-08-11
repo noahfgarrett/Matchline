@@ -9,7 +9,7 @@ import type {
   ManualRelationshipOverride,
   ResolvedAssetNode,
   ReviewItem,
-  SiteProfile,
+  SiteProfileV2,
 } from '@matchline/domain';
 import { reviewItemSummary } from '@matchline/domain';
 import type { AssetLedger, LedgerEvent } from '@matchline/asset-identity';
@@ -31,22 +31,14 @@ import type {
   WireCompileSummary,
   WireFlowNode,
   WireFlowRoot,
+  WireHierarchyConfig,
   WireLedgerEvent,
-  WireProjectConfig,
   WireReparentPreview,
   WireReviewRow,
   WireTreeNode,
 } from '../../shared/schemas.js';
 
-import {
-  toDerivedAttributes,
-  toDisciplineProjection,
-  toHierarchyConfig,
-  toLadder,
-  toParentTagProperty,
-  toRoleGraph,
-  toSourceAssignmentRules,
-} from './project-config.js';
+
 
 /**
  * Screen 8 and the workspace: one compile, and every paged view over it.
@@ -83,8 +75,8 @@ export interface CompileSource {
 export interface CompileRequest {
   /** Every ready model source, in `sourceId` order. Never empty. */
   readonly sources: readonly CompileSource[];
-  readonly profile: SiteProfile;
-  readonly config: WireProjectConfig;
+  /** The whole site rule set, as one versioned value. */
+  readonly profile: SiteProfileV2;
   readonly connectivityWorkbooks: readonly ConnectivityWorkbookInput[];
   readonly melWorkbook: MelWorkbookInput | null;
   readonly learnedRules: LearnedRuleSet | null;
@@ -106,28 +98,26 @@ export interface CompileRequest {
  * Builds the compiler's input.
  *
  * Assembled key by key rather than with spreads and `??`: under
- * `exactOptionalPropertyTypes` an explicit `roleGraph: undefined` is not the
+ * `exactOptionalPropertyTypes` an explicit `melWorkbook: undefined` is not the
  * same as an absent key, and `CompileProjectInput` means absent — a present
- * `undefined` would be read as "a role graph was supplied" by anything that
+ * `undefined` would be read as "a workbook was supplied" by anything that
  * checks with `in`.
+ *
+ * The site's rule set arrives as ONE value now. The hierarchy, the ladder, the
+ * role graph, the projection and the two explicit properties used to be built
+ * here out of the project's `config`; they are sections of the profile, and
+ * `toSiteProfile` is the one place the wizard's draft becomes one.
  */
 export function buildCompileInput(request: CompileRequest): CompileProjectInput {
   const input: {
     sources: CompileProjectInput['sources'];
-    profile: SiteProfile;
-    hierarchy: CompileProjectInput['hierarchy'];
+    profile: SiteProfileV2;
     includePropertyCatalog: boolean;
-    ladder?: NonNullable<CompileProjectInput['ladder']>;
-    roleGraph?: NonNullable<CompileProjectInput['roleGraph']>;
     connectivityWorkbooks?: ReadonlyArray<ConnectivityWorkbookInput>;
     melWorkbook?: MelWorkbookInput;
     learnedRules?: LearnedRuleSet;
     manualRelationshipOverrides?: ReadonlyArray<ManualRelationshipOverride>;
-    parentTagProperty?: NonNullable<CompileProjectInput['parentTagProperty']>;
-    ssmDisciplineProjection?: NonNullable<CompileProjectInput['ssmDisciplineProjection']>;
     identityLedger?: AssetLedger;
-    derivedAttributes?: NonNullable<CompileProjectInput['derivedAttributes']>;
-    sourceAssignmentRules?: NonNullable<CompileProjectInput['sourceAssignmentRules']>;
   } = {
     // Every ready model source, not the first one: a project is a universe
     // (P0-1). `compileProject` reorders by `sourceId` itself, so registering
@@ -139,20 +129,11 @@ export function buildCompileInput(request: CompileRequest): CompileProjectInput 
       rawFileName: source.rawFileName,
     })),
     profile: request.profile,
-    hierarchy: toHierarchyConfig(request.config),
     // Screen 2 builds its own catalog from the same caches; a compile paying
     // for a second streaming pass per cache would be work nothing reads.
     includePropertyCatalog: false,
   };
 
-  const ladder = toLadder(request.config);
-  if (ladder !== null) {
-    input.ladder = ladder;
-  }
-  const roleGraph = toRoleGraph(request.config);
-  if (roleGraph !== null) {
-    input.roleGraph = roleGraph;
-  }
   if (request.connectivityWorkbooks.length > 0) {
     input.connectivityWorkbooks = [...request.connectivityWorkbooks];
   }
@@ -165,24 +146,8 @@ export function buildCompileInput(request: CompileRequest): CompileProjectInput 
   if (request.manualRelationshipOverrides.length > 0) {
     input.manualRelationshipOverrides = [...request.manualRelationshipOverrides];
   }
-  const parentTagProperty = toParentTagProperty(request.config);
-  if (parentTagProperty !== null) {
-    input.parentTagProperty = parentTagProperty;
-  }
-  const projection = toDisciplineProjection(request.config);
-  if (projection !== null) {
-    input.ssmDisciplineProjection = projection;
-  }
   if (request.previousLedger !== null) {
     input.identityLedger = request.previousLedger;
-  }
-  const derivedAttributes = toDerivedAttributes(request.config);
-  if (derivedAttributes !== null) {
-    input.derivedAttributes = derivedAttributes;
-  }
-  const sourceAssignmentRules = toSourceAssignmentRules(request.config);
-  if (sourceAssignmentRules !== null) {
-    input.sourceAssignmentRules = sourceAssignmentRules;
   }
 
   return input;
@@ -388,19 +353,19 @@ export interface CompileSummaryBase {
 
 export function createCompileView(
   project: CompiledProject,
-  config: WireProjectConfig,
+  hierarchy: WireHierarchyConfig,
 ): CompileView {
   const tags = new Map(project.catalog.assets.map((asset) => [asset.assetId, asset.canonicalTag]));
   const assetById = new Map(project.catalog.assets.map((asset) => [asset.assetId, asset]));
-  const levelName = new Map(config.hierarchy.levels.map((level) => [level.levelId, level.displayName]));
+  const levelName = new Map(hierarchy.levels.map((level) => [level.levelId, level.displayName]));
   const boundaryLevels = new Set(
-    config.hierarchy.levels.filter((level) => level.boundary).map((level) => level.levelId),
+    hierarchy.levels.filter((level) => level.boundary).map((level) => level.levelId),
   );
   // What a boundary compares, which is the key unless the level names another
   // attribute for it (P0-6) — never the display attribute, or a re-worded
   // system would read as a crossing.
   const attributeOfLevel = new Map(
-    config.hierarchy.levels.map((level) => [
+    hierarchy.levels.map((level) => [
       level.levelId,
       level.boundaryAttributeKey ?? level.attributeKey,
     ]),

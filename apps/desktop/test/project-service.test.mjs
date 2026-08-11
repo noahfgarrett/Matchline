@@ -440,7 +440,11 @@ test('reopening restores the draft from the saved revision', () => {
     assert.equal(project.hasModel, true, 'the model was re-found through the sha256 index');
 
     // Written by this build, so there was nothing for opening to fix.
-    assert.deepEqual(notice, { migration: null, adoptedAppStateConfig: false });
+    assert.deepEqual(notice, {
+      migration: null,
+      adoptedAppStateConfig: false,
+      mergedLegacyConfig: false,
+    });
 
     const { draft, savedRevision } = service.draftState();
     assert.equal(savedRevision, 1);

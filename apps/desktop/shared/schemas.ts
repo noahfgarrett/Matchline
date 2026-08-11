@@ -176,14 +176,14 @@ export const systemResolverSchema = z.object({
 export type WireSystemResolver = z.infer<typeof systemResolverSchema>;
 
 /**
- * The whole draft the main process holds while the wizard runs.
+ * The wizard draft as every build before SiteProfileV2 wrote it.
  *
- * Every section is always present. A section counts as *configured* when it
- * carries a decision — a non-null `equipmentTag`, a non-empty `segments`, a
- * non-empty `keyChain` — which is what decides whether it reaches the saved
- * `SiteProfile` at all.
+ * Read-only, and read in exactly one place: the v1 profile package importer.
+ * A v1 package is `{draft, config}` and "v1 imports migrate, never refused"
+ * (RELEASE-1.0-PLAN), so the shape those files were written in has to stay
+ * readable for as long as any site still has one — which is forever.
  */
-export const draftProfileSchema = z.object({
+export const legacyDraftProfileSchema = z.object({
   profileId: z.string().min(1),
   name: z.string().min(1),
   version: z.number().int().positive(),
@@ -192,17 +192,7 @@ export const draftProfileSchema = z.object({
   tagAnatomy: tagAnatomySchema,
   systemResolver: systemResolverSchema,
 });
-export type WireDraftProfile = z.infer<typeof draftProfileSchema>;
-
-/** A partial write from one wizard screen. Absent sections are left alone. */
-export const draftPatchSchema = z.object({
-  name: z.string().min(1).optional(),
-  propertyMappings: propertyMappingsSchema.optional(),
-  assetFilters: assetFiltersSchema.optional(),
-  tagAnatomy: tagAnatomySchema.optional(),
-  systemResolver: systemResolverSchema.optional(),
-});
-export type WireDraftPatch = z.infer<typeof draftPatchSchema>;
+export type WireLegacyDraftProfile = z.infer<typeof legacyDraftProfileSchema>;
 
 /* ------------------------------------------------------------------- project */
 
@@ -245,6 +235,14 @@ export const openNoticeSchema = z.object({
    * app-state file and into the project, which happens at most once per project.
    */
   adoptedAppStateConfig: z.boolean(),
+  /**
+   * True when this open moved the hierarchy, relationships and rules out of the
+   * project's `config` table and into a new profile revision (SiteProfileV2).
+   *
+   * At most once per project, and only for a project written before the
+   * consolidation. The revision it wrote carries a note saying so.
+   */
+  mergedLegacyConfig: z.boolean().default(false),
 });
 export type WireOpenNotice = z.infer<typeof openNoticeSchema>;
 
@@ -864,44 +862,177 @@ export const sourceAssignmentRuleSchema = z.object({
 });
 export type WireSourceAssignmentRule = z.infer<typeof sourceAssignmentRuleSchema>;
 
-export const projectConfigSchema = z.object({
-  hierarchy: hierarchyConfigSchema,
-  roleGraph: roleGraphSchema,
-  ladder: ladderConfigSchema,
-  ssmDisciplineProjection: z.array(disciplineRewriteSchema),
-  /** The model property naming an asset's parent, or `null` when unmapped. */
-  parentTagProperty: propertyRefSchema.nullable(),
-  /**
-   * The captured EXTO layout, or `null` when this project has captured none.
-   *
-   * Defaulted for the same reason the three property mappings above are: a
-   * config written before template capture existed has no key here, and it means
-   * "no template", not "unreadable".
-   */
-  extoTemplate: extoTemplateSchema.nullable().default(null),
-  /**
-   * The site's own attribute registry (P0-7) and assignment rules (P0-8).
-   *
-   * Defaulted to `[]` for the same reason `extoTemplate` is defaulted to `null`:
-   * a config written by a build that predates schema v6 has no row for either
-   * key, and an absent key means "this project defines none", not "this file is
-   * unreadable".
-   */
-  derivedAttributes: z.array(derivedAttributeSchema).default([]),
-  sourceAssignmentRules: z.array(sourceAssignmentRuleSchema).default([]),
-});
-export type WireProjectConfig = z.infer<typeof projectConfigSchema>;
+/* ================================================= identity + carried notes */
 
-/** A partial write from screen 6 or 7, or from the exports view. */
-export const configPatchSchema = z.object({
+/** Mirrors `TagAlias`: an evidence spelling and the canonical tag it means. */
+export const tagAliasSchema = z.object({
+  from: z.string().min(1),
+  to: z.string().min(1),
+});
+export type WireTagAlias = z.infer<typeof tagAliasSchema>;
+
+/**
+ * Mirrors `ProfileIdentityConfig` (P0-9).
+ *
+ * `fuzzyMaxDistance: 0` is the wire spelling of "use the engine's default": a
+ * distance of zero would mean the fuzzy tier can only match identical strings,
+ * which is what the exact tier above it already does.
+ */
+export const identityConfigSchema = z.object({
+  tagNormalization: z.array(normalizationStepSchema),
+  aliases: z.array(tagAliasSchema),
+  fuzzyMaxDistance: z.number().int().nonnegative(),
+});
+export type WireIdentityConfig = z.infer<typeof identityConfigSchema>;
+
+/** Mirrors `ParentPair`: a parent/child pair the site wrote down, as tags. */
+export const parentPairSchema = z.object({
+  childTag: z.string().min(1),
+  parentTag: z.string().min(1),
+});
+export type WireParentPair = z.infer<typeof parentPairSchema>;
+
+/** Mirrors `AuthorityRule`. Carried in the profile; not enforced by the engine. */
+export const authorityRuleSchema = z.object({
+  field: z.string().min(1),
+  authority: z.enum(['model', 'mel', 'manual', 'learned']),
+  note: z.string(),
+});
+export type WireAuthorityRule = z.infer<typeof authorityRuleSchema>;
+
+/** Mirrors `ProfileTestExample`. Carried in the profile; nothing runs these. */
+export const profileTestExampleSchema = z.object({
+  description: z.string().min(1),
+  expectation: z.string().min(1),
+});
+export type WireProfileTestExample = z.infer<typeof profileTestExampleSchema>;
+
+/* ============================================================ the profile */
+
+/**
+ * The whole Site Profile the main process holds while the wizard runs.
+ *
+ * This is `SiteProfileV2` (`@matchline/domain`) with the wizard's "not decided
+ * yet" states spelled out: a `null` where the domain has an absent optional, a
+ * `[]` where it has an absent list, a `''` where it has an absent string. Every
+ * section is always present. A section counts as *configured* when it carries a
+ * decision — a non-null `equipmentTag`, a non-empty `segments`, a non-empty
+ * `keyChain` — which is what decides whether it reaches the published profile.
+ *
+ * The sections below `systemResolver` are the ones that used to live in the
+ * project's `config` table and arrive on `CompileProjectInput` separately. They
+ * are here now because a site's rule set is one document (RELEASE-1.0-PLAN
+ * "SiteProfileV2"); `project-config.ts` keeps only what belongs to the PROJECT.
+ *
+ * Every new section carries a default, because a draft rehydrated from a build
+ * that predates the consolidation has no key for it and an absent key means
+ * "this site configured none" — not "this file is unreadable".
+ */
+export const draftProfileSchema = z.object({
+  profileId: z.string().min(1),
+  name: z.string().min(1),
+  version: z.number().int().positive(),
+
+  propertyMappings: propertyMappingsSchema,
+  sourceAssignments: z.array(sourceAssignmentRuleSchema).default([]),
+  assetFilters: assetFiltersSchema,
+  tagAnatomy: tagAnatomySchema,
+  systemResolver: systemResolverSchema,
+  derivedAttributes: z.array(derivedAttributeSchema).default([]),
+
+  hierarchy: hierarchyConfigSchema.default({ levels: [] }),
+  roleGraph: roleGraphSchema.default({ rules: [] }),
+  ladder: ladderConfigSchema.default({ tiers: [] }),
+  ssmDisciplineProjection: z.array(disciplineRewriteSchema).default([]),
+  /** The model property naming an asset's parent, or `null` when unmapped. */
+  parentTagProperty: propertyRefSchema.nullable().default(null),
+  /** The site-wide asset number identity starts from, or `null` (P0-9). */
+  stableIdProperty: propertyRefSchema.nullable().default(null),
+
+  identityConfig: identityConfigSchema.default({
+    tagNormalization: [],
+    aliases: [],
+    fuzzyMaxDistance: 0,
+  }),
+  profileLookup: z.array(parentPairSchema).default([]),
+  priorSsm: z.array(parentPairSchema).default([]),
+  authorityRules: z.array(authorityRuleSchema).default([]),
+  profileTestExamples: z.array(profileTestExampleSchema).default([]),
+});
+export type WireDraftProfile = z.infer<typeof draftProfileSchema>;
+
+/** A partial write from one wizard screen. Absent sections are left alone. */
+export const draftPatchSchema = z.object({
+  name: z.string().min(1).optional(),
+  propertyMappings: propertyMappingsSchema.optional(),
+  sourceAssignments: z.array(sourceAssignmentRuleSchema).optional(),
+  assetFilters: assetFiltersSchema.optional(),
+  tagAnatomy: tagAnatomySchema.optional(),
+  systemResolver: systemResolverSchema.optional(),
+  derivedAttributes: z.array(derivedAttributeSchema).optional(),
   hierarchy: hierarchyConfigSchema.optional(),
   roleGraph: roleGraphSchema.optional(),
   ladder: ladderConfigSchema.optional(),
   ssmDisciplineProjection: z.array(disciplineRewriteSchema).optional(),
   parentTagProperty: propertyRefSchema.nullable().optional(),
+  stableIdProperty: propertyRefSchema.nullable().optional(),
+  identityConfig: identityConfigSchema.optional(),
+  profileLookup: z.array(parentPairSchema).optional(),
+  priorSsm: z.array(parentPairSchema).optional(),
+  authorityRules: z.array(authorityRuleSchema).optional(),
+  profileTestExamples: z.array(profileTestExampleSchema).optional(),
+});
+export type WireDraftPatch = z.infer<typeof draftPatchSchema>;
+
+/* ------------------------------------------------------- the project config */
+
+/**
+ * The sections a project's `config` table held before SiteProfileV2.
+ *
+ * Read-only, and read in exactly two places: the v1 profile package importer,
+ * and the one-time merge that moves these rows into the profile when a project
+ * written by an older build is opened. Nothing writes this shape any more.
+ */
+export const legacyProjectConfigSchema = z.object({
+  // Every section is defaulted, without exception. A v1 config was widened three
+  // times across schema versions 2, 3 and 6, so which keys a given file carries
+  // depends on which build wrote it — and "v1 imports migrate, never refused"
+  // does not have an exception for a package written before a section existed.
+  // An absent section says nothing, and `mergeLegacyConfig` keeps whatever the
+  // profile already stated rather than replacing it with that silence.
+  hierarchy: hierarchyConfigSchema.default({ levels: [] }),
+  roleGraph: roleGraphSchema.default({ rules: [] }),
+  ladder: ladderConfigSchema.default({ tiers: [] }),
+  ssmDisciplineProjection: z.array(disciplineRewriteSchema).default([]),
+  parentTagProperty: propertyRefSchema.nullable().default(null),
+  extoTemplate: extoTemplateSchema.nullable().default(null),
+  derivedAttributes: z.array(derivedAttributeSchema).default([]),
+  sourceAssignmentRules: z.array(sourceAssignmentRuleSchema).default([]),
+});
+export type WireLegacyProjectConfig = z.infer<typeof legacyProjectConfigSchema>;
+
+/**
+ * What is configuration of the PROJECT rather than of the site.
+ *
+ * One section, and it is the one the plan names: "Project-specific stays outside
+ * (e.g. captured EXTO template)". Everything else this table used to hold is a
+ * decision about how the site works, travels in the profile package, and lives
+ * in {@link draftProfileSchema} now.
+ */
+export const projectConfigSchema = z.object({
+  /**
+   * The captured EXTO layout, or `null` when this project has captured none.
+   *
+   * Defaulted because a config written before template capture existed has no
+   * key here, and that means "no template", not "unreadable".
+   */
+  extoTemplate: extoTemplateSchema.nullable().default(null),
+});
+export type WireProjectConfig = z.infer<typeof projectConfigSchema>;
+
+/** A partial write from the exports view. */
+export const configPatchSchema = z.object({
   extoTemplate: extoTemplateSchema.nullable().optional(),
-  derivedAttributes: z.array(derivedAttributeSchema).optional(),
-  sourceAssignmentRules: z.array(sourceAssignmentRuleSchema).optional(),
 });
 export type WireConfigPatch = z.infer<typeof configPatchSchema>;
 
@@ -1250,20 +1381,39 @@ export type WireTemplateBinding = z.infer<typeof templateBindingSchema>;
 /* ================================================ screen 9: profile packages */
 
 /**
- * The portable profile package (PRODUCT.md §13.3).
+ * The portable profile package, format version 2 (PRODUCT.md §13.3).
  *
- * A superset of the domain `SiteProfile`: the wizard's own draft plus the
- * sections screens 6-7 configure, which the domain type cannot carry yet. Raw
- * model files and spreadsheet rows are never in here — only decisions.
+ * ONE versioned profile, not a `{draft, config}` pair: the whole site rule set
+ * is `SiteProfileV2` now, and a package that still carried two halves would be
+ * carrying the split this milestone removed. Raw model files and spreadsheet
+ * rows are never in here — only decisions — and neither is the project's own
+ * configuration: the captured EXTO template is this project's export layout,
+ * not a rule another site should inherit.
  */
 export const profilePackageSchema = z.object({
+  formatVersion: z.literal(2),
+  exportedAt: z.string().min(1),
+  appVersion: z.string(),
+  profile: draftProfileSchema,
+});
+export type WireProfilePackage = z.infer<typeof profilePackageSchema>;
+
+/**
+ * A package as every build before SiteProfileV2 wrote it.
+ *
+ * "v1 imports migrate, never refused" (RELEASE-1.0-PLAN). This schema is how
+ * the importer recognizes one; `migrateProfilePackage` in
+ * `electron/services/profile-package.ts` is how it joins the two halves back
+ * into one profile. Nothing writes this shape.
+ */
+export const profilePackageV1Schema = z.object({
   formatVersion: z.literal(1),
   exportedAt: z.string().min(1),
   appVersion: z.string(),
-  draft: draftProfileSchema,
-  config: projectConfigSchema,
+  draft: legacyDraftProfileSchema,
+  config: legacyProjectConfigSchema,
 });
-export type WireProfilePackage = z.infer<typeof profilePackageSchema>;
+export type WireProfilePackageV1 = z.infer<typeof profilePackageV1Schema>;
 
 /** What screen 9 prints about the profile as it stands. */
 export const profileSectionSchema = z.object({

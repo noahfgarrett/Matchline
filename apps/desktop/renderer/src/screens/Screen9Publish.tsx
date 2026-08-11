@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState, type JSX } from 'react';
 
-import type { WireProfileSection } from '../../../shared/schemas';
+import type {
+  WireAttributeChoice,
+  WireHierarchyLevel,
+  WireProfileSection,
+} from '../../../shared/schemas';
 import { call, messageOf } from '../api';
 import { Callout, Panel, TableScroll } from '../components/Panel';
 
@@ -20,6 +24,23 @@ import type { WizardContext } from './Wizard';
 
 const PROFILE_FILTERS = [{ name: 'Matchline profile package', extensions: ['json'] }];
 
+/**
+ * What a level's boundary actually compares, in the words the person chose.
+ *
+ * The KEY attribute unless the level names a different one for the comparison
+ * (P0-6) — never the display attribute, or a re-worded system would read as a
+ * crossing. Falls back to the raw attribute key when the Composer's menu has
+ * not loaded a plain-language name for it: an unfamiliar string is a worse
+ * answer than a familiar one, and both are better than a blank.
+ */
+function boundaryComparisonOf(
+  level: WireHierarchyLevel,
+  attributes: readonly WireAttributeChoice[],
+): string {
+  const key = level.boundaryAttributeKey ?? level.attributeKey;
+  return attributes.find((choice) => choice.attributeKey === key)?.label ?? key;
+}
+
 export function Screen9Publish({
   context,
   savedRevision,
@@ -32,6 +53,16 @@ export function Screen9Publish({
   readonly onImported: () => Promise<void>;
 }): JSX.Element {
   const [sections, setSections] = useState<readonly WireProfileSection[]>([]);
+  const [attributes, setAttributes] = useState<readonly WireAttributeChoice[]>([]);
+  /**
+   * Whether the person has confirmed the boundary summary for THIS publish
+   * (P0-5, "Pre-publication confirmation step").
+   *
+   * Reset by every edit to the profile, because a confirmation is about the
+   * boundaries that were on screen when it was given. Confirming, then moving
+   * the System level, then saving would publish something nobody read.
+   */
+  const [boundariesConfirmed, setBoundariesConfirmed] = useState<boolean>(false);
   const [note, setNote] = useState<string>('');
   const [busy, setBusy] = useState<boolean>(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -50,6 +81,32 @@ export function Screen9Publish({
     void refresh();
   }, [refresh, context.draft, context.config]);
 
+  useEffect((): void => {
+    setBoundariesConfirmed(false);
+  }, [context.draft]);
+
+  useEffect((): (() => void) => {
+    let cancelled = false;
+    void call(window.matchline.hierarchy.attributes()).then(
+      (data): void => {
+        if (!cancelled) {
+          setAttributes(data.attributes);
+        }
+      },
+      (): void => {
+        // The summary degrades to raw attribute keys rather than failing: a
+        // person must never be blocked from publishing by a menu that did not
+        // load, and the keys still say which field each boundary compares.
+      },
+    );
+    return (): void => {
+      cancelled = true;
+    };
+  }, []);
+
+  const levels = context.draft.hierarchy.levels;
+  const boundaries = levels.filter((level) => level.boundary);
+
   const configured = sections.filter((section) => section.configured).length;
 
   const save = async (): Promise<void> => {
@@ -58,6 +115,7 @@ export function Screen9Publish({
     setMessage(null);
     try {
       const revision = await onSave(note.trim());
+      setBoundariesConfirmed(false);
       if (revision !== null) {
         setMessage(`Saved as revision ${String(revision)}. Earlier revisions are still there.`);
         setNote('');
@@ -169,6 +227,75 @@ export function Screen9Publish({
       </Panel>
 
       <Panel
+        title="Before you publish: check the boundaries"
+        description="A boundary is the one rule nothing overrides — not a manual parent, not the model's own tree. Read this once, then confirm it."
+      >
+        {levels.length === 0 ? (
+          <Callout tone="warning" data-testid="publish-no-levels">
+            No levels are configured on screen 6. This profile groups nothing and no boundary
+            stops anything nesting.
+          </Callout>
+        ) : (
+          <TableScroll>
+            <table className="table" data-testid="publish-boundary-summary">
+              <thead>
+                <tr>
+                  <th>Level, outermost first</th>
+                  <th>Structural boundary</th>
+                  <th>What it compares</th>
+                </tr>
+              </thead>
+              <tbody>
+                {levels.map((level: WireHierarchyLevel): JSX.Element => (
+                  <tr key={level.levelId} data-testid={`publish-level-${level.levelId}`}>
+                    <td>{level.displayName}</td>
+                    <td>
+                      {level.boundary ? (
+                        <span className="badge">boundary</span>
+                      ) : (
+                        <span className="muted">grouping only</span>
+                      )}
+                    </td>
+                    <td>
+                      {level.boundary ? (
+                        boundaryComparisonOf(level, attributes)
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
+        )}
+
+        <p data-testid="publish-boundary-consequence">
+          {boundaries.length === 0
+            ? 'No level is a structural boundary, so nothing stops equipment nesting under ' +
+              'anything else in this profile.'
+            : `Equipment whose ${boundaries
+                .map((level) => level.displayName)
+                .join(' or ')} differs from its parent's keeps that parent as a listed ` +
+              'dependency instead of nesting under it, and the review queue says which level ' +
+              'broke it.'}
+        </p>
+
+        <label className="toggle">
+          <input
+            id="confirm-boundaries"
+            type="checkbox"
+            data-testid="publish-confirm-boundaries"
+            checked={boundariesConfirmed}
+            onChange={(event): void => {
+              setBoundariesConfirmed(event.target.checked);
+            }}
+          />
+          <span>These boundaries are right</span>
+        </label>
+      </Panel>
+
+      <Panel
         title="Save a revision"
         description="Writes the profile into this project file as a new revision. Old revisions are never deleted."
       >
@@ -188,7 +315,7 @@ export function Screen9Publish({
             className="button button--primary"
             type="button"
             data-testid="publish-save"
-            disabled={busy}
+            disabled={busy || !boundariesConfirmed}
             onClick={(): void => {
               void save();
             }}
@@ -201,6 +328,12 @@ export function Screen9Publish({
             ? 'Nothing saved yet.'
             : `Latest saved revision: ${String(savedRevision)}.`}
         </p>
+        {boundariesConfirmed ? null : (
+          <p className="muted" data-testid="publish-blocked">
+            Confirm the boundaries above first. They are the decisions this profile makes that
+            nothing downstream can undo.
+          </p>
+        )}
       </Panel>
 
       <Panel

@@ -31,7 +31,10 @@ import { compileProject } from '@matchline/compiler';
 // The desktop package's built output. The preset is a desktop constant (it is
 // what a *new project* is opened on), so the acceptance test reads the real
 // one rather than a copy — a copy would keep passing after somebody changed it.
-import { DEFAULT_HIERARCHY_LEVELS } from '../../apps/desktop/dist/electron/services/project-config.js';
+// The preset moved with the sections it belongs to: a level stack is part of
+// the Site Profile since SiteProfileV2, so the constant lives beside the draft
+// profile rather than beside the project's own configuration.
+import { DEFAULT_HIERARCHY_LEVELS } from '../../apps/desktop/dist/electron/services/draft-profile.js';
 
 import {
   idOf,
@@ -61,12 +64,13 @@ before(() => {
   handle = openDragonCache('default-hierarchy', startupFamily);
   project = compileProject({
     sources: oneSource(handle.cache),
-    profile: siteProfile(),
-    // The preset itself, unedited. `WireHierarchyLevel` and
-    // `HierarchyLevelConfig` are the same field set, which is why
-    // `toHierarchyConfig` is a straight copy.
-    hierarchy: { levels: [...DEFAULT_HIERARCHY_LEVELS] },
-    roleGraph: ROLE_GRAPH,
+    // The preset itself, unedited, as the profile's own hierarchy section.
+    // `WireHierarchyLevel` and `HierarchyLevelConfig` are the same field set,
+    // which is why `toHierarchyConfig` is a straight copy.
+    profile: siteProfile({
+      hierarchy: { levels: [...DEFAULT_HIERARCHY_LEVELS] },
+      roleGraph: ROLE_GRAPH,
+    }),
   });
 });
 

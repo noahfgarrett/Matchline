@@ -47,9 +47,7 @@ before(() => {
   handle = openDragonCache('boundary', rioPanel);
   project = compileProject({
     sources: oneSource(handle.cache),
-    profile: siteProfile({ systemResolver: RIO_RESOLVER }),
-    hierarchy: HIERARCHY,
-    roleGraph: RIO_ROLE_GRAPH,
+    profile: siteProfile({ systemResolver: RIO_RESOLVER, roleGraph: RIO_ROLE_GRAPH }),
     melWorkbook: melWorkbook(),
     connectivityWorkbooks: connectivityWorkbooks([['PNL603-10-01', 'RIO603-10-01']]),
   });

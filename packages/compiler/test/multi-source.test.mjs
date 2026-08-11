@@ -45,8 +45,6 @@ function inputFor(sources, overrides = {}) {
   return {
     sources,
     profile: siteProfile(),
-    hierarchy: HIERARCHY,
-    roleGraph: ROLE_GRAPH,
     melWorkbook: melWorkbook(),
     connectivityWorkbooks: connectivityWorkbooks(),
     ...overrides,

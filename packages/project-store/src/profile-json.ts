@@ -8,8 +8,22 @@
  * way in: a profile that cannot be read back is never written.
  */
 import {
+  emptyIdentityConfig,
   MAPPED_PROPERTY_FIELDS,
+  migrateSiteProfileV1,
   type AssetFilterConfig,
+  type AttributeResolverInput,
+  type AuthorityRule,
+  type HierarchyLevelConfig,
+  type HierarchyLevelConfigInput,
+  type LadderSourceKind,
+  type ParentPair,
+  type ProfileIdentityConfig,
+  type ProfileMapEntry,
+  type SiteProfileV2,
+  type SourceAssignmentScope,
+  type SourceAssignmentsInput,
+  type TagAlias,
   type MappedPropertyField,
   type MappedPropertyInput,
   type NormalizationStep,
@@ -419,4 +433,431 @@ export function validateSiteProfile(value: unknown): SiteProfile {
     );
   }
   return profile;
+}
+
+/* ------------------------------------------------------------ SiteProfileV2 */
+
+/**
+ * Reading a `SiteProfileV2` back, and lifting a stored V1 rather than refusing
+ * it (RELEASE-1.0-PLAN "SiteProfileV2", gate 13 "no silent decision loss").
+ *
+ * The version discriminator is the whole read strategy. A row written before
+ * the consolidation carries no `formatVersion`; it is read as a V1 by the
+ * function above and lifted by `migrateSiteProfileV1`, so every revision a
+ * project has ever stored stays readable and nothing has to be rewritten on
+ * upgrade. A row that says `formatVersion: 2` is read section by section here.
+ *
+ * A lifted V1 arrives with no hierarchy, no role graph and no rules -- which is
+ * the truth about it: those sections were never in the profile table. The
+ * desktop's one-time merge is what joins them back on from the `config` table,
+ * and it does that by writing a NEW revision, so the old one stays exactly as
+ * the build that wrote it left it.
+ */
+
+const LADDER_SOURCES = [
+  'manual',
+  'explicit-model',
+  'profile-lookup',
+  'flow-family',
+  'family-role',
+  'learned-description',
+  'prior-ssm',
+  'model-tree',
+] as const satisfies ReadonlyArray<LadderSourceKind>;
+
+const MISSING_VALUE_POLICIES = [
+  'unassigned-group',
+  'review',
+  'provisional-root',
+] as const satisfies ReadonlyArray<HierarchyLevelConfig['missingValuePolicy']>;
+
+const LEVEL_SORTS = ['label', 'key'] as const satisfies ReadonlyArray<
+  HierarchyLevelConfig['sort']
+>;
+
+const ASSIGNMENT_SCOPES = [
+  'source-model',
+  'logical-source',
+  'filename-pattern',
+] as const satisfies ReadonlyArray<SourceAssignmentScope>;
+
+const RESOLVER_KINDS = [
+  'model-property',
+  'tag-segment',
+  'source-assignment',
+  'system-field',
+  'composite',
+  'mel-lookup',
+  'manual',
+] as const satisfies ReadonlyArray<AttributeResolverInput['kind']>;
+
+const SYSTEM_FIELDS = ['systemKey', 'systemDescription', 'systemLabel'] as const;
+
+const AUTHORITIES = ['model', 'mel', 'manual', 'learned'] as const satisfies ReadonlyArray<
+  AuthorityRule['authority']
+>;
+
+function readEach<T>(
+  value: unknown,
+  field: string,
+  read: (item: unknown, at: string) => T,
+): ReadonlyArray<T> {
+  return requireArrayAt(value, field, fail).map((item, index) =>
+    read(item, `${field}[${index}]`),
+  );
+}
+
+/** An absent list section means "this site stated none", never "unreadable". */
+function readOptionalEach<T>(
+  value: unknown,
+  field: string,
+  read: (item: unknown, at: string) => T,
+): ReadonlyArray<T> {
+  return value === undefined ? [] : readEach(value, field, read);
+}
+
+function readPropertyRefOrNull(value: unknown, field: string): PropertyRef | null {
+  return value === undefined || value === null ? null : readPropertyRef(value, field);
+}
+
+/**
+ * One level, in either spelling of its key attribute (P0-6).
+ *
+ * `attributeKey` is what screen 6 and every project file written before 1.0
+ * call it; `keyAttributeKey` is the engine's name. Both are accepted and the
+ * value is returned in the spelling it arrived in, because this is a validator
+ * and rewriting a site's file into a spelling nobody asked for is not its job --
+ * `migrateHierarchyConfig` is what normalizes on the way into the engine.
+ */
+function readHierarchyLevel(value: unknown, field: string): HierarchyLevelConfigInput {
+  const record = requireRecordAt(value, field, fail);
+  const common = {
+    levelId: requireFilledStringAt(record['levelId'], `${field}.levelId`, fail),
+    displayName: requireFilledStringAt(record['displayName'], `${field}.displayName`, fail),
+    boundary: requireBooleanAt(record['boundary'], `${field}.boundary`, fail),
+    missingValuePolicy: requireMemberAt(
+      record['missingValuePolicy'],
+      MISSING_VALUE_POLICIES,
+      `${field}.missingValuePolicy`,
+      fail,
+    ),
+    sort: requireMemberAt(record['sort'], LEVEL_SORTS, `${field}.sort`, fail),
+  };
+  const optional: { displayAttributeKey?: string; boundaryAttributeKey?: string } = {};
+  const display = record['displayAttributeKey'];
+  if (display !== undefined) {
+    optional.displayAttributeKey = requireFilledStringAt(
+      display,
+      `${field}.displayAttributeKey`,
+      fail,
+    );
+  }
+  const boundaryKey = record['boundaryAttributeKey'];
+  if (boundaryKey !== undefined) {
+    optional.boundaryAttributeKey = requireFilledStringAt(
+      boundaryKey,
+      `${field}.boundaryAttributeKey`,
+      fail,
+    );
+  }
+
+  if (record['keyAttributeKey'] !== undefined) {
+    return {
+      ...common,
+      ...optional,
+      keyAttributeKey: requireFilledStringAt(
+        record['keyAttributeKey'],
+        `${field}.keyAttributeKey`,
+        fail,
+      ),
+    };
+  }
+  return {
+    ...common,
+    ...optional,
+    attributeKey: requireFilledStringAt(record['attributeKey'], `${field}.attributeKey`, fail),
+  };
+}
+
+function readAttributeResolver(value: unknown, field: string): AttributeResolverInput {
+  const record = requireRecordAt(value, field, fail);
+  const kind = requireMemberAt(record['kind'], RESOLVER_KINDS, `${field}.kind`, fail);
+  switch (kind) {
+    case 'model-property':
+      return { kind, chain: readPropertyChain(record['chain'], `${field}.chain`) };
+    case 'tag-segment':
+      return {
+        kind,
+        segment: requireMemberAt(record['segment'], SEGMENT_NAMES, `${field}.segment`, fail),
+      };
+    case 'source-assignment':
+      return { kind, key: requireFilledStringAt(record['key'], `${field}.key`, fail) };
+    case 'system-field':
+      return {
+        kind,
+        field: requireMemberAt(record['field'], SYSTEM_FIELDS, `${field}.field`, fail),
+      };
+    case 'composite':
+      return {
+        kind,
+        template: requireFilledStringAt(record['template'], `${field}.template`, fail),
+      };
+    case 'mel-lookup':
+      return {
+        kind,
+        joinBy: requireMemberAt(
+          record['joinBy'],
+          ['equipmentTag'] as const,
+          `${field}.joinBy`,
+          fail,
+        ),
+        returnField: requireFilledStringAt(
+          record['returnField'],
+          `${field}.returnField`,
+          fail,
+        ),
+      };
+    case 'manual':
+      return {
+        kind,
+        assignments: readEach(record['assignments'], `${field}.assignments`, (item, at) => {
+          const entry = requireRecordAt(item, at, fail);
+          return {
+            assetId: requireFilledStringAt(entry['assetId'], `${at}.assetId`, fail),
+            value: requireStringAt(entry['value'], `${at}.value`, fail),
+          };
+        }),
+      };
+    default: {
+      const exhaustive: never = kind;
+      return fail(`${field}.kind`, `unhandled resolver ${String(exhaustive)}`);
+    }
+  }
+}
+
+function readSourceAssignments(value: unknown, field: string): SourceAssignmentsInput {
+  const record = requireRecordAt(value, field, fail);
+  const assignments: {
+    building?: string;
+    nativeDiscipline?: string;
+    custom?: ReadonlyArray<ProfileMapEntry>;
+  } = {};
+  const building = optionalStringAt(record['building'], `${field}.building`, fail);
+  if (building !== undefined) {
+    assignments.building = building;
+  }
+  const discipline = optionalStringAt(
+    record['nativeDiscipline'],
+    `${field}.nativeDiscipline`,
+    fail,
+  );
+  if (discipline !== undefined) {
+    assignments.nativeDiscipline = discipline;
+  }
+  if (record['custom'] !== undefined) {
+    assignments.custom = readEach(record['custom'], `${field}.custom`, (item, at) => {
+      const entry = requireRecordAt(item, at, fail);
+      return {
+        key: requireFilledStringAt(entry['key'], `${at}.key`, fail),
+        value: requireStringAt(entry['value'], `${at}.value`, fail),
+      };
+    });
+  }
+  return assignments;
+}
+
+function readIdentityConfig(value: unknown, field: string): ProfileIdentityConfig {
+  if (value === undefined) {
+    return emptyIdentityConfig();
+  }
+  const record = requireRecordAt(value, field, fail);
+  const config: {
+    tagNormalization: ReadonlyArray<NormalizationStep>;
+    aliases: ReadonlyArray<TagAlias>;
+    fuzzyMaxDistance?: number;
+  } = {
+    tagNormalization: readOptionalEach(
+      record['tagNormalization'],
+      `${field}.tagNormalization`,
+      readNormalizationStep,
+    ),
+    aliases: readOptionalEach(record['aliases'], `${field}.aliases`, (item, at) => {
+      const entry = requireRecordAt(item, at, fail);
+      return {
+        from: requireFilledStringAt(entry['from'], `${at}.from`, fail),
+        to: requireFilledStringAt(entry['to'], `${at}.to`, fail),
+      };
+    }),
+  };
+  const distance = record['fuzzyMaxDistance'];
+  if (distance !== undefined) {
+    config.fuzzyMaxDistance = requireIntegerAt(distance, `${field}.fuzzyMaxDistance`, fail);
+  }
+  return config;
+}
+
+function readParentPair(value: unknown, field: string): ParentPair {
+  const record = requireRecordAt(value, field, fail);
+  return {
+    childTag: requireFilledStringAt(record['childTag'], `${field}.childTag`, fail),
+    parentTag: requireFilledStringAt(record['parentTag'], `${field}.parentTag`, fail),
+  };
+}
+
+/**
+ * Validates an untyped value as a `SiteProfileV2`, lifting a stored V1.
+ *
+ * @throws ProjectStoreError `invalid-profile`, naming the field that failed.
+ */
+export function validateSiteProfileV2(value: unknown): SiteProfileV2 {
+  const record = requireRecordAt(value, 'profile', fail);
+  if (record['formatVersion'] === undefined) {
+    // Everything a project stored before the consolidation. Read as what it is,
+    // then lifted -- never refused, and never rewritten in place.
+    return migrateSiteProfileV1(validateSiteProfile(value));
+  }
+  const formatVersion = requireIntegerAt(record['formatVersion'], 'profile.formatVersion', fail);
+  if (formatVersion !== 2) {
+    fail(
+      'profile.formatVersion',
+      `this build reads site profiles at format version 2, got ${String(formatVersion)}`,
+    );
+  }
+
+  // The V1 half is read by the function that has always read it, so the two
+  // cannot disagree about what a mapping or a filter set is.
+  const v1 = validateSiteProfile(record);
+
+  return migrateSiteProfileV1(v1, {
+    hierarchy: {
+      levels: readOptionalEach(
+        requireRecordAt(record['hierarchy'] ?? {}, 'profile.hierarchy', fail)['levels'],
+        'profile.hierarchy.levels',
+        readHierarchyLevel,
+      ),
+    },
+    roleGraph: {
+      rules: readOptionalEach(
+        requireRecordAt(record['roleGraph'] ?? {}, 'profile.roleGraph', fail)['rules'],
+        'profile.roleGraph.rules',
+        (item, at) => {
+          const rule = requireRecordAt(item, at, fail);
+          return {
+            parentRole: requireFilledStringAt(rule['parentRole'], `${at}.parentRole`, fail),
+            childRole: requireFilledStringAt(rule['childRole'], `${at}.childRole`, fail),
+          };
+        },
+      ),
+    },
+    ladder: {
+      tiers: readOptionalEach(
+        requireRecordAt(record['ladder'] ?? {}, 'profile.ladder', fail)['tiers'],
+        'profile.ladder.tiers',
+        (item, at) => requireMemberAt(item, LADDER_SOURCES, at, fail),
+      ),
+    },
+    ssmDisciplineProjection: readOptionalEach(
+      record['ssmDisciplineProjection'],
+      'profile.ssmDisciplineProjection',
+      (item, at) => {
+        const entry = requireRecordAt(item, at, fail);
+        return {
+          from: requireFilledStringAt(entry['from'], `${at}.from`, fail),
+          to: requireStringAt(entry['to'], `${at}.to`, fail),
+        };
+      },
+    ),
+    parentTagProperty: readPropertyRefOrNull(
+      record['parentTagProperty'],
+      'profile.parentTagProperty',
+    ),
+    stableIdProperty: readPropertyRefOrNull(
+      record['stableIdProperty'],
+      'profile.stableIdProperty',
+    ),
+    derivedAttributes: readOptionalEach(
+      record['derivedAttributes'],
+      'profile.derivedAttributes',
+      (item, at) => {
+        const definition = requireRecordAt(item, at, fail);
+        return {
+          attributeId: requireFilledStringAt(
+            definition['attributeId'],
+            `${at}.attributeId`,
+            fail,
+          ),
+          displayName: requireFilledStringAt(
+            definition['displayName'],
+            `${at}.displayName`,
+            fail,
+          ),
+          resolverChain: readEach(
+            definition['resolverChain'],
+            `${at}.resolverChain`,
+            readAttributeResolver,
+          ),
+        };
+      },
+    ),
+    sourceAssignments: readOptionalEach(
+      record['sourceAssignments'],
+      'profile.sourceAssignments',
+      (item, at) => {
+        const rule = requireRecordAt(item, at, fail);
+        return {
+          scope: requireMemberAt(rule['scope'], ASSIGNMENT_SCOPES, `${at}.scope`, fail),
+          match: requireFilledStringAt(rule['match'], `${at}.match`, fail),
+          assign: readSourceAssignments(rule['assign'], `${at}.assign`),
+        };
+      },
+    ),
+    identityConfig: readIdentityConfig(record['identityConfig'], 'profile.identityConfig'),
+    profileLookup: readOptionalEach(
+      record['profileLookup'],
+      'profile.profileLookup',
+      readParentPair,
+    ),
+    priorSsm: readOptionalEach(record['priorSsm'], 'profile.priorSsm', readParentPair),
+    authorityRules: readOptionalEach(
+      record['authorityRules'],
+      'profile.authorityRules',
+      (item, at) => {
+        const rule = requireRecordAt(item, at, fail);
+        const authority: { field: string; authority: AuthorityRule['authority']; note?: string } =
+          {
+            field: requireFilledStringAt(rule['field'], `${at}.field`, fail),
+            authority: requireMemberAt(
+              rule['authority'],
+              AUTHORITIES,
+              `${at}.authority`,
+              fail,
+            ),
+          };
+        const note = optionalStringAt(rule['note'], `${at}.note`, fail);
+        if (note !== undefined) {
+          authority.note = note;
+        }
+        return authority;
+      },
+    ),
+    profileTestExamples: readOptionalEach(
+      record['profileTestExamples'],
+      'profile.profileTestExamples',
+      (item, at) => {
+        const example = requireRecordAt(item, at, fail);
+        return {
+          description: requireFilledStringAt(
+            example['description'],
+            `${at}.description`,
+            fail,
+          ),
+          expectation: requireFilledStringAt(
+            example['expectation'],
+            `${at}.expectation`,
+            fail,
+          ),
+        };
+      },
+    ),
+  });
 }

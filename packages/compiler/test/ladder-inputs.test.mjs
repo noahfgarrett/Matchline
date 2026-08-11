@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import test, { after, before } from 'node:test';
 
 import { compileProject } from '../dist/index.js';
-import { fullInput, idOf, openDragonCache } from './support.mjs';
+import { fullInput, idOf, openDragonCache, siteProfile } from './support.mjs';
 
 /** A tag with no relationship to anything Dragon spells, fuzzy or otherwise. */
 const UNKNOWN_TAG = 'NOPE-99-99';
@@ -38,10 +38,12 @@ test('a profile-lookup pair reaches the snapshot at tier 3, outranking the flow-
   // system 001, so the boundary fold has no reason to interfere.
   const project = compileProject(
     fullInput(handle.cache, {
-      profileLookup: [
-        { childTag: 'PLC001-10-01', parentTag: 'MAH001-10-02' },
-        { childTag: 'PLC001-20-01', parentTag: UNKNOWN_TAG },
-      ],
+      profile: siteProfile({
+        profileLookup: [
+          { childTag: 'PLC001-10-01', parentTag: 'MAH001-10-02' },
+          { childTag: 'PLC001-20-01', parentTag: UNKNOWN_TAG },
+        ],
+      }),
     }),
   );
 
@@ -151,7 +153,9 @@ test('a prior-SSM pair loses to every rung above it, and places the asset when t
 
   // With connectivity and a role graph, tier 4 answers first and tier 7 is
   // never consulted.
-  const outranked = compileProject(fullInput(handle.cache, { priorSsm: example }));
+  const outranked = compileProject(
+    fullInput(handle.cache, { profile: siteProfile({ priorSsm: example }) }),
+  );
   const contested = outranked.snapshot.nodes.get(idOf('PLC001-10-01'));
   assert.equal(contested.parent.parentAssetId, idOf('MAH001-10-01'));
   assert.equal(contested.parent.ladderSource, 'flow-family');
@@ -166,7 +170,9 @@ test('a prior-SSM pair loses to every rung above it, and places the asset when t
   // Take the role graph away and nothing else has anything to say: no family
   // rung, no learned rules, no lookup. Now the prior SSM is the answer.
   const alone = compileProject(
-    fullInput(handle.cache, { roleGraph: undefined, priorSsm: example }),
+    fullInput(handle.cache, {
+      profile: siteProfile({ roleGraph: { rules: [] }, priorSsm: example }),
+    }),
   );
   assert.equal(alone.stats.structuralClaimCount, 1);
 

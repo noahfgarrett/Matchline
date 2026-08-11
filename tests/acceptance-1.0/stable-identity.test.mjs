@@ -75,8 +75,6 @@ function inputFor(cache, overrides = {}) {
   return {
     sources: oneSource(cache),
     profile: siteProfile(),
-    hierarchy: HIERARCHY,
-    roleGraph: ROLE_GRAPH,
     melWorkbook: melWorkbook(),
     ...overrides,
   };

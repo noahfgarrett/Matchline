@@ -130,6 +130,7 @@ const EXAMPLE_PROJECT = {
 const EXAMPLE_OPEN_NOTICE = {
   migration: null,
   adoptedAppStateConfig: false,
+  mergedLegacyConfig: false,
 } as const;
 
 const EXAMPLE_DRAFT = {
@@ -170,10 +171,28 @@ const EXAMPLE_DRAFT = {
     conflictPolicy: 'review',
     labelTemplate: '',
   },
-} as const;
-
-/** The screens 6-7 sections, at their defaults (DECISIONS.md #1). */
-const EXAMPLE_CONFIG = {
+  // The sections that used to be the project's `config` rows. They are the
+  // profile's since SiteProfileV2, and a site that has defined an attribute of
+  // its own (P0-7) and a rule that reads the discipline out of a file name
+  // (P0-8) is stated here so the round-trip covers a populated section rather
+  // than only an empty one.
+  sourceAssignments: [
+    {
+      scope: 'filename-pattern',
+      match: 'Dragon-*.nwc',
+      assign: { building: '', nativeDiscipline: '$1', custom: [] },
+    },
+  ],
+  derivedAttributes: [
+    {
+      attributeId: 'turnover-package',
+      displayName: 'Turnover Package',
+      resolverChain: [
+        { kind: 'model-property', chain: [{ category: 'Dragon Data', name: 'Package' }] },
+        { kind: 'tag-segment', segment: 'unit' },
+      ],
+    },
+  ],
   hierarchy: {
     levels: [
       {
@@ -201,28 +220,21 @@ const EXAMPLE_CONFIG = {
   },
   ssmDisciplineProjection: [{ from: 'I&C', to: 'Mechanical' }],
   parentTagProperty: null,
+  stableIdProperty: { category: 'Dragon Data', name: 'Asset Number' },
+  identityConfig: {
+    tagNormalization: [{ kind: 'uppercase' }],
+    aliases: [{ from: 'MAH-001', to: 'MAH001-10-01' }],
+    fuzzyMaxDistance: 0,
+  },
+  profileLookup: [],
+  priorSsm: [],
+  authorityRules: [],
+  profileTestExamples: [],
+} as const;
+
+/** What is left of the project's own configuration: its captured EXTO layout. */
+const EXAMPLE_CONFIG = {
   extoTemplate: null,
-  // A site that has defined an attribute of its own (P0-7) and a rule that reads
-  // the discipline out of a file name (P0-8). Both are what the config table
-  // gained in schema v6, and both are stated here so the round-trip test covers
-  // a populated section rather than only an empty one.
-  derivedAttributes: [
-    {
-      attributeId: 'turnover-package',
-      displayName: 'Turnover Package',
-      resolverChain: [
-        { kind: 'model-property', chain: [{ category: 'Dragon Data', name: 'Package' }] },
-        { kind: 'tag-segment', segment: 'unit' },
-      ],
-    },
-  ],
-  sourceAssignmentRules: [
-    {
-      scope: 'filename-pattern',
-      match: 'Dragon-*.nwc',
-      assign: { building: '', nativeDiscipline: '$1', custom: [] },
-    },
-  ],
 } as const;
 
 const EXAMPLE_COMPILE_SUMMARY = {
@@ -802,7 +814,7 @@ export const IPC_CHANNELS = {
     request: z.object({ patch: configPatchSchema }),
     response: z.object({ config: projectConfigSchema }),
     example: {
-      request: { patch: { roleGraph: { rules: [{ parentRole: 'MAH', childRole: 'PLC' }] } } },
+      request: { patch: { extoTemplate: null } },
       response: { config: EXAMPLE_CONFIG },
     },
   },

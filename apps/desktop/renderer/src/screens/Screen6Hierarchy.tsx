@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type JSX, type ReactNode } from 'react';
 
 import type {
+  WireDraftPatch,
   WireAttributeChoice,
   WireHierarchyLevel,
   WireMissingValuePolicy,
@@ -56,7 +57,7 @@ export function Screen6Hierarchy({ context }: { readonly context: WizardContext 
   const [attributes, setAttributes] = useState<readonly WireAttributeChoice[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const levels = context.config.hierarchy.levels;
+  const levels = context.draft.hierarchy.levels;
 
   useEffect((): (() => void) => {
     let cancelled = false;
@@ -79,7 +80,7 @@ export function Screen6Hierarchy({ context }: { readonly context: WizardContext 
 
   const setLevels = useCallback(
     (next: readonly WireHierarchyLevel[]): void => {
-      void context.updateConfig({ hierarchy: { levels: [...next] } });
+      void context.update((): WireDraftPatch => ({ hierarchy: { levels: [...next] } }));
     },
     [context],
   );
@@ -374,6 +375,81 @@ function LevelCard({
           </span>
         </span>
       </label>
+
+      {/* P0-6: three questions, three fields. Collapsed by default, because a
+          level whose words and comparison are its key is the ordinary case and
+          two extra selects on every card would make it look like a decision
+          everybody has to make. */}
+      <details
+        className="level-card__advanced"
+        data-testid={`level-advanced-${level.levelId}`}
+        open={level.displayAttributeKey !== undefined || level.boundaryAttributeKey !== undefined}
+      >
+        <summary>
+          Label and comparison
+          {level.displayAttributeKey === undefined && level.boundaryAttributeKey === undefined
+            ? ' — both follow the grouping key'
+            : ' — set separately'}
+        </summary>
+
+        <label className="inline-field inline-field--wide">
+          <span>Labelled by</span>
+          <select
+            className="control control--select"
+            data-testid={`level-display-${level.levelId}`}
+            value={level.displayAttributeKey ?? ''}
+            onChange={(event): void => {
+              const { displayAttributeKey: _dropped, ...rest } = level;
+              onChange(
+                event.target.value === ''
+                  ? rest
+                  : { ...rest, displayAttributeKey: event.target.value },
+              );
+            }}
+          >
+            <option value="">The grouping key itself</option>
+            {attributes.map((entry: WireAttributeChoice): JSX.Element => (
+              <option key={entry.attributeKey} value={entry.attributeKey}>
+                {entry.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="level-card__what">
+          Only words. Re-typing a description or a system’s name never moves equipment — the
+          grouping key above is what decides where something is filed.
+        </p>
+
+        <label className="inline-field inline-field--wide">
+          <span>Boundary compares</span>
+          <select
+            className="control control--select"
+            data-testid={`level-boundary-attribute-${level.levelId}`}
+            disabled={!level.boundary}
+            value={level.boundaryAttributeKey ?? ''}
+            onChange={(event): void => {
+              const { boundaryAttributeKey: _dropped, ...rest } = level;
+              onChange(
+                event.target.value === ''
+                  ? rest
+                  : { ...rest, boundaryAttributeKey: event.target.value },
+              );
+            }}
+          >
+            <option value="">The grouping key itself</option>
+            {attributes.map((entry: WireAttributeChoice): JSX.Element => (
+              <option key={entry.attributeKey} value={entry.attributeKey}>
+                {entry.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="level-card__what">
+          {level.boundary
+            ? 'What the boundary check reads on both sides of a proposed parent. Leave it on the grouping key unless this site’s structural rule really is a different field.'
+            : 'This level is not a boundary, so nothing is compared here.'}
+        </p>
+      </details>
 
       <label className="inline-field inline-field--wide">
         <span>When an asset has no value here</span>

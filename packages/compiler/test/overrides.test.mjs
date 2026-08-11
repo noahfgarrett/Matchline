@@ -70,7 +70,14 @@ function learnedRules(grade) {
   };
 }
 
-/** The profile the learned runs use: descriptions are the model's own names. */
+/**
+ * The profile the learned runs use: descriptions are the model's own names, and
+ * no role graph is taught.
+ *
+ * The role graph is stated as "no rules" rather than left off, because a
+ * `SiteProfileV2` always carries the section — and this scenario needs the
+ * family rung silent so the learned rung is the only one speaking.
+ */
 function learnedProfile() {
   return siteProfile({
     propertyMappings: {
@@ -80,6 +87,7 @@ function learnedProfile() {
       building: { category: 'Dragon Data', name: 'Building' },
       nativeDiscipline: { category: 'Dragon Data', name: 'Service' },
     },
+    roleGraph: { rules: [] },
   });
 }
 
@@ -88,7 +96,6 @@ function learnedInput(cache, grade) {
   return {
     sources: oneSource(cache),
     profile: learnedProfile(),
-    hierarchy: HIERARCHY,
     learnedRules: learnedRules(grade),
   };
 }
@@ -260,10 +267,12 @@ test('ssmDiscipline is the native discipline unless a projection rewrites it, an
 
   const project = compileProject(
     fullInput(handle.cache, {
-      ssmDisciplineProjection: new Map([
-        ['Chilled Water', 'Mechanical'],
-        ['Hot Water', 'Mechanical'],
-      ]),
+      profile: siteProfile({
+        ssmDisciplineProjection: [
+          { from: 'Chilled Water', to: 'Mechanical' },
+          { from: 'Hot Water', to: 'Mechanical' },
+        ],
+      }),
     }),
   );
 
@@ -290,19 +299,21 @@ test('an ssmDiscipline boundary breaks a nesting the building and system boundar
   // the boundary is unknown on one side and no structural decision is safe.
   const project = compileProject(
     fullInput(handle.cache, {
-      hierarchy: {
-        levels: [
-          ...HIERARCHY.levels,
-          {
-            levelId: 'discipline',
-            displayName: 'Discipline',
-            attributeKey: 'ssmDiscipline',
-            boundary: true,
-            missingValuePolicy: 'review',
-            sort: 'label',
-          },
-        ],
-      },
+      profile: siteProfile({
+        hierarchy: {
+          levels: [
+            ...HIERARCHY.levels,
+            {
+              levelId: 'discipline',
+              displayName: 'Discipline',
+              attributeKey: 'ssmDiscipline',
+              boundary: true,
+              missingValuePolicy: 'review',
+              sort: 'label',
+            },
+          ],
+        },
+      }),
     }),
   );
 

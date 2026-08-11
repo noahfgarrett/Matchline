@@ -36,8 +36,6 @@ test('without a MEL there is no System Catalog, and the resolver still names eve
   const project = compileProject({
     sources: oneSource(handle.cache),
     profile: siteProfile(),
-    hierarchy: HIERARCHY,
-    roleGraph: ROLE_GRAPH,
     connectivityWorkbooks: connectivityWorkbooks(),
   });
 
@@ -78,7 +76,6 @@ test('a tag-segment-only resolver carries the whole system stage on its own', ()
         conflictPolicy: 'review',
       },
     }),
-    hierarchy: HIERARCHY,
   });
 
   const mah = project.systems.bySubject.get(idOf('MAH001-10-01'));
@@ -92,8 +89,6 @@ test('without connectivity the flow projection is empty and the family+role rung
   const project = compileProject({
     sources: oneSource(handle.cache),
     profile: siteProfile(),
-    hierarchy: HIERARCHY,
-    roleGraph: ROLE_GRAPH,
     melWorkbook: melWorkbook(),
   });
 
@@ -121,7 +116,7 @@ test('without connectivity the flow projection is empty and the family+role rung
 });
 
 test('without a role graph nothing nests: connectivity still yields dependencies, and every asset roots', () => {
-  const project = compileProject(fullInput(handle.cache, { roleGraph: undefined }));
+  const project = compileProject(fullInput(handle.cache, { profile: siteProfile({ roleGraph: { rules: [] } }) }));
 
   assert.equal(project.stats.structuralClaimCount, 0);
   // The four flow dependencies survive -- connectivity is always at least a

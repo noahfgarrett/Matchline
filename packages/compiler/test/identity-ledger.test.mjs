@@ -24,6 +24,7 @@ import {
   openDragonCache,
   openDragonSubset,
   oneSource,
+  siteProfile,
 } from './support.mjs';
 
 /** The unit every rename scenario is about. */
@@ -189,11 +190,11 @@ test('a profile-mapped stable id outranks every model tier: moved AND re-tagged 
   });
   try {
     const first = compileProject(
-      fullInput(before.cache, { stableIdProperty: ASSET_NUMBER }),
+      fullInput(before.cache, { profile: siteProfile({ stableIdProperty: ASSET_NUMBER }) }),
     );
     const second = compileProject(
       fullInput(after.cache, {
-        stableIdProperty: ASSET_NUMBER,
+        profile: siteProfile({ stableIdProperty: ASSET_NUMBER }),
         identityLedger: first.identityLedger,
       }),
     );

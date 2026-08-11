@@ -46,16 +46,13 @@ after(() => {
 });
 
 /** A compile of Dragon with a derived registry and whatever else is overridden. */
-function compile(derivedAttributes, overrides = {}) {
+function compile(derivedAttributes, inputOverrides = {}, profileOverrides = {}) {
   return compileProject({
     sources: oneSource(handle.cache),
-    profile: siteProfile(),
-    hierarchy: HIERARCHY,
-    roleGraph: ROLE_GRAPH,
+    profile: siteProfile({ derivedAttributes: derivedAttributes ?? [], ...profileOverrides }),
     melWorkbook: melWorkbook(),
     connectivityWorkbooks: connectivityWorkbooks(),
-    derivedAttributes,
-    ...overrides,
+    ...inputOverrides,
   });
 }
 
@@ -221,7 +218,7 @@ test('a manual rung is a person’s table, and nothing is inferred from it', () 
     {
       attributeId: 'zone',
       displayName: 'Zone',
-      resolverChain: [{ kind: 'manual', assignments: new Map([[MAH, 'Z1']]) }],
+      resolverChain: [{ kind: 'manual', assignments: [{ assetId: MAH, value: 'Z1' }] }],
     },
   ]);
   assert.equal(attributesOf(project, MAH).get('zone'), 'Z1');
@@ -258,7 +255,7 @@ test('a chain nothing answers leaves the attribute off the asset entirely', () =
       displayName: 'Zone',
       resolverChain: [
         { kind: 'model-property', chain: [{ category: 'Dragon Data', name: 'Zone' }] },
-        { kind: 'manual', assignments: new Map() },
+        { kind: 'manual', assignments: [] },
       ],
     },
   ]);
@@ -271,7 +268,7 @@ test('every asset gets a row, even the ones no chain answered for', () => {
     {
       attributeId: 'zone',
       displayName: 'Zone',
-      resolverChain: [{ kind: 'manual', assignments: new Map([[MAH, 'Z1']]) }],
+      resolverChain: [{ kind: 'manual', assignments: [{ assetId: MAH, value: 'Z1' }] }],
     },
   ]);
   assert.equal(project.derivedAttributes.length, project.catalog.assets.length);
@@ -364,17 +361,17 @@ const ZONES = [
     resolverChain: [
       {
         kind: 'manual',
-        assignments: new Map([
-          [MAH, 'Z1'],
-          [PLC, 'Z2'],
-        ]),
+        assignments: [
+          { assetId: MAH, value: 'Z1' },
+          { assetId: PLC, value: 'Z2' },
+        ],
       },
     ],
   },
 ];
 
 test('a level may group by a derived attribute, end to end through compileProject', () => {
-  const project = compile(ZONES, { hierarchy: hierarchyWithDerived(false) });
+  const project = compile(ZONES, {}, { hierarchy: hierarchyWithDerived(false) });
   const d1 = project.tree.levels.find((level) => level.value === 'D1');
   assert.deepEqual(
     d1.levels.map((level) => level.value),
@@ -400,14 +397,14 @@ test('a level may group by a derived attribute, end to end through compileProjec
 test('a boundary on a derived attribute folds a parent away exactly like a built-in', () => {
   // Dragon's connectivity makes `MAH001-10-01 -> PLC001-10-01` a flow-family
   // nesting; the derived boundary is what has to take it apart.
-  const kept = compile(ZONES, { hierarchy: hierarchyWithDerived(false) });
+  const kept = compile(ZONES, {}, { hierarchy: hierarchyWithDerived(false) });
   assert.equal(
     kept.snapshot.nodes.get(PLC).parent.parentAssetId,
     MAH,
     'without the boundary the nesting is there to lose',
   );
 
-  const folded = compile(ZONES, { hierarchy: hierarchyWithDerived(true) });
+  const folded = compile(ZONES, {}, { hierarchy: hierarchyWithDerived(true) });
   const plc = folded.snapshot.nodes.get(PLC);
   assert.equal(plc.parent.status, 'root');
   assert.deepEqual(plc.parent.demotedFrom, { parentAssetId: MAH, boundaryLevelId: 'zone' });
@@ -422,7 +419,7 @@ test('an unresolved derived attribute at a boundary is unknown, never a default'
   // `VFD001-10-01` is fed by the PLC and nobody assigned it a zone. A fallback
   // value here would make it match some other asset that also has none, which is
   // exactly the nesting ENGINE.md binding rule 4 forbids.
-  const folded = compile(ZONES, { hierarchy: hierarchyWithDerived(true) });
+  const folded = compile(ZONES, {}, { hierarchy: hierarchyWithDerived(true) });
   const vfd = folded.snapshot.nodes.get(VFD);
   assert.equal(vfd.parent.status, 'root');
   assert.equal(vfd.parent.parentAssetId, null);
@@ -452,8 +449,8 @@ test('a derived attribute used only for display never moves equipment (P0-6)', (
       },
     ],
   };
-  const withDisplay = compile(ZONES, { hierarchy: grouping });
-  const withoutDisplay = compile(undefined, { hierarchy: grouping });
+  const withDisplay = compile(ZONES, {}, { hierarchy: grouping });
+  const withoutDisplay = compile(undefined, {}, { hierarchy: grouping });
 
   // The words differ; the identity does not.
   const d1 = withDisplay.tree.levels.find((level) => level.value === 'D1');
@@ -477,7 +474,7 @@ test('a derived attribute used only for display never moves equipment (P0-6)', (
 /* ----------------------------------------------------------- determinism */
 
 test('the same project and registry compile to the same derived values twice', () => {
-  const first = compile(ZONES, { hierarchy: hierarchyWithDerived(true) });
-  const second = compile(ZONES, { hierarchy: hierarchyWithDerived(true) });
+  const first = compile(ZONES, {}, { hierarchy: hierarchyWithDerived(true) });
+  const second = compile(ZONES, {}, { hierarchy: hierarchyWithDerived(true) });
   assert.deepEqual(second.derivedAttributes, first.derivedAttributes);
 });

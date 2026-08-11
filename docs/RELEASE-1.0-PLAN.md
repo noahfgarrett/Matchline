@@ -15,15 +15,15 @@ hard gates are mandatory; if code-complete but hardware-blocked, produce
 | 2 | Several NWD/NWC/NWF sources in one project | GREEN for cache sources (engine+store v4+UI, M2); raw-NWD auto-extract is gate 1 (M5) |
 | 3 | Split AND federated model organization | GREEN (M2: equivalence proven engine + desktop service level) |
 | 4 | Duplicate basenames coexist | GREEN (M2: engine + store v4 + session identity rules) |
-| 5 | Global / per-source / ordered-fallback metadata mapping | GREEN engine-side (M4b: `PropertyMappings` fields are chains with per-source overrides, `migratePropertyMappings` lifts every stored profile; `asset-catalog/test/chains.test.mjs` + `compiler/test/mapping-chains.test.mjs`). Chain EDITOR is round C |
-| 6 | Source-level Building/Discipline/custom assignments | GREEN engine-side (M4b: object property > source-model > logical file > filename pattern, provenance names the tier and the rule; `asset-catalog/test/assignment-rules.test.mjs`). Rule EDITOR is round C |
-| 7 | Arbitrary model-derived hierarchy levels | GREEN engine-side (M4b: `DerivedAttributeDefinition` + seven resolver kinds, evaluated after systems and merged into the level attributes; `compiler/test/derived-attributes.test.mjs`; the Composer lists them). Chain EDITOR is round C |
-| 8 | System level: Key = identity/boundary, Label = display | GREEN (M4: HierarchyLevelConfig key/display/boundary + tree key/label + diff category; `level-key-display.test.mjs` wired into `npm test`) |
+| 5 | Global / per-source / ordered-fallback metadata mapping | GREEN engine-side (M4b: `PropertyMappings` fields are chains with per-source overrides, `migratePropertyMappings` lifts every stored profile; `asset-catalog/test/chains.test.mjs` + `compiler/test/mapping-chains.test.mjs`). Chain EDITOR still open: screen 3 picks one property per field and the profile keeps the rest |
+| 6 | Source-level Building/Discipline/custom assignments | GREEN engine-side (M4b: object property > source-model > logical file > filename pattern, provenance names the tier and the rule; `asset-catalog/test/assignment-rules.test.mjs`). Rules are a SiteProfileV2 section (`sourceAssignments`) that travels in the package; rule EDITOR still open |
+| 7 | Arbitrary model-derived hierarchy levels | GREEN engine-side (M4b: `DerivedAttributeDefinition` + seven resolver kinds, evaluated after systems and merged into the level attributes; `compiler/test/derived-attributes.test.mjs`; the Composer lists them). The registry is a SiteProfileV2 section; definition EDITOR still open |
+| 8 | System level: Key = identity/boundary, Label = display | GREEN (M4: HierarchyLevelConfig key/display/boundary + tree key/label + diff category; `level-key-display.test.mjs` wired into `npm test`; M4c: screen 6 exposes all three, the two optional ones behind a disclosure that opens when a level uses them) |
 | 9 | Manual parent cannot violate an enabled boundary | GREEN (M4: the manual bypass is gone — manual wins the ladder and folds; `manual-parent-boundaries.test.mjs` wired into `npm test`) |
 | 10 | Cross-System parents become dependencies | GREEN (M4: holds for every rung, manual included — dependency + provenance + `manual-boundary-demotion` review item) |
 | 11 | Default SSM Discipline level nonstructural | GREEN (M4: `DEFAULT_HIERARCHY_LEVELS` ships boundary=false on SSM Discipline; `default-hierarchy.test.mjs` wired into `npm test`) |
-| 12 | Stable asset identity survives tag correction | GREEN (M3: ledger engine + store v5 + desktop lifecycle; tier-1 stable-id property arrives with SiteProfileV2 in M4) |
-| 13 | 0.8.1 projects migrate with backup, no silent decision loss | partial: v3->v4->v5->v6 chain opt-in+backup proven against frozen per-version DDL; tag-keyed decisions resolve via ledger; final 0.8.1 end-to-end migration test in M10 |
+| 12 | Stable asset identity survives tag correction | GREEN (M3 ledger engine + store v5 + desktop lifecycle; M4c: tier-1 `stableIdProperty` is a SiteProfileV2 section with a screen 3 picker) |
+| 13 | 0.8.1 projects migrate with backup, no silent decision loss | partial: v3->v4->v5->v6 chain opt-in+backup proven against frozen per-version DDL; tag-keyed decisions resolve via ledger; M4c adds the SiteProfileV2 migrations (stored V1 revision lifted on read, `config` sections merged into a new revision on open, v1 profile packages migrated on import — `profile-v2.test.mjs` wired into `npm test`); final 0.8.1 end-to-end migration test in M10 |
 | 14 | Real Navisworks Manage 2025 extraction proof | BLOCKED: needs Noah's Windows box |
 | 15 | Selection Set behavior verified | BLOCKED: same |
 | 16 | Search Sets fully implemented or honestly blocked | open (code side) / verify on Windows |
@@ -84,7 +84,9 @@ Panel as dependency not parent.
 boundary=FALSE (startup families cross native disciplines: MAH/PLC/VFD/TIT one
 branch); System boundary=true comparing System Key. UI must not call
 all-three-structural standard. Pre-publication confirmation step summarizing
-levels, boundaries, comparisons, cross-boundary consequence.
+levels, boundaries, comparisons, cross-boundary consequence. DONE in M4c: screen
+9's "Before you publish: check the boundaries" card, and Save revision stays
+disabled until it is confirmed — once per publish, reset by every profile edit.
 
 **P0-6 Level key vs display.** HierarchyLevelConfig gains keyAttributeKey /
 displayAttributeKey? / boundaryAttributeKey? (defaults collapse to key).

@@ -29,7 +29,7 @@ export {
 } from './migrations.js';
 export type { MigrationStep } from './migrations.js';
 
-export { validateSiteProfile } from './profile-json.js';
+export { validateSiteProfile, validateSiteProfileV2 } from './profile-json.js';
 
 export {
   CONFIG_KEYS,

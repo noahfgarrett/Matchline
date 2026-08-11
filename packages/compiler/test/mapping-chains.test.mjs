@@ -116,7 +116,6 @@ test('a per-source override reaches the compile, and only the source that named 
         },
       },
     }),
-    hierarchy: { levels: [] },
   });
 
   const plc = project.catalog.assets.find((asset) => asset.assetId === idOf('PLC001-10-01'));
@@ -179,14 +178,14 @@ test('profile assignment rules reach the catalog through compileProject', () => 
           ...PROPERTY_MAPPINGS,
           nativeDiscipline: { category: 'Dragon Data', name: 'Service' },
         },
+        sourceAssignments: [
+          {
+            scope: 'filename-pattern',
+            match: 'Dragon-*.nwc',
+            assign: { nativeDiscipline: '$1' },
+          },
+        ],
       }),
-      sourceAssignmentRules: [
-        {
-          scope: 'filename-pattern',
-          match: 'Dragon-*.nwc',
-          assign: { nativeDiscipline: '$1' },
-        },
-      ],
     }),
   );
 
@@ -211,11 +210,11 @@ test('an assigned discipline flows into the SSM discipline and the generated MEL
           ...PROPERTY_MAPPINGS,
           nativeDiscipline: { category: 'Dragon Data', name: 'Service' },
         },
+        sourceAssignments: [
+          { scope: 'filename-pattern', match: 'Dragon-*.nwc', assign: { nativeDiscipline: '$1' } },
+        ],
+        ssmDisciplineProjection: [{ from: 'Controls', to: 'I&C' }],
       }),
-      sourceAssignmentRules: [
-        { scope: 'filename-pattern', match: 'Dragon-*.nwc', assign: { nativeDiscipline: '$1' } },
-      ],
-      ssmDisciplineProjection: new Map([['Controls', 'I&C']]),
     }),
   );
   const subject = project.compileSubjects.find(
@@ -230,7 +229,9 @@ test('an assigned discipline flows into the SSM discipline and the generated MEL
 
 test('a compile with no rules is the compile it was before rules existed', () => {
   const without = compileProject(fullInput(handle.cache));
-  const withEmpty = compileProject(fullInput(handle.cache, { sourceAssignmentRules: [] }));
+  const withEmpty = compileProject(
+    fullInput(handle.cache, { profile: siteProfile({ sourceAssignments: [] }) }),
+  );
   assert.deepEqual(withEmpty.stats, without.stats);
   assert.deepEqual(
     Buffer.from(withEmpty.generatedMel.workbookBytes),

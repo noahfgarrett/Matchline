@@ -9,27 +9,26 @@
  *    the inclusion impact, the resolver's losing claims, the flow projection,
  *    the assembled claims -- not just the snapshot at the end. Nothing is
  *    computed and thrown away.
- * 2. **Configuration the Site Profile cannot yet carry arrives as input.**
- *    `SiteProfile` (`@matchline/domain`) has no parent-tag property and no
- *    discipline projection today. Rather than widen a shared domain type from
- *    here, both arrive on {@link CompileProjectInput} in the shape a profile
- *    section would eventually hold.
+ * 2. **The rule set arrives as ONE value.** Everything a site decided is
+ *    `SiteProfileV2` (`@matchline/domain`) -- mappings, filters, anatomy,
+ *    resolver, derived attributes, hierarchy, role graph, ladder, projection,
+ *    the explicit parent and stable-id properties, identity. It used to be a
+ *    `SiteProfile` plus eleven loose fields here, described as "configuration
+ *    the Site Profile cannot yet carry"; it can carry them now, and a second
+ *    place to state them would be a second answer to every question.
+ *
+ *    What remains input is what belongs to the PROJECT rather than to the site:
+ *    the sources, its workbooks, its people's decisions and its ledger.
  */
 import type {
   AttributeResolverKind,
   ConnectivityObservation,
-  DerivedAttributeDefinition,
-  HierarchyConfigInput,
   ManualRelationshipOverride,
-  ParentLadderConfig,
-  PropertyRef,
   Provenance,
   ResolvedSnapshot,
   ReviewItem,
-  RoleGraphConfig,
-  SiteProfile,
+  SiteProfileV2,
   SnapshotStats,
-  SourceAssignmentRule,
   SourceAssignments,
 } from '@matchline/domain';
 import type { AssetCatalog, UniversePropertyCatalogEntry } from '@matchline/asset-catalog';
@@ -43,11 +42,7 @@ import type { IdentityConfig, IdentityIndex } from '@matchline/identity';
 import type { LearnedRuleSet, ProposedNesting } from '@matchline/learned-rules';
 import type { CanonicalMelRow, GeneratedMelAsset } from '@matchline/mel-export';
 import type { ExtractionCache } from '@matchline/model-schema';
-import type {
-  AssembledClaims,
-  PriorSsmExample,
-  ProfileLookupEntry,
-} from '@matchline/relationship-claims';
+import type { AssembledClaims } from '@matchline/relationship-claims';
 import type { MelMapping } from '@matchline/spreadsheet-import';
 import type { CompileSubject, HierarchyTree } from '@matchline/ssm-compiler';
 import type {
@@ -156,15 +151,18 @@ export interface CompileProjectInput {
    * @throws AssetCatalogConfigError when a `sourceId` is blank or repeated.
    */
   readonly sources: ReadonlyArray<ModelSourceInput>;
-  readonly profile: SiteProfile;
   /**
-   * The level stack, in either spelling.
+   * The whole site rule set, as one versioned value.
    *
-   * A level written before P0-6 split the grouping key from the display
-   * attribute carries a single `attributeKey`; it is migrated inside the SSM
-   * compiler, so a stored project config compiles unchanged.
+   * Every section a compile reads about *this site* is in here: the mappings and
+   * their chains, the filters, the anatomy, the resolver, the derived attribute
+   * registry, the level stack, the role graph, the ladder, the discipline
+   * projection, the explicit parent and stable-id properties, and identity. A
+   * profile stored before the consolidation is lifted by
+   * `migrateSiteProfileV1` (`@matchline/domain`), which is the only way a V1
+   * reaches this field.
    */
-  readonly hierarchy: HierarchyConfigInput;
+  readonly profile: SiteProfileV2;
   /**
    * Whether to build {@link CompiledProject.propertyCatalog}. Off by default.
    *
@@ -179,10 +177,6 @@ export interface CompileProjectInput {
    * for an empty universe anyway.
    */
   readonly includePropertyCatalog?: boolean;
-  /** Parent ladder walk order. Defaults to `@matchline/ssm-compiler`'s. */
-  readonly ladder?: ParentLadderConfig;
-  /** Taught role pairings. Without one, no family rung produces a claim. */
-  readonly roleGraph?: RoleGraphConfig;
   readonly connectivityWorkbooks?: ReadonlyArray<ConnectivityWorkbookInput>;
   readonly melWorkbook?: MelWorkbookInput;
   /** Trained rules from a finished SSM. Absent means the learned rung is inert. */
@@ -191,33 +185,6 @@ export interface CompileProjectInput {
   readonly manualSystemAssignments?: ManualAssignments;
   /** People's parent decisions, which outrank every ladder rung. */
   readonly manualRelationshipOverrides?: ReadonlyArray<ManualRelationshipOverride>;
-  /**
-   * Accepted parent/child pairs the site wrote down (PRODUCT.md §11.1 tier 3).
-   *
-   * Spelled as tags, not asset ids, and resolved through the identity index --
-   * a lookup table is a document a site maintains, and an internal asset id
-   * means nothing in one. A pair naming a tag identity cannot resolve produces
-   * no claim and lands in `claims.skipped`.
-   */
-  readonly profileLookup?: ReadonlyArray<ProfileLookupEntry>;
-  /**
-   * Parent/child pairs from a previously accepted SSM (PRODUCT.md §11.1 tier 7).
-   *
-   * The second-weakest rung: an example of what a site did last time, which is
-   * evidence but not a rule, so anything above it on the ladder wins.
-   */
-  readonly priorSsm?: ReadonlyArray<PriorSsmExample>;
-  /** Aliases, tag normalization, fuzzy distance. Anatomy defaults to the profile's. */
-  readonly identityConfig?: IdentityConfig;
-  /**
-   * The model property naming an asset's parent, when the site maps one.
-   *
-   * Read off the same property bag the resolver reads, so a site that states
-   * parentage in the model gets the `explicit-model` ladder rung for free.
-   */
-  readonly parentTagProperty?: PropertyRef;
-  /** Explicit discipline rewrites. Absent means ssmDiscipline is nativeDiscipline. */
-  readonly ssmDisciplineProjection?: SsmDisciplineProjection;
   /**
    * The asset identity ledger the last compile of this project wrote (P0-9).
    *
@@ -232,38 +199,6 @@ export interface CompileProjectInput {
    * `identity-ledger.ts`'s `decisionResolverOf` for the resolution rules.
    */
   readonly identityLedger?: AssetLedger;
-  /**
-   * The model property a site nominates as its stable asset id (P0-9's first
-   * evidence tier).
-   *
-   * A site-wide equipment number a person maintains outranks every model-borne
-   * id, because it follows the equipment when it moves from one document to
-   * another. Absent means the tier never runs and identity starts at the
-   * authoring id.
-   */
-  readonly stableIdProperty?: PropertyRef;
-  /**
-   * The site's own attribute registry (P0-7).
-   *
-   * Each definition is evaluated once per asset after systems resolve, and its
-   * `attributeId` joins the level-attribute namespace: a hierarchy level may
-   * name one as its key, its display or its boundary comparison, exactly as it
-   * names a built-in. Absent means the site defined none, which is the state
-   * every project starts in.
-   *
-   * @throws DerivedAttributeConfigError when an id is malformed, repeated, or
-   * collides with one of the compiler's own `ATTRIBUTE_KEYS`.
-   */
-  readonly derivedAttributes?: ReadonlyArray<DerivedAttributeDefinition>;
-  /**
-   * Profile-level assignment rules (P0-8).
-   *
-   * The three weaker tiers of the assignment precedence -- source model, logical
-   * source, confirmed filename pattern -- as a portable list a profile carries.
-   * The strongest tier is not here and never could be: an object property is
-   * what the model says, and the model outranks what the project says about it.
-   */
-  readonly sourceAssignmentRules?: ReadonlyArray<SourceAssignmentRule>;
 }
 
 /** The canonical generated MEL, as rows and as bytes. */
