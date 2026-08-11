@@ -3,6 +3,12 @@
 This is how you get Matchline running on your Windows machine and click around in it.
 No developer tools required for the install itself.
 
+**Scope.** This describes a pre-release build handed over by hand — currently **0.8.1**.
+It is written for someone trying the app out, not for a customer install. At release it is
+superseded by production install documentation: a signed installer, a real publisher name,
+and no "click past the warning" section. Until then, everything below applies. The release
+side of the process lives in docs/RELEASE-RUNBOOK.md.
+
 **Read this first — the build is not code-signed.** Windows will warn you about it, loudly,
 and that warning is expected. Signing needs a code-signing certificate bought under a
 verified company identity, which does not exist yet (it is on the deferred list in
@@ -10,25 +16,28 @@ docs/STATUS.md and an open item in docs/DECISIONS.md). Until it does, every Matc
 build — including this one — trips SmartScreen. Section 3 walks through it.
 
 Nothing in this app phones home. There is no updater, no telemetry, no account, and no
-network calls of any kind. Everything it reads and writes is on your machine.
+network calls of any kind. Everything it reads and writes is on your machine. The one
+network function the product will ever have is an optional, disableable check for signed
+application updates, which will carry no project data — it does not exist yet.
 
 ---
 
 ## 1. Which file to grab
 
-Two Windows artifacts are produced, both 64-bit (x64):
+Two Windows artifacts are produced, both 64-bit (x64). `<version>` is the build you were
+handed — 0.8.1 at the time of writing.
 
 | File | What it is | When to use it |
 |---|---|---|
-| `Matchline-0.8.0-Setup-x64.exe` | Installer, 86 MB | Normal use. Adds Start-menu and desktop shortcuts, and an entry in *Apps & features* so it can be uninstalled cleanly. |
-| `Matchline-0.8.0-win-x64.zip` | The same app, zipped, no installer, 135 MB | If you want to try it without installing anything, or run it off a USB stick. Unzip anywhere and double-click `Matchline.exe`. |
+| `Matchline-<version>-Setup-x64.exe` | Installer, 86 MB | Normal use. Adds Start-menu and desktop shortcuts, and an entry in *Apps & features* so it can be uninstalled cleanly. |
+| `Matchline-<version>-win-x64.zip` | The same app, zipped, no installer, 135 MB | If you want to try it without installing anything, or run it off a USB stick. Unzip anywhere and double-click `Matchline.exe`. |
 
 They are that size because each one carries its own copy of Chromium — that is how every
 Electron app ships. The installed app takes about 370 MB on disk.
 
-A Mac build (`Matchline-0.8.0-mac-arm64.zip`, Apple Silicon) is produced too, but it is a
-development convenience — Navisworks extraction is Windows-only. It is unsigned and
-un-notarised as well, so a Mac that *downloads* it will quarantine it; clear that with
+A Mac build (`Matchline-<version>-mac-arm64.zip`, Apple Silicon) can be produced too, but
+it is a development convenience — Navisworks extraction is Windows-only. It is unsigned
+and un-notarised as well, so a Mac that *downloads* it will quarantine it; clear that with
 `xattr -dr com.apple.quarantine /path/to/Matchline.app` before opening.
 
 Whoever built it will hand you the file directly. If you built it yourself (section 7),
@@ -38,7 +47,7 @@ the artifacts are in `apps\desktop\release\`.
 
 ## 2. Install it
 
-**Installer route.** Double-click `Matchline-0.8.0-Setup-x64.exe`. Work through the
+**Installer route.** Double-click `Matchline-<version>-Setup-x64.exe`. Work through the
 SmartScreen warning first (section 3), then:
 
 1. The installer asks where to put it. The default is
@@ -73,7 +82,7 @@ choose **Keep** → **Keep anyway** / **Show more** → **Keep anyway**.
 There is only a **Don't run** button visible. The one you want is hidden:
 
 1. Click the small **More info** link, in the body of the box, above the button.
-2. Two lines appear — `App: Matchline-0.8.0-Setup-x64.exe` and
+2. Two lines appear — `App: Matchline-<version>-Setup-x64.exe` and
    `Publisher: Unknown publisher`.
 3. A second button appears: **Run anyway**. Click it.
 
@@ -102,15 +111,30 @@ up.
    **Choose where to save…**, and pick a folder. You get `<YourSite>.matchline`, one SQLite
    file holding the sources manifest, the site profile, everything the app has learned about
    the site, and every compile it has run.
-2. **Give it a model extraction.** Matchline never reads an NWD directly — a separate
-   Windows worker walks the model once and writes an *extraction cache*. Two ways to get
-   one:
-   - **You already have a cache file** (a `<64 hex characters>.sqlite`, e.g. from a previous
-     run): on the first wizard screen, drag it onto *Drop files here* or use
+2. **Give it the model.** Matchline reads a model through an *extraction cache*: a Windows
+   worker walks the model once, with Navisworks doing the opening, and writes a SQLite file
+   the app can read quickly and repeatedly. In this build that walk is a **separate step
+   you run yourself** — the app does not start Navisworks. So:
+   - **If you already have a cache file** (`<64 hex characters>.sqlite`, or anything named
+     `.matchline-cache`), drag it onto *Drop files here* on the first wizard screen, or use
      **Choose files…**. The app works out what each file is on its own.
-   - **You need to make one**: follow **docs/WINDOWS-RUNBOOK.md** end to end. It builds the
+   - **If you do not**, follow **docs/WINDOWS-RUNBOOK.md** end to end. It builds the
      extractor, runs it against your NWD, and writes the cache to the folder you name with
-     `--cache-dir`. Then come back here and drop it in.
+     `--cache-dir`. Then come back here and drop the cache in.
+   - **You can drop the raw `.nwd`/`.nwf`/`.nwc` too.** The project will record which
+     document the site is built from and show the source as *requires Windows extraction* —
+     it is a note to yourself, not a shortcut. The source becomes usable only once its cache
+     is added alongside.
+
+   Running the extraction from inside the app, so that dropping an NWD is the whole of this
+   step, is built but not shipped in this build — it is Milestone 5 and hard gate 1 of the
+   1.0 plan (docs/RELEASE-1.0-PLAN.md), and it is not done. When it lands, cache files stay
+   supported: they are how development and demos work on a Mac, where Navisworks does not
+   exist at all.
+
+   **Drop as many model sources as the site has.** One federated NWD, or a dozen split
+   files from different consultants — including two that happen to share a file name. They
+   become one equipment universe, and every screen tells you which source a value came from.
 3. **Add the spreadsheets** you have — MEL, EasyPower export, cable schedule, PMD, P6 — the
    same way, all at once if you like. Any subset works; each one just makes the picture more
    complete.
@@ -187,12 +211,20 @@ build in section 1 was cross-built on a Mac.
 
 To run it from source without packaging: `npm run dev:desktop`.
 
-To check the engine is healthy, run what CI runs — `npm run build && npm run test:workspaces &&
-npm run test:integration && (cd packages/legacy-parity && node --test --test-skip-pattern "frozen
-SSM Builder|preserves a frozen edge contract|budget" tests/*.test.mjs)`. Plain `npm test` adds the
-legacy differential tests, which compare against a frozen SSM Builder checkout at an absolute path
-that exists only on the maintainer's machine, plus wall-clock performance budgets; both fail
-everywhere else for reasons that are not about your build.
+To check the engine is healthy, run what CI runs:
+
+```
+npm run build && npm run test:workspaces && npm run test:integration \
+  && npm run test:acceptance10:green \
+  && (cd packages/legacy-parity && node --test \
+      --test-skip-pattern "frozen SSM Builder|preserves a frozen edge contract|budget" \
+      tests/*.test.mjs)
+```
+
+Plain `npm test` adds the legacy differential tests, which compare against a frozen SSM
+Builder checkout at an absolute path that exists only on the maintainer's machine, plus
+wall-clock performance budgets; both fail everywhere else for reasons that are not about
+your build.
 
 ---
 
@@ -203,7 +235,10 @@ None of these are bugs to report — they are known, and each has a reason.
 - **Unsigned.** Section 3. Waiting on a certificate.
 - **Generic app icon.** The app ships with the stock Electron icon because Matchline has no
   artwork yet. It does not affect anything.
-- **No auto-update.** By design: there is no update server and the app makes no network
-  calls. New versions arrive as a new file, installed over the old one.
+- **No auto-update.** There is no update server and this build makes no network calls at
+  all. New versions arrive as a new file, installed over the old one. A signed, optional,
+  disableable update check is planned for release and is not built yet.
+- **Extraction is a separate step.** Section 4, step 2. Running it from inside the app is
+  planned and not built yet.
 - **Windows x64 only.** No 32-bit and no Windows-on-ARM build. The Mac build is
   Apple Silicon only.

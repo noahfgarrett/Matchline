@@ -10,6 +10,39 @@
 
 ---
 
+## 0. As-built deviations (1.0) — read this first
+
+**This document is the original plan, kept as written.** It is not maintained as a
+description of the shipped system, and where the two disagree the built behaviour
+wins. Everything below is a place where 1.0 deliberately differs from the plan.
+Each one is an authoritative decision in
+[`RELEASE-1.0-PLAN.md`](RELEASE-1.0-PLAN.md) — its P0 findings and gate tracker are
+the binding text — and each is logged in [`DECISIONS.md`](DECISIONS.md).
+
+| # | The plan says | 1.0 does | Why |
+| --- | --- | --- | --- |
+| 1 | One extraction cache per project (§6.1, §15 "Model cache"). | A **multi-model universe**: a project registers a set of model sources and every one with a readable cache is open at once. Object, source-model and selection-set identities are namespaced by `sourceId` through a typed `ModelObjectKey`, the Property Catalog aggregates across sources with per-source and overall coverage, and files sharing a basename coexist. Split and federated representations of one site compile to equivalent output. | RELEASE-1.0-PLAN P0-1; hard gates 2–4. Real sites arrive as several files from several consultants. |
+| 2 | Building, discipline and system are all structural boundaries by default (§2.4 example, §11.3). | The default preset enables **Building and System as boundaries and SSM Discipline as a visible grouping only**. Discipline still groups the tree; it does not break parents. A boundary that *is* enabled is still hard, with no feed-chain exception. | P0-5; gate 11. A startup family (MAH/PLC/VFD/TIT) crosses native disciplines, and a structural discipline cuts one family into four roots. |
+| 3 | Manual reparenting is a persistent override (§11.5) — and the 0.4.0 engine let it bypass the fold. | **Manual parents fold.** A manual parent is the strongest candidate and wins the ladder, then goes through the same boundary fold as any other: crossing an enabled boundary demotes it to a dependency, with provenance recording the manual origin and the demotion, and a visible review item. Manual make-root stays final. There is no "force structural across a boundary" in 1.0. | P0-4; gates 9–10. Supersedes the earlier manual-bypass behaviour. |
+| 4 | A hierarchy level has one attribute (§2.4, §11). | A level has a **key, an optional display attribute and an optional boundary attribute**. The standard System level keys and compares on System Key and displays System Label, so editing a description or a label never moves equipment — the revision diff reports a label change, not a system move. | P0-6; gate 8. |
+| 5 | A two-layer profile (§13.1) whose sections partly live outside it — hierarchy, role graph, ladder, discipline projection and parent-tag property arrived on the compiler input instead. | **`SiteProfileV2`**: one versioned document holding every section, stored as one revision and exported as one package. Only genuinely project-specific configuration stays outside it — the captured EXTO template belongs to one project's deliverable, not to the site's rule set. Profile package format v2; v1 packages migrate on import, never refused. | RELEASE-1.0-PLAN "SiteProfileV2"; gate 13. |
+| 6 | Hierarchy levels come from raw, joined or derived fields (§2.4) without saying where a derived field is defined. | A versioned profile-level **derived attribute registry**: `DerivedAttributeDefinition` with seven resolver kinds (model-property, tag-segment, source-assignment, system-field, composite, mel-lookup, manual). The profile defines the field, the compiler resolves it deterministically, the Composer lists it, and a missing value stays missing — no fallback value ever feeds a boundary. | P0-7; gate 7. |
+| 7 | One property mapping per standard field (§4, §13.2). | **Ordered fallback chains with optional per-source overrides** on every standard field, plus profile-level **source assignment rules** resolved object property > source-model > logical file > confirmed filename pattern > review, with provenance naming the tier and the rule. Existing single mappings migrate to a one-rung chain. | P0-8; gates 5–6. Editors for the chains, the assignment rules and the derived-attribute registry are still open. |
+| 8 | Identity is reconciled per compile (§9). | A persistent **asset identity ledger** in the project file: `{assetId, currentCanonicalTag, aliases, modelIdentities}`. Identity evidence runs profile-mapped stable id property > source persistent id + authoring object id > source persistent id + InstanceGuid > deterministic structural key > tag as last-resort reconciliation; a content hash is never part of identity. A corrected tag keeps its `assetId`, manual decisions recorded against it keep applying, and the diff reports a tag change rather than a remove plus an add. Overrides that cannot be mapped become orphaned-decision review items and are never dropped. | P0-9; gate 12. |
+
+Two smaller ones, for completeness: the stack trims in §14 were settled in
+DECISIONS.md #5 (no Zustand; Node's built-in `node:sqlite` instead of a driver
+dependency), and the repository structure in §17 has been superseded — see the
+corrected tree there and the fuller table in the root `README.md`.
+
+Nothing in this document should be read as a claim about Navisworks version
+support. That claim lives in one place,
+`native/navisworks-common/Protocol/SupportedAdapters.cs`, and today no version is
+verified: 2025 is pending its real proof run and 2024/2026 are stub-compiled and
+unverified.
+
+---
+
 ## 1. Product definition
 
 Matchline is a local Windows desktop application that compiles an authoritative commissioning data model from:
@@ -1176,43 +1209,67 @@ noahfgarrett/matchline-releases
 5. Reset Matchline app version to `0.1.0`
 6. Preserve SSManagement golden fixtures for compatibility
 
-### Proposed structure
+### Structure (as built)
+
+The tree originally proposed here has been replaced by what the repository
+actually contains. Engine responsibilities landed as more, smaller packages than
+the plan sketched, `native/` grew a shared adapter source plus per-year projects
+and two not-shipped support projects, and unit tests live beside the package they
+test rather than in a top-level `tests/unit`. The root `README.md` carries the same
+tree with one line of explanation per entry.
 
 ```text
 matchline/
 ├── apps/
 │   └── desktop/
-│       ├── electron/
-│       ├── preload/
-│       └── renderer/
+│       ├── electron/          main process: services, handlers, IPC, security
+│       ├── preload/           contextBridge façade
+│       ├── renderer/          React wizard + workspace
+│       └── shared/            the IPC channel declaration table
 ├── packages/
-│   ├── domain/
-│   ├── compiler/
-│   ├── rules/
-│   ├── project-store/
-│   ├── model-schema/
+│   ├── domain/                vocabulary, SiteProfileV2, model universe, derived attributes
+│   ├── model-schema/          extraction-cache reader, Property Catalog
+│   ├── tag-anatomy/
 │   ├── spreadsheet-import/
-│   ├── export/
-│   └── legacy-parity/
+│   ├── asset-catalog/
+│   ├── asset-identity/        stable identity + ledger
+│   ├── system-resolver/
+│   ├── identity/
+│   ├── connectivity-import/
+│   ├── electrical-flow/
+│   ├── relationship-claims/
+│   ├── learned-rules/
+│   ├── ssm-compiler/          ladder, boundary fold, hierarchy tree
+│   ├── compiler/              orchestrator
+│   ├── scheduling/
+│   ├── mel-export/
+│   ├── exto-export/
+│   ├── project-store/         the .matchline file and its migrations
+│   └── legacy-parity/         the frozen SSManagement 4.2.2 donor
 ├── native/
-│   ├── navisworks-common/
-│   ├── navisworks-2024/
-│   ├── navisworks-2025/
-│   └── navisworks-2026/
-├── schemas/
+│   ├── navisworks-common/     protocol, DTOs, NDJSON, adapter support table
+│   ├── navisworks-adapter/    the one copy of the Autodesk-touching source
+│   ├── navisworks-2024/       csproj + year constant only
+│   ├── navisworks-2025/       csproj + year constant only
+│   ├── navisworks-2026/       csproj + year constant only
+│   ├── extractor/             the net48 launcher
+│   ├── navisworks-stubs/      not shipped — Autodesk API stand-in for type-checking
+│   └── smoke/                 not shipped — Autodesk-free pipeline harness
+├── schemas/                   extraction-cache DDL (shared with the C# writer)
 ├── tests/
-│   ├── unit/
-│   ├── integration/
-│   ├── golden/
-│   ├── model-fixtures/
-│   └── end-to-end/
+│   ├── integration/           cross-package pipeline tests
+│   └── acceptance-1.0/        the 1.0 hard-gate acceptance tests
 └── docs/
-    ├── PRODUCT.md
-    ├── ARCHITECTURE.md
-    ├── DOMAIN.md
-    ├── SYSTEM-RESOLVER.md
-    ├── PROFILE-SCHEMA.md
-    ├── SECURITY.md
+    ├── PRODUCT.md             this plan
+    ├── RELEASE-1.0-PLAN.md    the 1.0 directive and gate tracker
+    ├── ENGINE.md
+    ├── APP.md
+    ├── EXTRACTION.md
+    ├── WINDOWS-RUNBOOK.md
+    ├── RELEASE-RUNBOOK.md
+    ├── INSTALL-TRY-IT.md
+    ├── DECISIONS.md
+    ├── STATUS.md
     └── ORIGIN.md
 ```
 
