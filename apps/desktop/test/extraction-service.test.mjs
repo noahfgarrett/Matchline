@@ -24,13 +24,14 @@ import {
 import {
   LAUNCHER_ERROR_CODES,
   SERVICE_ERROR_CODES,
+  extractorArguments,
 } from '../dist/electron/services/extraction-protocol.js';
 import {
   createProcessExtractorLauncher,
   resolveExtractorLauncher,
 } from '../dist/electron/services/extractor-launcher.js';
 import { createProjectService } from '../dist/electron/services/project-session.js';
-import { digestFile } from '../dist/electron/services/sources.js';
+import { digestFile } from '../dist/electron/services/digest.js';
 
 /**
  * The integrated extraction service (RELEASE-1.0-PLAN P0-2), end to end, on a
@@ -280,7 +281,7 @@ test('dropping a Navisworks model extracts it, associates it, and compiles', asy
   assert.equal(universe.objectCount, DRAGON_OBJECT_COUNT);
 
   teachDragon(service);
-  const compiled = service.compile();
+  const compiled = await service.compile();
   assert.equal(compiled.state, 'done', 'and the compile consumes it like any other source');
   assert.ok(compiled.summary.assetCount > 0);
 
@@ -730,7 +731,7 @@ test('a model whose bytes changed re-extracts under the same source id', async (
 
   const first = sourceById(service, 'model:dragon-revised.nwd');
   assert.equal(first.status, 'ready');
-  assert.equal(service.compile().state, 'done');
+  assert.equal((await service.compile()).state, 'done');
 
   // The model is reissued: same path, same name, different bytes.
   writeFileSync(modelPath, 'MATCHLINE-FAKE {}\nrevision B, with more equipment\n');
@@ -750,7 +751,7 @@ test('a model whose bytes changed re-extracts under the same source id', async (
     2,
     'the launcher ran once per revision',
   );
-  assert.equal(service.compile().state, 'done', 'and the project compiles on the new one');
+  assert.equal((await service.compile()).state, 'done', 'and the project compiles on the new one');
 });
 
 test('a reopened project picks its extraction back up where it left off', async (t) => {
@@ -769,7 +770,7 @@ test('a reopened project picks its extraction back up where it left off', async 
   t.after(() => {
     second.close();
   });
-  const opened = second.open(projectPath, false);
+  const opened = await second.open(projectPath, false);
   assert.equal(opened.outcome, 'opened');
   await second.extractionIdle();
 
@@ -833,6 +834,133 @@ test('a Windows install missing the extractor is a different sentence', () => {
       resolve();
     });
   });
+});
+
+/* ------------------------------------------------- the supplied input hash */
+
+/**
+ * `--input-sha256`, both ways (docs/EXTRACTION.md, "The command line").
+ *
+ * The service streams a model's sha256 when the file is registered, and until
+ * this flag existed the launcher then read the whole model again to work the
+ * same number out for itself — a second full pass over a multi-gigabyte file
+ * for an answer main already had (RELEASE-1.0-PLAN, "Performance / isolation").
+ *
+ * Both paths are exercised against the same fake launcher, which mirrors
+ * `ExtractionRunner.Run` and `ExtractorArguments.TryParse` line for line: with
+ * the flag it reports the hash stage complete and trusts the value, without it
+ * it hashes the file itself, and a malformed value is a wrong command line
+ * rather than a cache filed under something unusable.
+ */
+function runLauncherOnce(args) {
+  const messages = [];
+  return new Promise((resolve) => {
+    fakeLauncher()(args, {
+      onMessage: (message) => messages.push(message),
+      onExit: (exit) => resolve({ messages, exit }),
+    });
+  });
+}
+
+test('the service hands the launcher the hash it already streamed', async () => {
+  assert.deepEqual(extractorArguments('/models/A.nwd', '/caches', 'a'.repeat(64)), [
+    '--input',
+    '/models/A.nwd',
+    '--cache-dir',
+    '/caches',
+    '--input-sha256',
+    'a'.repeat(64),
+  ]);
+});
+
+test('a supplied hash skips the hash stage and addresses the cache', async () => {
+  const cacheDir = newCacheDir('supplied-hash');
+  const modelPath = writeModel('Dragon-Supplied.nwd');
+  // Deliberately not this file's real hash: only a launcher that TRUSTS the
+  // value rather than checking it can produce a cache named after it, which is
+  // exactly the promise the flag makes and the reason it is documented as an
+  // assertion.
+  const claimed = 'b'.repeat(64);
+
+  const { messages, exit } = await runLauncherOnce(
+    extractorArguments(modelPath, cacheDir, claimed),
+  );
+  assert.equal(exit.code, 0, exit.diagnostics);
+
+  const hashLines = messages.filter(
+    (message) => message.type === 'progress' && message.stage === 'hash',
+  );
+  assert.equal(hashLines.length, 1, 'the stage is announced once, already complete');
+  assert.equal(hashLines[0].done, hashLines[0].total);
+  assert.ok(hashLines[0].total > 0, 'and it still reports the real file size');
+
+  const result = messages.find((message) => message.type === 'result');
+  assert.equal(result.status, 'ok');
+  assert.equal(
+    result.cachePath,
+    join(cacheDir, `${claimed}.sqlite`),
+    'the supplied hash is what the cache is filed under',
+  );
+});
+
+test('no supplied hash means the launcher hashes the file itself', async () => {
+  const cacheDir = newCacheDir('own-hash');
+  const modelPath = writeModel('Dragon-Own.nwd');
+  const real = (await digestFile(modelPath)).sha256;
+
+  const { messages, exit } = await runLauncherOnce([
+    '--input',
+    modelPath,
+    '--cache-dir',
+    cacheDir,
+  ]);
+  assert.equal(exit.code, 0, exit.diagnostics);
+
+  const hashLines = messages.filter(
+    (message) => message.type === 'progress' && message.stage === 'hash',
+  );
+  assert.equal(hashLines.length, 2, 'the stage opens at zero and closes at the end');
+  assert.equal(hashLines[0].done, 0);
+
+  const result = messages.find((message) => message.type === 'result');
+  assert.equal(result.cachePath, join(cacheDir, `${real}.sqlite`));
+});
+
+test('a malformed --input-sha256 is refused rather than reinterpreted', async () => {
+  const cacheDir = newCacheDir('bad-hash');
+  const modelPath = writeModel('Dragon-BadHash.nwd');
+
+  for (const bad of ['', 'abc', 'z'.repeat(64), `0x${'a'.repeat(62)}`, 'a'.repeat(65)]) {
+    const { messages, exit } = await runLauncherOnce([
+      '--input',
+      modelPath,
+      '--cache-dir',
+      cacheDir,
+      '--input-sha256',
+      bad,
+    ]);
+    const error = messages.find((message) => message.type === 'error');
+    assert.equal(error?.code, LAUNCHER_ERROR_CODES.invalidArguments, `"${bad}" is refused`);
+    assert.equal(exit.code, 2, 'with the INVALID_ARGS exit code');
+  }
+  assert.deepEqual(
+    readdirSync(cacheDir).filter((name) => name.endsWith('.sqlite')),
+    [],
+    'and no cache was written under a name nobody could find again',
+  );
+});
+
+test('an upper-case hash is folded rather than rejected', async () => {
+  const cacheDir = newCacheDir('upper-hash');
+  const modelPath = writeModel('Dragon-Upper.nwd');
+  const claimed = 'C'.repeat(64);
+
+  const { messages, exit } = await runLauncherOnce(
+    extractorArguments(modelPath, cacheDir, claimed),
+  );
+  assert.equal(exit.code, 0, exit.diagnostics);
+  const result = messages.find((message) => message.type === 'result');
+  assert.equal(result.cachePath, join(cacheDir, `${'c'.repeat(64)}.sqlite`));
 });
 
 /* ------------------------------------------------------------- removal, close */

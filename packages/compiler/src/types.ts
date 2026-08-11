@@ -117,6 +117,56 @@ export interface MelWorkbookInput {
 export const DEFAULT_MEL_SHEET = 'MEL';
 
 /**
+ * The pipeline's stages, in the one order they are announced in.
+ *
+ * Fourteen names for `compile.ts`'s eleven numbered sections: the three
+ * lettered ones (2b the identity ledger, 2c the stored decisions, 8b the
+ * derived attributes) are announced in their own right because each is a pass
+ * over every asset and a progress line that hid them would sit still through
+ * three of the longest stretches of a large compile.
+ *
+ * Published so a caller can say "3 of 14" without hard-coding a count the
+ * pipeline would then be free to change underneath it. Nothing derives
+ * behaviour from these names.
+ */
+export const COMPILE_STAGES = [
+  'asset-catalog',
+  'identity-ledger',
+  'properties',
+  'stored-decisions',
+  'mel',
+  'systems',
+  'identity-index',
+  'connectivity',
+  'flow',
+  'claims',
+  'derived-attributes',
+  'snapshot',
+  'projections',
+  'review',
+] as const;
+export type CompileStage = (typeof COMPILE_STAGES)[number];
+
+/**
+ * Told which stage is starting, as it starts.
+ *
+ * The one impure thing a compile may do, and it is deliberately incapable of
+ * changing what the compile decides: nothing reads its return value, no stage
+ * consults it, and a compile run with and without one produces a deep-equal
+ * `CompiledProject`. It exists because the pipeline is a single synchronous
+ * call that can take minutes on a real site, and a progress indicator that
+ * cannot say more than "still working" is a progress indicator that teaches a
+ * person to force-quit.
+ *
+ * Called at most once per stage, in {@link COMPILE_STAGES} order, before the
+ * stage does any work. A stage that a project does not need — no MEL, no
+ * derived attributes — is still announced: skipping the announcement would make
+ * the sequence depend on the project, and a caller counting stages would then
+ * be counting something different every run.
+ */
+export type CompileStageListener = (stage: CompileStage) => void;
+
+/**
  * One registered model source, as a compile reads it (RELEASE-1.0-PLAN P0-1).
  *
  * A project is a universe of these, not one file. `sourceId` is the identity
@@ -199,6 +249,13 @@ export interface CompileProjectInput {
    * `identity-ledger.ts`'s `decisionResolverOf` for the resolution rules.
    */
   readonly identityLedger?: AssetLedger;
+  /**
+   * Told which stage is starting. Absent means nothing is reported.
+   *
+   * See {@link CompileStageListener}: it observes, it cannot decide, and a
+   * compile is deep-equal with and without it.
+   */
+  readonly onStage?: CompileStageListener;
 }
 
 /** The canonical generated MEL, as rows and as bytes. */

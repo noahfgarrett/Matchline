@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -9,8 +10,10 @@ import {
 } from '@matchline/asset-catalog';
 import type { AssetLedger } from '@matchline/asset-identity';
 import {
+  COMPILE_STAGES,
   subjectPropertiesFor,
   type CompiledProject,
+  type CompileStage,
   type ConnectivityWorkbookInput,
   type MelWorkbookInput,
 } from '@matchline/compiler';
@@ -84,11 +87,13 @@ import type {
 import { createAppStateStore, type AppStateStore } from './app-store.js';
 import {
   createCompileView,
-  runCompile,
-  type CompileSource,
+  startCompile,
+  type CompileRun,
   type CompileView,
   type Page,
 } from './compile-service.js';
+import type { CompileWorkerSource } from './compile-worker.js';
+import { digestFile, mapBounded, DIGEST_CONCURRENCY } from './digest.js';
 import {
   createExtractionService,
   type ExtractionOutcome,
@@ -151,8 +156,6 @@ import {
 } from './profile-package.js';
 import { catalogPage, type PropertyPageRequest } from './property-page.js';
 import {
-  digestFile,
-  digestFileSync,
   identifySource,
   melSheetDescriptor,
   readMelCatalogRows,
@@ -256,7 +259,7 @@ export interface ProjectService {
    * file is upgraded in place (after an automatic backup) only when this is
    * `true` — docs/APP.md, "migration runs only with explicit opt-in".
    */
-  open(projectPath: string, acceptMigration: boolean): OpenProjectResult;
+  open(projectPath: string, acceptMigration: boolean): Promise<OpenProjectResult>;
   close(): boolean;
   current(): WireProjectSummary | null;
   recentProjects(): readonly WireRecentProject[];
@@ -331,7 +334,18 @@ export interface ProjectService {
 
   /* ------------------------------------------------------------- screen 8 */
 
-  compile(): WireCompileStatus;
+  /**
+   * Runs the pipeline on a worker thread and resolves when it has ended.
+   *
+   * Asynchronous because the compile is no longer on the main loop
+   * (RELEASE-1.0-PLAN, "worker_threads (compiler)"): every other channel goes
+   * on answering while this is outstanding, which is the whole point. A second
+   * call while one is running resolves with the running status rather than
+   * starting a second worker.
+   */
+  compile(): Promise<WireCompileStatus>;
+  /** Terminates the running compile. `false` when there was nothing to stop. */
+  cancelCompile(): boolean;
   compileStatus(): WireCompileStatus;
   compileIssues(
     kind: WireCompileIssueKind,
@@ -413,6 +427,21 @@ interface SourceDetail {
   readonly cachePath: string | null;
 }
 
+/**
+ * One open model source, as main's own engine calls take it.
+ *
+ * The shape `@matchline/asset-catalog` and `subjectPropertiesFor` share: an id,
+ * an open handle, and the two labels a provenance line prints. It stays in this
+ * file because it is what the *session* holds; the compile's own view of a
+ * source is `CompileWorkerSource`, which carries a path instead of a handle.
+ */
+interface OpenSource {
+  readonly sourceId: string;
+  readonly cache: ExtractionCache;
+  readonly displayName: string;
+  readonly rawFileName: string;
+}
+
 /** One open model source: its cache handle and the object scan over it. */
 interface ModelState {
   readonly sourceId: string;
@@ -420,6 +449,15 @@ interface ModelState {
   readonly rawFileName: string;
   /** What this handle was opened for. A change here is a different file. */
   readonly cacheSha256: string;
+  /**
+   * Where that cache is on this machine.
+   *
+   * Carried because the compile worker opens its own handle — a `node:sqlite`
+   * object cannot cross a thread boundary — and a path is the only thing it can
+   * be given. Never shown to a person: for an extracted model it is inside the
+   * app's own cache folder, which P0-2 says the user never sees.
+   */
+  readonly cachePath: string;
   /** Distinguishes this handle from the next one opened for the same source. */
   readonly handleId: number;
   readonly cache: ExtractionCache;
@@ -479,6 +517,27 @@ interface Session {
   /** The last compile and every index over it, or `null` before the first run. */
   view: CompileView | null;
   compile: WireCompileStatus;
+  /** The compile in flight, or `null` when none is. */
+  running: RunningCompile | null;
+}
+
+/**
+ * A compile from the moment it is asked for to the moment it settles.
+ *
+ * It exists because "a compile is running" has to be true *synchronously*, from
+ * the call that started it, and the worker does not exist yet at that point —
+ * the request's workbooks are read off disk first, which is asynchronous by
+ * design. Without this marker there was a window in which Stop did nothing and
+ * a second Compile started a second worker, and neither would have been visible
+ * to the person doing it.
+ *
+ * `cancelRequested` is therefore the authority, not `run`: a Stop that lands
+ * before the worker is spawned means the worker is never spawned at all.
+ */
+interface RunningCompile {
+  /** The worker, once it has been started. `null` until then. */
+  run: CompileRun | null;
+  cancelRequested: boolean;
 }
 
 /**
@@ -540,12 +599,14 @@ function messageOf(error: unknown): string {
  * already established the path exists, so a read failure here means the bytes
  * are not available to prove anything with.
  */
-function bytesStillMatch(absolutePath: string, expectedSha256: string): boolean {
+async function bytesStillMatch(absolutePath: string, expectedSha256: string): Promise<boolean> {
   try {
-    // The synchronous digest, because opening a project is synchronous. It is
-    // still chunked rather than a whole-file read, so a big model costs time
-    // here and never memory (sources.ts).
-    return digestFileSync(absolutePath).sha256 === expectedSha256;
+    // The streaming digest, always. Opening a project used to hash every
+    // registered file synchronously on the main loop, which on a project
+    // holding a 700 MB model meant the window did not draw until the last byte
+    // had been read (RELEASE-1.0-PLAN, "Main process never blocked by
+    // hashing"). There is no synchronous digest left to reach for.
+    return (await digestFile(absolutePath)).sha256 === expectedSha256;
   } catch {
     return false;
   }
@@ -863,6 +924,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       derived: null,
       view: null,
       compile: { state: 'never-run' },
+      running: null,
     };
     return { session: active, mergedLegacyConfig: moved.merged };
   }
@@ -882,8 +944,29 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
    * A row whose file cannot be found at all is not an error either: it is shown
    * as `file-missing` and the user re-adds it. Re-adding is also the fix for
    * `file-changed`, because `source:add` re-digests and updates the hash.
+   *
+   * ## Why this is asynchronous, and why it is only four at a time
+   *
+   * Re-proving means hashing every registered file, and a project's files are
+   * models: opening a ten-model project used to read every byte of every one of
+   * them on the main loop before the window could draw again
+   * (RELEASE-1.0-PLAN, "Main process never blocked by hashing"). The digests
+   * run concurrently now, bounded by {@link DIGEST_CONCURRENCY}, because forty
+   * streams at one disk is slower than four and holds forty buffers alive.
+   *
+   * Every row is marked `hashing` before the first digest starts, so a screen
+   * that asks what the project holds while the proving is still going gets the
+   * truth — "being checked" — rather than a stale `ready` from a previous
+   * session or an invented `needs-attention`.
    */
-  function rehydrateSources(active: Session): void {
+  async function rehydrateSources(active: Session): Promise<void> {
+    /** One stored row, and the path this machine last saw it at. */
+    interface Candidate {
+      readonly source: ProjectSource;
+      readonly knownPath: string;
+    }
+
+    const candidates: Candidate[] = [];
     for (const source of active.store.listSources()) {
       const knownPath = appState.sourcePath(source.rawSha256);
       if (knownPath === undefined || !existsSync(knownPath)) {
@@ -898,8 +981,32 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         });
         continue;
       }
+      active.details.set(source.sourceId, {
+        absolutePath: knownPath,
+        status: 'hashing',
+        note: `Checking that ${source.rawFileName} is still the file this project recorded.`,
+        sheets: [],
+        cachePath: null,
+      });
+      candidates.push({ source, knownPath });
+    }
 
-      if (!bytesStillMatch(knownPath, source.rawSha256)) {
+    const proven = await mapBounded(
+      candidates,
+      DIGEST_CONCURRENCY,
+      async (candidate): Promise<boolean> =>
+        bytesStillMatch(candidate.knownPath, candidate.source.rawSha256),
+    );
+
+    // The project can be closed, or another one opened, while the digests run.
+    // Writing this project's answers into whatever session is current now would
+    // be worse than dropping them: the rows would describe a different file.
+    if (session !== active) {
+      return;
+    }
+
+    candidates.forEach(({ source, knownPath }, index): void => {
+      if (proven[index] !== true) {
         active.details.set(source.sourceId, {
           // The path is kept even though nothing may read it: re-adding this
           // same file has to land on this same source rather than register a
@@ -912,7 +1019,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           sheets: [],
           cachePath: null,
         });
-        continue;
+        return;
       }
 
       const identification = identifySource(knownPath);
@@ -924,18 +1031,18 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           sheets: [],
           cachePath: null,
         });
-        continue;
+        return;
       }
 
       const registration = identification.registrations.find(
         (candidate: SourceRegistration): boolean => candidate.role === source.role,
       );
       if (registration === undefined) {
-        continue;
+        return;
       }
       if (registration.needsExtraction) {
         restoreExtraction(active, source, knownPath);
-        continue;
+        return;
       }
       active.details.set(source.sourceId, {
         absolutePath: knownPath,
@@ -944,7 +1051,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         sheets: registration.sheets,
         cachePath: null,
       });
-    }
+    });
 
     syncModels(active);
     loadMelRows(active);
@@ -1080,7 +1187,10 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         // every other source in the universe.
         continue;
       }
-      active.models.set(sourceId, describeModel(target.source, target.cacheSha256, cache));
+      active.models.set(
+        sourceId,
+        describeModel(target.source, target.cacheSha256, target.absolutePath, cache),
+      );
       changed = true;
     }
 
@@ -1094,6 +1204,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
   function describeModel(
     source: ProjectSource,
     cacheSha256: string,
+    cachePath: string,
     cache: ExtractionCache,
   ): ModelState {
     const meta = cache.meta();
@@ -1143,6 +1254,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       displayName: source.logicalName,
       rawFileName: source.rawFileName,
       cacheSha256,
+      cachePath,
       handleId,
       cache,
       classes,
@@ -1180,11 +1292,29 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     return shortSourceLabels(orderedModels(active).map((model) => model.sourceId));
   }
 
-  /** The universe as `@matchline/compiler` and `@matchline/asset-catalog` take it. */
-  function compileSources(active: Session): readonly CompileSource[] {
+  /**
+   * The universe as `@matchline/asset-catalog` takes it: open handles, in
+   * `sourceId` order.
+   *
+   * Main's own reads only — the wizard's catalog preview and its subjects. A
+   * compile never sees these handles; it gets {@link workerSources} instead,
+   * because `node:sqlite` objects do not cross a thread boundary.
+   */
+  function openSources(active: Session): readonly OpenSource[] {
     return orderedModels(active).map((model) => ({
       sourceId: model.sourceId,
       cache: model.cache,
+      displayName: model.displayName,
+      rawFileName: model.rawFileName,
+    }));
+  }
+
+  /** The same universe as the compile worker takes it: paths and their hashes. */
+  function workerSources(active: Session): readonly CompileWorkerSource[] {
+    return orderedModels(active).map((model) => ({
+      sourceId: model.sourceId,
+      cachePath: model.cachePath,
+      cacheSha256: model.cacheSha256,
       displayName: model.displayName,
       rawFileName: model.rawFileName,
     }));
@@ -1260,7 +1390,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     const filters = toAssetFilters(active.draft.assetFilters);
     // The same universe the compile runs on, so the asset ids previewed on
     // screen 3 are the asset ids screen 8 reports.
-    const sources = compileSources(active);
+    const sources = openSources(active);
     const catalog = buildAssetCatalog(sources, mappings, filters);
 
     const fileOf = new Map(sources.map((source) => [source.sourceId, source.rawFileName]));
@@ -1356,6 +1486,13 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     if (session === null) {
       return false;
     }
+    // Same rule for the compile worker: a thread reading the caches of a
+    // project nobody has open is work no result will ever be adopted from.
+    if (session.running !== null) {
+      session.running.cancelRequested = true;
+      session.running.run?.cancel();
+      session.running = null;
+    }
     releaseModels(session);
     session.store.close();
     session = null;
@@ -1395,7 +1532,9 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
    * a compile that silently produces a flow graph with a third of the edges
    * missing.
    */
-  function connectivityInputs(active: Session): readonly ConnectivityWorkbookInput[] {
+  async function connectivityInputs(
+    active: Session,
+  ): Promise<readonly ConnectivityWorkbookInput[]> {
     const wanted: readonly SourceRole[] = ['easypower', 'cable-schedule', 'pmd'];
     const inputs: ConnectivityWorkbookInput[] = [];
 
@@ -1417,7 +1556,10 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         );
       }
       inputs.push({
-        bytes: readFileSync(detail.absolutePath),
+        // Read off the loop. A cable schedule is small next to a model, but
+        // "small" is the site's opinion, not ours, and the whole point of this
+        // milestone is that no compile input is read synchronously in main.
+        bytes: await readFile(detail.absolutePath),
         sourceFile: source.rawFileName,
       });
     }
@@ -1425,7 +1567,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
   }
 
   /** The MEL the compile builds its System Catalog from, or `null`. */
-  function melInput(active: Session): MelWorkbookInput | null {
+  async function melInput(active: Session): Promise<MelWorkbookInput | null> {
     for (const source of active.store.listSources()) {
       if (source.role !== 'mel') {
         continue;
@@ -1443,7 +1585,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
             'or remove the source.',
         );
       }
-      const bytes = readFileSync(detail.absolutePath);
+      const bytes = await readFile(detail.absolutePath);
       const descriptor = melSheetDescriptor(bytes, detail.sheets);
       if (descriptor === null) {
         continue;
@@ -1627,7 +1769,82 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
   }
 
   /**
-   * Runs the whole pipeline and records it.
+   * What a compile refuses to run over, or `null` when it may go ahead.
+   *
+   * Every one of these is a fact about the project rather than about the
+   * engine, which is why they are settled in main before a worker is spawned:
+   * a thread started only to be told there is no tag property is a thread
+   * nobody needed.
+   */
+  function compileRefusal(active: Session): string | null {
+    const changed = changedSourceNames(active);
+    if (changed.length > 0) {
+      return (
+        `${changed.join(', ')} ${changed.length === 1 ? 'has' : 'have'} changed on disk since ` +
+        'being added to this project, so compiling would use content this project has not ' +
+        'recorded. Add the file again on screen 1, or remove the source.'
+      );
+    }
+    const blocked = unreadableModelSources(active);
+    if (blocked.length > 0) {
+      return (
+        `This project compiles from ${String(blocked.length)} model ` +
+        `${blocked.length === 1 ? 'source' : 'sources'} it cannot read: ${blocked.join('; ')}. ` +
+        'Compiling without them would produce a register missing everything they hold. ' +
+        'Add each file again on screen 1, or remove the source.'
+      );
+    }
+    if (active.models.size === 0) {
+      return 'Add a model extraction cache on screen 1. Everything else is matched against it.';
+    }
+    if (!hasMappings(active.draft)) {
+      return 'Pick the property that holds the equipment tag on screen 3 before compiling.';
+    }
+    return null;
+  }
+
+  /** Plain-language stage names, so main owns the wording the wire carries. */
+  const STAGE_NOTES: Readonly<Record<CompileStage, string>> = {
+    'asset-catalog': 'Reading the model and working out which objects are equipment.',
+    'identity-ledger':
+      'Matching this run to the asset ids the project already has.',
+    properties: 'Reading every asset\u2019s properties out of its own model.',
+    'stored-decisions': 'Re-addressing the manual decisions this project has recorded.',
+    mel: 'Reading the master equipment list.',
+    systems: 'Resolving a system for every asset.',
+    'identity-index': 'Indexing tags, so foreign spellings can be matched.',
+    connectivity: 'Reading the connectivity workbooks.',
+    flow: 'Building the source-to-load projection.',
+    claims: 'Assembling every relationship claim.',
+    'derived-attributes': 'Resolving the attributes this site defines for itself.',
+    snapshot: 'Walking the ladder and folding the boundaries.',
+    projections: 'Arranging the level tree and writing the generated MEL.',
+    review: 'Collecting everything that still needs a decision.',
+  };
+
+  /** The running status for a stage that has just started. */
+  function runningStatus(stage: CompileStage | null): WireCompileStatus {
+    if (stage === null) {
+      return {
+        state: 'running',
+        stageIndex: 0,
+        stageCount: COMPILE_STAGES.length,
+        note: 'Starting the compile.',
+      };
+    }
+    return {
+      state: 'running',
+      // One-based, and it counts stages *started*: a bar that showed 0 while
+      // the first stage was running would sit still through the longest part
+      // of a large compile.
+      stageIndex: COMPILE_STAGES.indexOf(stage) + 1,
+      stageCount: COMPILE_STAGES.length,
+      note: STAGE_NOTES[stage],
+    };
+  }
+
+  /**
+   * Runs the whole pipeline on a worker thread and records what it produced.
    *
    * `compiles.profile_revision` is a foreign key into `profile`, so a compile
    * needs a saved revision to point at. Rather than refuse, an unsaved draft is
@@ -1638,40 +1855,41 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
    * sets. That is the whole point of the nulling: the recorded revision is the
    * one that produced this compile, never the one that happened to be saved
    * before the user changed something.
+   *
+   * ## The one write, and where it is
+   *
+   * Nothing durable happens until the worker has returned a project. The
+   * compile row, the snapshot and the ledger go in together, in one
+   * transaction, after the await — so a cancelled compile, a worker that died
+   * and a compile that threw all leave the project file exactly as they found
+   * it, and the workspace goes on showing the last compile that did finish.
+   *
+   * The auto-saved profile revision is the deliberate exception, and it is
+   * taken before the compile because the compile has to be able to name it. A
+   * cancelled run therefore leaves a spare revision behind; a revision is a row
+   * and a visible line in the profile history, which is the same trade
+   * `updateDraft` already makes.
+   *
+   * ## What may have changed while it ran
+   *
+   * A compile is now the one long-running thing a person can keep using the app
+   * during. The project can be closed, another opened, a source removed, the
+   * draft edited. So the result is only adopted if this is still the session
+   * that asked for it and still the run it started; otherwise it is dropped,
+   * because a view built from one project's compile and shown against another's
+   * is worse than no view at all.
    */
-  function compileNow(active: Session): WireCompileStatus {
-    const changed = changedSourceNames(active);
-    if (changed.length > 0) {
-      return {
-        state: 'failed',
-        reason:
-          `${changed.join(', ')} ${changed.length === 1 ? 'has' : 'have'} changed on disk since ` +
-          'being added to this project, so compiling would use content this project has not ' +
-          'recorded. Add the file again on screen 1, or remove the source.',
-      };
+  async function compileNow(active: Session): Promise<WireCompileStatus> {
+    if (active.running !== null) {
+      // Already running. Answering with the running status rather than starting
+      // a second worker: two compiles of one project would race over the ledger
+      // and over which `compiles` row is the newest.
+      return active.compile;
     }
-    const blocked = unreadableModelSources(active);
-    if (blocked.length > 0) {
-      return {
-        state: 'failed',
-        reason:
-          `This project compiles from ${String(blocked.length)} model ` +
-          `${blocked.length === 1 ? 'source' : 'sources'} it cannot read: ${blocked.join('; ')}. ` +
-          'Compiling without them would produce a register missing everything they hold. ' +
-          'Add each file again on screen 1, or remove the source.',
-      };
-    }
-    if (active.models.size === 0) {
-      return {
-        state: 'failed',
-        reason: 'Add a model extraction cache on screen 1. Everything else is matched against it.',
-      };
-    }
-    if (!hasMappings(active.draft)) {
-      return {
-        state: 'failed',
-        reason: 'Pick the property that holds the equipment tag on screen 3 before compiling.',
-      };
+
+    const refusal = compileRefusal(active);
+    if (refusal !== null) {
+      return { state: 'failed', reason: refusal };
     }
 
     const startedAtMs = Date.now();
@@ -1704,27 +1922,102 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       };
     }
 
-    let project: CompiledProject;
-    try {
-      project = runCompile({
-        sources: compileSources(active),
-        profile,
-        connectivityWorkbooks: connectivityInputs(active),
-        melWorkbook: melInput(active),
-        learnedRules: storedNestingRules(active),
-        manualRelationshipOverrides: storedRelationshipOverrides(active),
-        previousLedger,
-      });
-    } catch (error: unknown) {
-      active.view = null;
-      const status: WireCompileStatus = { state: 'failed', reason: messageOf(error) };
+    // The hierarchy the view is indexed against, taken now: the draft is the
+    // user's to edit while the compile runs, and indexing the result against a
+    // level stack it was not compiled with would mislabel every tree row.
+    const hierarchy = active.draft.hierarchy;
+
+    // Set BEFORE the first await, and this is the whole reason `RunningCompile`
+    // exists: from here on `cancelCompile` has something to aim at and a second
+    // `compile()` has something to see, even though the worker does not exist
+    // yet.
+    const marker: RunningCompile = { run: null, cancelRequested: false };
+    active.running = marker;
+    active.compile = runningStatus(null);
+
+    /** Whether this call still owns the session's compile. */
+    const stillMine = (): boolean => session === active && active.running === marker;
+    /** Settles this run, if it is still the one the session is waiting on. */
+    const settle = (status: WireCompileStatus): WireCompileStatus => {
+      if (!stillMine()) {
+        return active.compile;
+      }
+      active.running = null;
       active.compile = status;
       return status;
+    };
+
+    let sources: readonly CompileWorkerSource[];
+    let connectivityWorkbooks: readonly ConnectivityWorkbookInput[];
+    let melWorkbook: MelWorkbookInput | null;
+    try {
+      sources = workerSources(active);
+      connectivityWorkbooks = await connectivityInputs(active);
+      melWorkbook = await melInput(active);
+    } catch (error: unknown) {
+      // A workbook this machine can no longer read. Named rather than skipped.
+      return settle({ state: 'failed', reason: messageOf(error) });
     }
 
+    if (!stillMine()) {
+      // The project was closed while its workbooks were being read, and closing
+      // cancels. Nothing was started and nothing was written.
+      return { state: 'cancelled' };
+    }
+    if (marker.cancelRequested) {
+      // Stopped while its inputs were being read. The worker is never started,
+      // which is the cheapest possible way to honour a cancellation.
+      return settle({ state: 'cancelled' });
+    }
+
+    let run: CompileRun;
+    try {
+      run = startCompile(
+        {
+          sources,
+          profile,
+          connectivityWorkbooks,
+          melWorkbook,
+          learnedRules: storedNestingRules(active),
+          manualRelationshipOverrides: storedRelationshipOverrides(active),
+          previousLedger,
+        },
+        (stage: CompileStage): void => {
+          if (stillMine() && !marker.cancelRequested) {
+            active.compile = runningStatus(stage);
+          }
+        },
+      );
+    } catch (error: unknown) {
+      // A thread that could not be started at all.
+      return settle({ state: 'failed', reason: messageOf(error) });
+    }
+    marker.run = run;
+
+    const outcome = await run.finished;
+
+    if (!stillMine()) {
+      // The project was closed while the worker ran, which cancels it. Whatever
+      // it produced describes a project nobody is looking at, and it is dropped
+      // rather than written.
+      return { state: 'cancelled' };
+    }
+
+    if (outcome.kind === 'cancelled') {
+      // The view is left exactly as it was: a cancelled compile is not a failed
+      // one, and throwing away the workspace the user still has open would make
+      // Stop more destructive than waiting.
+      return settle({ state: 'cancelled' });
+    }
+    if (outcome.kind === 'failed') {
+      active.view = null;
+      return settle({ state: 'failed', reason: outcome.reason });
+    }
+
+    const project: CompiledProject = outcome.project;
     const finishedAtMs = Date.now();
     const finishedAt = new Date(finishedAtMs).toISOString();
-    const view = createCompileView(project, active.draft.hierarchy);
+    const view = createCompileView(project, hierarchy);
 
     // Keyed by `sourceId`, which is unique by construction — two sources of one
     // basename used to collapse into a single entry here, recording one hash
@@ -1758,7 +2051,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     });
 
     active.view = view;
-    const status: WireCompileStatus = {
+    return settle({
       state: 'done',
       summary: view.summary({
         compileId,
@@ -1767,9 +2060,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         durationMs: finishedAtMs - startedAtMs,
         undecidedReviewItemCount: undecidedCount(active, view),
       }),
-    };
-    active.compile = status;
-    return status;
+    });
   }
 
   /* ------------------------------------------------------------------- API */
@@ -1799,7 +2090,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       return summarize(active);
     },
 
-    open(projectPath: string, acceptMigration: boolean): OpenProjectResult {
+    async open(projectPath: string, acceptMigration: boolean): Promise<OpenProjectResult> {
       closeSession();
       let store: ProjectStore;
       try {
@@ -1816,8 +2107,23 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       const { config, adopted } = adoptConfig(store, projectPath);
       const { session: active, mergedLegacyConfig } = adopt(store, projectPath, config);
       session = active;
-      rehydrateSources(active);
+      // Recorded before the files are re-proved, because "this installation
+      // opened this project" is true from here whatever the hashing finds.
       rememberOpened(active);
+      // Awaited rather than left running: `open` answering before the project
+      // knows which of its files are readable would hand the wizard a source
+      // list it has to poll to find out. The hashing itself is off the loop,
+      // which is the part that used to freeze the window.
+      await rehydrateSources(active);
+      if (session !== active) {
+        // Something closed this project, or opened another, while its files
+        // were being re-proved. Refused rather than answered: the summary below
+        // would be read off a store that is already closed.
+        throw new Error(
+          `${path.basename(projectPath)} was closed while Matchline was checking its files. ` +
+            'Open it again.',
+        );
+      }
       return {
         outcome: 'opened',
         project: summarize(active),
@@ -2265,8 +2571,21 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
 
     /* ------------------------------------------------------------ screen 8 */
 
-    compile(): WireCompileStatus {
+    compile(): Promise<WireCompileStatus> {
       return compileNow(requireSession());
+    },
+
+    cancelCompile(): boolean {
+      const marker = session?.running ?? null;
+      if (marker === null) {
+        return false;
+      }
+      // The flag first, the worker second: a Stop that lands before the worker
+      // has been spawned has to be honoured by never spawning it, and the flag
+      // is the only thing that can carry that.
+      marker.cancelRequested = true;
+      marker.run?.cancel();
+      return true;
     },
 
     compileStatus(): WireCompileStatus {

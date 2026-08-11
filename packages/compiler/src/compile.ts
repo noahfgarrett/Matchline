@@ -107,6 +107,7 @@ import { DEFAULT_MEL_SHEET } from './types.js';
 import type {
   CompiledProject,
   CompileProjectInput,
+  CompileStage,
   CompileStats,
   DerivedAssetAttributes,
   DerivedAttributeValue,
@@ -275,6 +276,18 @@ interface SourceContext {
 export function compileProject(input: CompileProjectInput): CompiledProject {
   const { profile } = input;
   const anatomy = profile.tagAnatomy;
+  /**
+   * Announce a stage. Observation only -- see `CompileStageListener`: nothing
+   * below reads a return value, so a compile with a listener and a compile
+   * without one decide exactly the same things.
+   */
+  const onStage = input.onStage;
+  const stage =
+    onStage === undefined
+      ? (_stage: CompileStage): void => {}
+      : (name: CompileStage): void => {
+          onStage(name);
+        };
   // The mappings in the one shape the pipeline reads them in (P0-8). A profile
   // written before chains spells each field as a single `PropertyRef`; it is
   // lifted here, once, so nothing below has two shapes to handle -- and the
@@ -304,6 +317,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   const sources = orderCatalogSources(input.sources);
 
   // --- 1. the model-first asset universe -----------------------------------
+  stage('asset-catalog');
   const modelCatalog = buildAssetCatalog(
     sources,
     profile.propertyMappings,
@@ -343,6 +357,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   };
 
   // --- 2b. stable asset identity (P0-9) --------------------------------------
+  stage('identity-ledger');
   // THE SPLICE POINT. The catalog derives an id from the content it read, which
   // is stable for one compile and wrong across two -- a corrected tag would mint
   // a new id and orphan every decision recorded against the old one. The ledger
@@ -375,6 +390,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   const catalog = applyLedgerMapping(modelCatalog, ledgerResult.mapping);
   const identityLedger = ledgerResult.ledger;
 
+  stage('properties');
   const sourceFiles = new Map<string, string>();
   const subjects: ResolverSubject[] = [];
   const claimSubjects: ClaimSubject[] = [];
@@ -393,6 +409,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     sourceFiles.get(asset.assetId) ?? contextOf(asset).inputFileName;
 
   // --- 2c. stored decisions, re-addressed through the ledger ------------------
+  stage('stored-decisions');
   // A project file holds decisions taken against the ids an earlier compile
   // published. They are re-aimed here, once, so every rung below sees decisions
   // about assets that exist -- and the ones that cannot be re-aimed become
@@ -413,9 +430,11 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     soleSource === undefined ? null : (contexts.get(soleSource.sourceId)?.inputFileName ?? null);
 
   // --- 3. the MEL and the System Catalog ------------------------------------
+  stage('mel');
   const mel = readMel(input.melWorkbook);
 
   // --- 4. system resolution --------------------------------------------------
+  stage('systems');
   const resolveContext: ResolveContext = {
     ...(anatomy === undefined ? {} : { anatomy }),
     catalog: mel.catalog,
@@ -431,6 +450,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     systems.bySubject.get(assetId)?.resolution ?? null;
 
   // --- 5. identity ------------------------------------------------------------
+  stage('identity-index');
   // The profile's anatomy enables the anatomy tier unless the caller states its
   // own: one taught tag shape should not have to be configured twice.
   const identityConfig: IdentityConfig = {
@@ -458,6 +478,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   );
 
   // --- 6. connectivity --------------------------------------------------------
+  stage('connectivity');
   const connectivityReports: ConnectivityWorkbookReport[] = [];
   const observations: ConnectivityObservation[] = [];
   for (const workbook of input.connectivityWorkbooks ?? []) {
@@ -471,6 +492,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   }
 
   // --- 7. the Electrical Flow projection --------------------------------------
+  stage('flow');
   const enrichment = new Map<string, FlowEnrichment>();
   for (const asset of catalog.assets) {
     const resolution = resolutionOf(asset.assetId);
@@ -493,6 +515,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   const flow = buildElectricalFlowFromIndex(observations, identityIndex, enrichment);
 
   // --- 8. relationship claims --------------------------------------------------
+  stage('claims');
   // Only edges whose two ends are both model-confirmed can become claims: a
   // source-only node carries no assetId, and inventing one would make a
   // spreadsheet model-authoritative (ENGINE.md binding rule 1).
@@ -558,6 +581,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   });
 
   // --- 8b. derived attributes (P0-7) -------------------------------------------
+  stage('derived-attributes');
   // After systems, because a `system-field` rung reads what the resolver settled
   // on; before the snapshot, because a level may group, label or bound on a
   // derived key and the fold has to see it. The subjects built in stage 2 still
@@ -594,6 +618,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
         });
 
   // --- 9. the resolved snapshot ------------------------------------------------
+  stage('snapshot');
   // The model tree is the one ladder rung assembled here rather than in
   // `@matchline/relationship-claims`: it is a fact about the extraction caches,
   // and the caches are the orchestrator's to read. One walk per source, never
@@ -623,6 +648,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   });
 
   // --- 10. projections ----------------------------------------------------------
+  stage('projections');
   const tree = hierarchyTree(snapshot, profile.hierarchy, compileSubjects);
 
   const tagByAssetId = new Map<string, string>();
@@ -649,6 +675,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   };
 
   // --- 11. one review queue -------------------------------------------------------
+  stage('review');
   const reviewItems = aggregateReviewItems([
     catalog.reviewItems,
     // Stored decisions the ledger could not re-address. Raised before the

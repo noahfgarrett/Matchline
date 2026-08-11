@@ -8,7 +8,8 @@ licensed Navisworks Manage/Simulate required, .NET Framework 4.8, no NWD forward
 ```
 Electron main: NavisworksExtractionService (apps/desktop)
 └── launches → Matchline.Extractor.exe (net48 console, "the launcher")
-               ├── sha256(input.nwd) → cache hit? exit early with result
+               ├── sha256(input.nwd), or --input-sha256 from the caller
+               │        → cache hit? exit early with result
                ├── launches Navisworks -NoGUI -ExecuteAddInPlugin MatchlineExtract ...
                │        └── plugin (net48 DLL) walks the model, streams NDJSON → temp file
                ├── converts NDJSON stream → SQLite cache (Microsoft.Data.Sqlite)
@@ -29,7 +30,8 @@ Design calls, and why:
    cannot corrupt anything (Phase 1 exit criterion).
 3. **Worker exits after each extraction** to reclaim Autodesk memory (PRODUCT.md §14).
 4. **Cache reuse by content hash.** `%LOCALAPPDATA%\Matchline\cache\models\<sha256>.sqlite`.
-   Unchanged NWD → launcher reports `cache-hit` without touching Navisworks.
+   Unchanged NWD → launcher reports `cache-hit` without touching Navisworks. The hash is
+   computed once per file, not once per process: see `--input-sha256` below.
 5. **Determinism.** Objects are recorded in depth-first document order with explicit
    `(parent_id, path_index)`; properties in encounter order per object. Same NWD → same
    cache content (excluding `extracted_at_utc`).
@@ -52,8 +54,13 @@ Four rules the service keeps, and why:
 
 - **Serial by default.** One headless Navisworks at a time. Two on a real machine is slower
   than two in sequence and can fail outright, so the rest of the queue says so in the row.
-- **Streaming SHA-256 everywhere.** A model may be gigabytes; nothing reads one into a
-  buffer to hash it, and the main process keeps drawing while it does.
+- **Streaming SHA-256 everywhere, and once.** A model may be gigabytes; nothing reads one
+  into a buffer to hash it, and the main process keeps drawing while it does. The service
+  streams the hash when the file is registered and then passes it on the launcher's command
+  line (`--input-sha256`), so the same bytes are not read a second time by the launcher to
+  reach the same answer. That is safe here because the two reads would be of the same file:
+  a source whose bytes have changed since it was registered is `file-changed` and is not
+  extracted or compiled from until it is added again, which re-digests it.
 - **Cache reuse before anything is launched.** The service checks
   `<cache dir>/<sha256>.sqlite` itself, so re-adding an unchanged model never starts
   Navisworks. The launcher checks again on its own, for the same reason, when it is run
@@ -76,6 +83,30 @@ on a machine with no Navisworks: `apps/desktop/test/fake-extractor.mjs` is a sec
 implementation of the launcher's side of the protocol, run as a real child process, writing
 a real cache.
 
+## The command line
+
+```
+Matchline.Extractor --input <file.nwd> [--cache-dir <dir>] [--navisworks-dir <dir>]
+                    [--navisworks-version <year>] [--input-sha256 <hex>]
+```
+
+`--input` is the only required argument. `--navisworks-dir` and `--navisworks-version` both
+pin the install to use and are refused together, because a caller that passed both meant one
+of them and the launcher cannot know which.
+
+`--input-sha256` is the input's SHA-256, already computed by the caller: 64 hex digits, case
+folded, anything else refused at parse time with `INVALID_ARGS`. When it is supplied the
+launcher **does not read the file to hash it** — it reports the `hash` stage as complete with
+the file's real size and goes straight to the cache-hit check. The value is **trusted**, not
+verified: verifying it would be the read the flag exists to avoid. It is what the cache is
+filed under and what the cache records as `meta.input_sha256`, so a caller that supplies a
+hash of different bytes gets a cache under a name nothing will find again. Pass it only when
+you hashed the very bytes the run will open.
+
+Absent, the launcher hashes the input itself, exactly as it always did — which is what a
+person running it by hand from a shell gets, and what docs/WINDOWS-RUNBOOK.md's manual
+invocation exercises.
+
 ## Protocol (launcher stdout, JSON lines)
 
 ```
@@ -88,6 +119,11 @@ a real cache.
 
 `detail` is optional and carries a human-readable sentence; only the `detect` stage emits one
 today, and a reader must not require it on any stage.
+
+The `hash` stage is always announced, whether the launcher computed the hash or was given
+one: with `--input-sha256` it is a single line already at `done == total`, and without it the
+line opens at `done: 0` and is repeated as the read progresses. A reader must not infer from
+one `hash` line that a run stalled, and must not require more than one.
 
 Cancellation: a single `cancel\n` line on launcher stdin → launcher kills the Navisworks
 process, deletes partials, exits with `{"type":"error","code":"CANCELLED"}`.

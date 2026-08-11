@@ -378,7 +378,7 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     service.close();
   });
 
-  await t.test('a profile write survives closing and reopening the project', () => {
+  await t.test('a profile write survives closing and reopening the project', async () => {
     const first = newService();
     first.create(join(workDir, 'Reopen.matchline'), 'Reopen');
     first.updateDraft({
@@ -391,14 +391,14 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     first.close();
 
     const second = newService();
-    second.open(join(workDir, 'Reopen.matchline'));
+    await second.open(join(workDir, 'Reopen.matchline'));
     assert.deepEqual(second.draftState().draft.roleGraph.rules, [
       { parentRole: 'PNL', childRole: 'RIO' },
     ]);
     second.close();
   });
 
-  await t.test('a level spelled the engine\'s way is read, lifted and kept (P0-6)', () => {
+  await t.test('a level spelled the engine\'s way is read, lifted and kept (P0-6)', async () => {
     // A profile package or a config written against `HierarchyLevelConfig`
     // names the grouping attribute `keyAttributeKey`; screen 6 and the project
     // file call the same field `attributeKey`. Refusing either spelling would
@@ -426,7 +426,7 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     first.close();
 
     const second = newService();
-    second.open(path);
+    await second.open(path);
     const [level] = second.draftState().draft.hierarchy.levels;
     assert.equal(level.attributeKey, 'systemKey', 'the key survived the round trip');
     assert.equal(level.displayAttributeKey, 'systemLabel', 'and so did the display attribute');
@@ -491,8 +491,8 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
 
   /* ------------------------------------------------------------ screen 8 */
 
-  await t.test('screen 8 compiles the project and reports the §2.5 demotion', () => {
-    const status = service.compile();
+  await t.test('screen 8 compiles the project and reports the §2.5 demotion', async () => {
+    const status = await service.compile();
     assert.equal(status.state, 'done', status.state === 'failed' ? status.reason : '');
 
     const summary = status.summary;
@@ -628,14 +628,14 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     assert.equal(unknown.allowed, false);
   });
 
-  await t.test('a drag across a boundary is recorded, and the fold still applies (P0-4)', () => {
+  await t.test('a drag across a boundary is recorded, and the fold still applies (P0-4)', async () => {
     const overrides = service.setRelationshipOverride(RIO, PNL, 'One panel, one skid.');
     assert.equal(overrides.length, 1);
     assert.equal(overrides[0].childTag, 'RIO603-10-01');
     assert.equal(overrides[0].parentTag, 'PNL603-10-01');
     assert.equal(overrides[0].note, 'One panel, one skid.');
 
-    const status = service.compile();
+    const status = await service.compile();
     assert.equal(status.state, 'done', status.state === 'failed' ? status.reason : '');
     assert.equal(status.summary.compileId, 2);
 
@@ -661,11 +661,11 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     assert.ok(crossing.detail.includes('PNL603-10-01'), 'and it names the parent that was chosen');
   });
 
-  await t.test('a drag inside the boundaries nests, and removing it is the undo', () => {
+  await t.test('a drag inside the boundaries nests, and removing it is the undo', async () => {
     assert.equal(service.removeRelationshipOverride(RIO), true);
     assert.deepEqual(service.listRelationshipOverrides(), []);
 
-    const status = service.compile();
+    const status = await service.compile();
     assert.equal(status.state, 'done');
     assert.equal(
       status.summary.demotionCount,
@@ -681,7 +681,7 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     // The other half of §11.5, which P0-4 leaves untouched — and the parent move
     // the revision-diff test below compares two compiles over.
     service.setRelationshipOverride(MAH_CHILD, MAH_PARENT, 'One air handling train.');
-    assert.equal(service.compile().state, 'done');
+    assert.equal((await service.compile()).state, 'done');
     const child = service.treeSearch('MAH001-10-02', 5)[0];
     assert.equal(child.overridden, true, 'nothing is crossed, so the stated parent is the parent');
     assert.equal(child.demoted, false);
@@ -736,7 +736,7 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     }
   });
 
-  await t.test('review decisions are recorded and shown against the item', () => {
+  await t.test('review decisions are recorded and shown against the item', async () => {
     const before = service.reviewPage('', 0, 100);
     assert.ok(before.total > 0, 'the compile left something to decide');
     assert.equal(before.undecidedCount, before.total);
@@ -764,7 +764,7 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
 
     // The next compile carries the decision through: it is stored against the
     // review key, not against a compile.
-    assert.equal(service.compile().state, 'done');
+    assert.equal((await service.compile()).state, 'done');
     assert.equal(service.reviewPage('', 0, 100).undecidedCount, before.undecidedCount - 1);
   });
 
@@ -910,13 +910,13 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     assert.equal(untrained[masterColumn], '', 'nothing was learned for it, so the cell is blank');
   });
 
-  await t.test('the predecessor matrix carries the boundary dependency', () => {
+  await t.test('the predecessor matrix carries the boundary dependency', async () => {
     // Drop the air-handler override: it is the one manual parent that actually
     // nests, so removing it is a real parent move for the revision diff below.
     // The 603 -> 650 predecessor edge comes from the boundary demotion and is
     // there either way.
     service.removeRelationshipOverride(MAH_CHILD);
-    assert.equal(service.compile().state, 'done');
+    assert.equal((await service.compile()).state, 'done');
 
     const target = join(workDir, 'out-predecessors.xlsx');
     const result = service.exportPredecessors(target);
@@ -1067,11 +1067,11 @@ test('the workspace refuses to answer before anything is compiled', () => {
   }
 });
 
-test('a compile with no model fails with something a person can act on', () => {
+test('a compile with no model fails with something a person can act on', async () => {
   const service = newService();
   try {
     service.create(join(workDir, 'NoModel.matchline'), 'No Model');
-    const status = service.compile();
+    const status = await service.compile();
     assert.equal(status.state, 'failed');
     assert.match(status.reason, /model extraction cache/);
     assert.equal(service.compileStatus().state, 'never-run', 'a refusal is not a failed compile');
@@ -1148,7 +1148,7 @@ const FULL_PROFILE_PATCH = {
  * The reader deliberately runs on a *different* userData directory, so nothing
  * machine-local can be quietly supplying the answer.
  */
-test('a moved project file carries its whole configuration with it', () => {
+test('a moved project file carries its whole configuration with it', async () => {
   const originalPath = join(workDir, 'Portable.matchline');
   const movedDir = join(workDir, 'somewhere-else');
   const movedPath = join(movedDir, 'Renamed-By-The-User.matchline');
@@ -1172,7 +1172,7 @@ test('a moved project file carries its whole configuration with it', () => {
     appVersion: '0.6.0',
   });
   try {
-    const { project, notice } = reader.open(movedPath);
+    const { project, notice } = await reader.open(movedPath);
     assert.equal(project.path, movedPath);
     assert.equal(notice.migration, null, 'the file was already current');
     assert.equal(notice.adoptedAppStateConfig, false, 'nothing machine-local was involved');
@@ -1240,7 +1240,7 @@ test('the level-attribute menu offers the project’s derived attributes beside 
   }
 });
 
-test('an imported profile package is written into the project, not just held', () => {
+test('an imported profile package is written into the project, not just held', async () => {
   const packagePath = join(workDir, 'portable.matchline-profile.json');
   const targetPath = join(workDir, 'Imported.matchline');
 
@@ -1266,7 +1266,7 @@ test('an imported profile package is written into the project, not just held', (
 
   const reopened = newService();
   try {
-    reopened.open(targetPath);
+    await reopened.open(targetPath);
     assert.deepEqual(
       reopened.draftState().draft.parentTagProperty,
       { category: 'Dragon Data', name: 'Parent Tag' },
@@ -1281,7 +1281,7 @@ test('an imported profile package is written into the project, not just held', (
  * The one-way move out of the app-state file, for projects configured by a
  * build that had nowhere else to put it.
  */
-test('a config left in the app-state file is copied into the project once', () => {
+test('a config left in the app-state file is copied into the project once', async () => {
   const projectPathHere = join(workDir, 'Legacy.matchline');
   const legacyUserData = join(workDir, 'legacy-userdata');
 
@@ -1316,7 +1316,7 @@ test('a config left in the app-state file is copied into the project once', () =
 
   const first = createProjectService({ userDataDir: legacyUserData, appVersion: '0.6.0' });
   try {
-    const { notice } = first.open(projectPathHere);
+    const { notice } = await first.open(projectPathHere);
     assert.equal(notice.adoptedAppStateConfig, true, 'the copy is reported, not silent');
     // Not merged into a stored revision yet: this project never picked an
     // equipment tag property, so there is no publishable profile to write the
@@ -1343,7 +1343,7 @@ test('a config left in the app-state file is copied into the project once', () =
 
   const second = createProjectService({ userDataDir: legacyUserData, appVersion: '0.6.0' });
   try {
-    const { notice } = second.open(projectPathHere);
+    const { notice } = await second.open(projectPathHere);
     assert.equal(notice.adoptedAppStateConfig, false, 'there is nothing left to adopt');
     assert.equal(notice.mergedLegacyConfig, false, 'and nothing left to merge either');
     assert.deepEqual(
@@ -1364,7 +1364,7 @@ test('a config left in the app-state file is copied into the project once', () =
  * Opening it once moves them into a NEW profile revision — a revision, so the
  * one the last compile ran against is untouched — and only then clears the rows.
  */
-test('a pre-v2 project moves its config sections into a new profile revision', () => {
+test('a pre-v2 project moves its config sections into a new profile revision', async () => {
   const projectPathHere = join(workDir, 'PreV2.matchline');
   const userData = join(workDir, 'prev2-userdata');
 
@@ -1395,7 +1395,7 @@ test('a pre-v2 project moves its config sections into a new profile revision', (
   const opener = createProjectService({ userDataDir: userData, appVersion: '0.6.0' });
   let revisionAfterMerge = null;
   try {
-    const { notice, project } = opener.open(projectPathHere);
+    const { notice, project } = await opener.open(projectPathHere);
     assert.equal(notice.mergedLegacyConfig, true, 'the move is reported, not silent');
     const { draft } = opener.draftState();
     assert.deepEqual(draft.hierarchy, FULL_PROFILE_PATCH.hierarchy);
@@ -1417,7 +1417,7 @@ test('a pre-v2 project moves its config sections into a new profile revision', (
   // Once is once: reopening finds nothing left to move and writes no revision.
   const again = createProjectService({ userDataDir: userData, appVersion: '0.6.0' });
   try {
-    const { notice, project } = again.open(projectPathHere);
+    const { notice, project } = await again.open(projectPathHere);
     assert.equal(notice.mergedLegacyConfig, false);
     assert.equal(project.savedRevision, revisionAfterMerge, 'no second revision was written');
     assert.deepEqual(again.draftState().draft.hierarchy, FULL_PROFILE_PATCH.hierarchy);
@@ -1538,7 +1538,7 @@ test('a connectivity source whose file has gone is named, not skipped', async ()
     });
     rmSync(movedPath);
 
-    const status = service.compile();
+    const status = await service.compile();
     assert.equal(status.state, 'failed');
     assert.match(status.reason, /Moved-EasyPower\.xlsx/);
     assert.match(status.reason, /cannot read/);

@@ -1,29 +1,20 @@
-import {
-  compileProject,
-  type CompileProjectInput,
-  type CompiledProject,
-  type ConnectivityWorkbookInput,
-  type MelWorkbookInput,
-} from '@matchline/compiler';
-import type {
-  ManualRelationshipOverride,
-  ResolvedAssetNode,
-  ReviewItem,
-  SiteProfileV2,
-} from '@matchline/domain';
+import { Worker } from 'node:worker_threads';
+
+import type { CompileStage, CompiledProject } from '@matchline/compiler';
+import type { ResolvedAssetNode, ReviewItem } from '@matchline/domain';
 import { reviewItemSummary } from '@matchline/domain';
-import type { AssetLedger, LedgerEvent } from '@matchline/asset-identity';
+import type { LedgerEvent } from '@matchline/asset-identity';
 import {
   sourceStatusOf,
   walkSourceToLoad,
   type FlowNode,
   type FlowVisit,
 } from '@matchline/electrical-flow';
-import type { LearnedRuleSet } from '@matchline/learned-rules';
 import type { GeneratedMelAsset } from '@matchline/mel-export';
-import type { ExtractionCache } from '@matchline/model-schema';
 import { reviewKey } from '@matchline/ssm-compiler';
 import type { HierarchyAssetNode, HierarchyLevelNode } from '@matchline/ssm-compiler';
+
+import type { CompileWorkerMessage, CompileWorkerRequest } from './compile-worker.js';
 
 import type {
   WireCompileIssueKind,
@@ -37,8 +28,6 @@ import type {
   WireReviewRow,
   WireTreeNode,
 } from '../../shared/schemas.js';
-
-
 
 /**
  * Screen 8 and the workspace: one compile, and every paged view over it.
@@ -55,106 +44,133 @@ import type {
 
 /* ======================================================== running a compile */
 
-/**
- * One open model source, as a compile and the wizard's previews both read it.
- *
- * The `sourceId` is the project's own (`deriveSourceId`), never a file name and
- * never a constant: it is the identity every per-source number, duplicate-tag
- * report and untagged asset id is addressed by. The same array feeds the
- * wizard's catalog preview (`project-session.ts`), so the asset ids a person
- * sees on screen 3 are the asset ids the compile produces on screen 8.
- */
-export interface CompileSource {
-  readonly sourceId: string;
-  readonly cache: ExtractionCache;
-  readonly displayName: string;
-  readonly rawFileName: string;
-}
+/** What one compile ended up being. */
+export type CompileOutcome =
+  | { readonly kind: 'done'; readonly project: CompiledProject }
+  /** The worker was terminated. Nothing was written, nothing was kept. */
+  | { readonly kind: 'cancelled' }
+  | { readonly kind: 'failed'; readonly reason: string };
 
-/** Everything a compile needs that the session already holds. */
-export interface CompileRequest {
-  /** Every ready model source, in `sourceId` order. Never empty. */
-  readonly sources: readonly CompileSource[];
-  /** The whole site rule set, as one versioned value. */
-  readonly profile: SiteProfileV2;
-  readonly connectivityWorkbooks: readonly ConnectivityWorkbookInput[];
-  readonly melWorkbook: MelWorkbookInput | null;
-  readonly learnedRules: LearnedRuleSet | null;
-  readonly manualRelationshipOverrides: readonly ManualRelationshipOverride[];
+/** A compile in flight: something to await, and the one way to stop it. */
+export interface CompileRun {
+  readonly finished: Promise<CompileOutcome>;
   /**
-   * The asset identity ledger the project's last compile wrote, or `null` when
-   * it has never been compiled (P0-9).
+   * Terminates the worker.
    *
-   * `null` is not a degraded mode: it is a first compile, which mints the ids.
-   * What it must never be is "the project has a ledger and we did not read it" —
-   * that would re-mint every id and orphan every stored decision, which is the
-   * exact failure the ledger exists to prevent. `project-session.ts` reads it
-   * out of the project file before every compile.
+   * Immediate and unconditional — there is no cooperative checkpoint to ask a
+   * synchronous pipeline to stop at, and inventing one would put a cancellation
+   * test inside every stage of the engine. Terminating is safe precisely
+   * because the worker owns nothing durable: it opened its own read-only cache
+   * handles and the project store is never touched until the compile has
+   * returned to main (see `project-session.ts`, `compileNow`).
+   *
+   * Calling it after the run has finished does nothing.
    */
-  readonly previousLedger: AssetLedger | null;
+  cancel(): void;
 }
 
 /**
- * Builds the compiler's input.
+ * Where the compile worker's built module is.
  *
- * Assembled key by key rather than with spreads and `??`: under
- * `exactOptionalPropertyTypes` an explicit `melWorkbook: undefined` is not the
- * same as an absent key, and `CompileProjectInput` means absent — a present
- * `undefined` would be read as "a workbook was supplied" by anything that
- * checks with `in`.
- *
- * The site's rule set arrives as ONE value now. The hierarchy, the ladder, the
- * role graph, the projection and the two explicit properties used to be built
- * here out of the project's `config`; they are sections of the profile, and
- * `toSiteProfile` is the one place the wizard's draft becomes one.
+ * Resolved against this module rather than the app root, so it is the same
+ * expression in `dist/electron/services` under a packaged app, under `electron
+ * .`, and under a test running the built output directly.
  */
-export function buildCompileInput(request: CompileRequest): CompileProjectInput {
-  const input: {
-    sources: CompileProjectInput['sources'];
-    profile: SiteProfileV2;
-    includePropertyCatalog: boolean;
-    connectivityWorkbooks?: ReadonlyArray<ConnectivityWorkbookInput>;
-    melWorkbook?: MelWorkbookInput;
-    learnedRules?: LearnedRuleSet;
-    manualRelationshipOverrides?: ReadonlyArray<ManualRelationshipOverride>;
-    identityLedger?: AssetLedger;
-  } = {
-    // Every ready model source, not the first one: a project is a universe
-    // (P0-1). `compileProject` reorders by `sourceId` itself, so registering
-    // them in a different order is the same compile.
-    sources: request.sources.map((source) => ({
-      sourceId: source.sourceId,
-      cache: source.cache,
-      displayName: source.displayName,
-      rawFileName: source.rawFileName,
-    })),
-    profile: request.profile,
-    // Screen 2 builds its own catalog from the same caches; a compile paying
-    // for a second streaming pass per cache would be work nothing reads.
-    includePropertyCatalog: false,
+const WORKER_URL = new URL('./compile-worker.js', import.meta.url);
+
+/**
+ * Starts a compile on a worker thread and hands back a way to wait for it and a
+ * way to stop it.
+ *
+ * Never throws, and never rejects: every way a compile can end — a refusal from
+ * the engine, a cache that is not what the project recorded, a worker that
+ * died, a cancellation — arrives as a {@link CompileOutcome}, because the
+ * caller has one job with all four of them, which is to put a sentence on
+ * screen 8.
+ *
+ * The request is the worker's own shape (`CompileWorkerRequest`): paths rather
+ * than cache handles, bytes rather than files. What can cross a thread boundary
+ * is decided in one place, and it is the file the worker is in.
+ */
+export function startCompile(
+  request: CompileWorkerRequest,
+  onStage: (stage: CompileStage) => void,
+): CompileRun {
+  let settle: (outcome: CompileOutcome) => void = (): void => {};
+  const finished = new Promise<CompileOutcome>((resolve): void => {
+    settle = resolve;
+  });
+
+  let done = false;
+  let cancelled = false;
+  /** The outcome the worker reported, held until its `exit` confirms it is gone. */
+  let reported: CompileOutcome | null = null;
+
+  const worker = new Worker(WORKER_URL, { workerData: request });
+
+  const finish = (outcome: CompileOutcome): void => {
+    if (done) {
+      return;
+    }
+    done = true;
+    settle(outcome);
   };
 
-  if (request.connectivityWorkbooks.length > 0) {
-    input.connectivityWorkbooks = [...request.connectivityWorkbooks];
-  }
-  if (request.melWorkbook !== null) {
-    input.melWorkbook = request.melWorkbook;
-  }
-  if (request.learnedRules !== null) {
-    input.learnedRules = request.learnedRules;
-  }
-  if (request.manualRelationshipOverrides.length > 0) {
-    input.manualRelationshipOverrides = [...request.manualRelationshipOverrides];
-  }
-  if (request.previousLedger !== null) {
-    input.identityLedger = request.previousLedger;
-  }
+  worker.on('message', (message: CompileWorkerMessage): void => {
+    switch (message.kind) {
+      case 'stage':
+        // Dropped once cancelled: a stage line arriving after the user pressed
+        // Stop would redraw progress for work nobody is waiting for.
+        if (!cancelled) {
+          onStage(message.stage);
+        }
+        return;
+      case 'done':
+        reported = { kind: 'done', project: message.project as CompiledProject };
+        return;
+      case 'failed':
+        reported = { kind: 'failed', reason: message.reason };
+        return;
+      default: {
+        const exhaustive: never = message;
+        throw new Error(`Unhandled compile worker message: ${JSON.stringify(exhaustive)}`);
+      }
+    }
+  });
 
-  return input;
-}
+  worker.on('error', (error: Error): void => {
+    // A throw the worker could not answer for itself: a module that would not
+    // load, an out-of-memory. `exit` still follows.
+    reported = { kind: 'failed', reason: error.message };
+  });
 
-export function runCompile(request: CompileRequest): CompiledProject {
-  return compileProject(buildCompileInput(request));
+  worker.on('exit', (code: number): void => {
+    if (cancelled) {
+      finish({ kind: 'cancelled' });
+      return;
+    }
+    if (reported !== null) {
+      finish(reported);
+      return;
+    }
+    finish({
+      kind: 'failed',
+      reason:
+        `The compile stopped without saying why (worker exit code ${String(code)}). ` +
+        'Nothing was written to the project.',
+    });
+  });
+
+  return {
+    finished,
+    cancel(): void {
+      if (done || cancelled) {
+        return;
+      }
+      cancelled = true;
+      void worker.terminate();
+    },
+  };
 }
 
 /* =============================================== the generated-MEL adapter */

@@ -25,7 +25,10 @@ import { writeDragonFixture } from '@matchline/model-schema/fixtures/dragon';
  * `native/extractor/ExitCodes.cs`) and speaking it byte for byte:
  *
  * - the same command line: `--input`, `--cache-dir`, `--navisworks-dir`,
- *   `--navisworks-version`, and `INVALID_ARGS` for anything else;
+ *   `--navisworks-version`, `--input-sha256`, and `INVALID_ARGS` for anything
+ *   else — including a `--input-sha256` that is not 64 hex digits;
+ * - the same trust in a supplied hash: the hash stage is reported complete and
+ *   the file is not read for it, and the value addresses the cache;
  * - the same order of events: hash → cache-hit check → detect (+ the
  *   `ADAPTER_UNVERIFIED` warning, because no year is verified yet) → open →
  *   walk → convert → finalize → result;
@@ -76,7 +79,12 @@ const EXIT_FOR_CODE = {
 
 const USAGE =
   'Matchline.Extractor --input <file.nwd> [--cache-dir <dir>] [--navisworks-dir <dir>]\n' +
-  '                    [--navisworks-version <year>]';
+  '                    [--navisworks-version <year>] [--input-sha256 <hex>]';
+
+/** `ExtractorArguments.TryNormaliseSha256`: 64 hex digits, folded to lower case. */
+function normaliseSha256(value) {
+  return /^[0-9a-fA-F]{64}$/.test(value) ? value.toLowerCase() : null;
+}
 
 /**
  * One protocol line, written synchronously.
@@ -118,6 +126,7 @@ function fail(code, message) {
 function parseArguments(argv) {
   let input = null;
   let cacheDir = null;
+  let inputSha256 = null;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     const takeValue = (name) => {
@@ -140,6 +149,14 @@ function parseArguments(argv) {
       case '--navisworks-version':
         takeValue('--navisworks-version');
         break;
+      case '--input-sha256': {
+        const raw = takeValue('--input-sha256');
+        inputSha256 = normaliseSha256(raw);
+        if (inputSha256 === null) {
+          fail('INVALID_ARGS', `--input-sha256 takes 64 hex digits, not '${raw}'.\n${USAGE}`);
+        }
+        break;
+      }
       default:
         fail('INVALID_ARGS', `Unrecognised argument '${argument}'.\n${USAGE}`);
     }
@@ -147,11 +164,20 @@ function parseArguments(argv) {
   if (input === null) {
     fail('INVALID_ARGS', `--input is required.\n${USAGE}`);
   }
-  return { input: path.resolve(input), cacheDir: path.resolve(cacheDir ?? '.') };
+  return { input: path.resolve(input), cacheDir: path.resolve(cacheDir ?? '.'), inputSha256 };
 }
 
-/** The launcher hashes its own input, streaming, reporting bytes (FileHasher). */
-function hashInput(inputPath) {
+/**
+ * The launcher hashes its own input, streaming, reporting bytes (FileHasher) —
+ * unless the caller passed `--input-sha256`, in which case it trusts that and
+ * only reports the stage as complete (ExtractionRunner.Run).
+ */
+function hashInput(inputPath, supplied) {
+  if (supplied !== null) {
+    const total = statSync(inputPath).size;
+    progress('hash', total, total);
+    return Promise.resolve(supplied);
+  }
   const total = statSync(inputPath).size;
   return new Promise((resolve, reject) => {
     const hash = createHash('sha256');
@@ -234,7 +260,7 @@ function commitCache(cacheDir, sha256, inputPath, scenario) {
 
 async function main() {
   const argv = process.argv.slice(2);
-  const { input, cacheDir } = parseArguments(argv);
+  const { input, cacheDir, inputSha256 } = parseArguments(argv);
 
   if (!existsSync(input)) {
     fail('INPUT_NOT_FOUND', `Input file not found: ${path.basename(input)}`);
@@ -258,7 +284,7 @@ async function main() {
     process.on('SIGTERM', () => {});
   }
 
-  const sha256 = await hashInput(input);
+  const sha256 = await hashInput(input, inputSha256);
   log(`start ${path.basename(input)}`);
 
   const stopIfCancelled = (partialPath) => {

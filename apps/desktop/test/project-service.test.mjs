@@ -428,10 +428,10 @@ test('the full screens 1-5 flow, over the Dragon fixture', async (t) => {
   });
 });
 
-test('reopening restores the draft from the saved revision', () => {
+test('reopening restores the draft from the saved revision', async () => {
   const service = newService();
   try {
-    const opened = service.open(projectPath, false);
+    const opened = await service.open(projectPath, false);
     assert.equal(opened.outcome, 'opened');
     const { project, notice } = opened;
     assert.equal(project.name, 'Dragon');
@@ -473,10 +473,10 @@ test('reopening restores the draft from the saved revision', () => {
   }
 });
 
-test('removing the model source takes screens 2-5 back to blocked', () => {
+test('removing the model source takes screens 2-5 back to blocked', async () => {
   const service = newService();
   try {
-    service.open(projectPath, false);
+    await service.open(projectPath, false);
     assert.equal(service.removeSource('model:dragon.matchline-cache'), true);
     assert.equal(service.modelUniverse(), null);
     assert.deepEqual(service.classList(), []);
@@ -537,7 +537,7 @@ test('a source whose bytes changed is reported as changed, not read anyway', asy
     setup.create(ownProjectPath, 'Changed');
     await setup.addSources([cachePath, ownMelPath]);
     teachDragon(setup);
-    assert.equal(setup.compile().state, 'done', 'it compiles before anything is touched');
+    assert.equal((await setup.compile()).state, 'done', 'it compiles before anything is touched');
   } finally {
     setup.close();
   }
@@ -562,7 +562,7 @@ test('a source whose bytes changed is reported as changed, not read anyway', asy
 
   const service = newService();
   try {
-    const opened = service.open(ownProjectPath, false);
+    const opened = await service.open(ownProjectPath, false);
     assert.equal(opened.outcome, 'opened');
 
     const mel = service.listSources().find((source) => source.role === 'mel');
@@ -573,7 +573,7 @@ test('a source whose bytes changed is reported as changed, not read anyway', asy
     const model = service.listSources().find((source) => source.role === 'model');
     assert.equal(model.status, 'ready', 'the file that did not change is untouched by this');
 
-    const refused = service.compile();
+    const refused = await service.compile();
     assert.equal(refused.state, 'failed');
     assert.match(refused.reason, /Changed-MEL\.xlsx/, 'the refusal names the file');
     assert.match(refused.reason, /changed on disk/);
@@ -584,7 +584,7 @@ test('a source whose bytes changed is reported as changed, not read anyway', asy
     assert.equal(readded.source.status, 'ready');
     assert.equal(service.listSources().find((source) => source.role === 'mel').status, 'ready');
 
-    assert.equal(service.compile().state, 'done', 'and the compile runs again');
+    assert.equal((await service.compile()).state, 'done', 'and the compile runs again');
   } finally {
     service.close();
   }
@@ -604,7 +604,7 @@ test('a compile records the revision it compiled, not the last one saved', async
     assert.equal(saved.revision, 1);
     assert.equal(service.draftState().savedRevision, 1);
 
-    const first = service.compile();
+    const first = await service.compile();
     assert.equal(first.state, 'done');
     assert.equal(first.summary.profileRevision, 1, 'a saved draft compiles as itself');
 
@@ -618,7 +618,7 @@ test('a compile records the revision it compiled, not the last one saved', async
       'the stored revision is no longer what is in memory',
     );
 
-    const second = service.compile();
+    const second = await service.compile();
     assert.equal(second.state, 'done');
     assert.equal(second.summary.profileRevision, 2, 'the edit was saved as its own revision');
     assert.equal(service.draftState().savedRevision, 2);
@@ -636,7 +636,7 @@ test('a compile records the revision it compiled, not the last one saved', async
   // And revision 2 really holds the edit: reopening restores from it.
   const reopened = newService();
   try {
-    reopened.open(ownProjectPath, false);
+    await reopened.open(ownProjectPath, false);
     assert.deepEqual(reopened.draftState().draft.tagAnatomy.ignoredSuffixes, ['-SPARE']);
   } finally {
     reopened.close();
@@ -670,19 +670,19 @@ function writeOlderProject(name) {
   return olderPath;
 }
 
-test('an older project file is not upgraded until the user says so', () => {
+test('an older project file is not upgraded until the user says so', async () => {
   const olderPath = writeOlderProject('Older.matchline');
 
   const service = newService();
   try {
-    const asked = service.open(olderPath, false);
+    const asked = await service.open(olderPath, false);
     assert.equal(asked.outcome, 'migration-needed');
     assert.equal(asked.migrationNeeded.fromVersion, 1);
     assert.equal(asked.migrationNeeded.toVersion, PROJECT_SCHEMA_VERSION);
     assert.equal(service.current(), null, 'nothing was opened');
     assert.equal(existsSync(`${olderPath}.backup-1`), false, 'and nothing was written');
 
-    const accepted = service.open(olderPath, true);
+    const accepted = await service.open(olderPath, true);
     assert.equal(accepted.outcome, 'opened');
     assert.equal(accepted.project.schemaVersion, PROJECT_SCHEMA_VERSION);
     assert.deepEqual(accepted.notice.migration, {
@@ -696,13 +696,13 @@ test('an older project file is not upgraded until the user says so', () => {
   }
 });
 
-test('a backup from an earlier upgrade attempt blocks the next one, by path', () => {
+test('a backup from an earlier upgrade attempt blocks the next one, by path', async () => {
   const olderPath = writeOlderProject('Blocked.matchline');
   writeFileSync(`${olderPath}.backup-1`, 'left over from last time');
 
   const service = newService();
   try {
-    const blocked = service.open(olderPath, true);
+    const blocked = await service.open(olderPath, true);
     assert.equal(blocked.outcome, 'backup-blocked');
     assert.equal(blocked.backupPath, `${olderPath}.backup-1`);
     assert.equal(

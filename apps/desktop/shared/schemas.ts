@@ -1258,11 +1258,35 @@ export const ledgerEventSchema = z.object({
 });
 export type WireLedgerEvent = z.infer<typeof ledgerEventSchema>;
 
+/**
+ * A compile in flight, as screen 8 draws it.
+ *
+ * The compile runs on a worker thread now (RELEASE-1.0-PLAN, "Performance /
+ * isolation"), so `running` is a state the UI actually sits in rather than a
+ * value nothing ever produced. `stageIndex` counts the pipeline stages that
+ * have *started*, out of `stageCount` — 0 before the first one, which is the
+ * honest reading of a worker that has been spawned and has not reported yet.
+ *
+ * `note` is the plain-language line, written in main like every other note on
+ * this wire: a renderer that had to keep its own table of stage names would
+ * drift from the engine's the first time a stage was added.
+ */
 export const compileStatusSchema = z.discriminatedUnion('state', [
   z.object({ state: z.literal('never-run') }),
-  z.object({ state: z.literal('running') }),
+  z.object({
+    state: z.literal('running'),
+    stageIndex: z.number().int().nonnegative(),
+    stageCount: z.number().int().positive(),
+    note: z.string().min(1),
+  }),
   z.object({ state: z.literal('done'), summary: compileSummarySchema }),
   z.object({ state: z.literal('failed'), reason: z.string().min(1) }),
+  /**
+   * Stopped on request. Not a failure: the worker was terminated before it
+   * returned, so the project file was never touched and the previous compile —
+   * if there was one — is still the one the workspace is showing.
+   */
+  z.object({ state: z.literal('cancelled') }),
 ]);
 export type WireCompileStatus = z.infer<typeof compileStatusSchema>;
 

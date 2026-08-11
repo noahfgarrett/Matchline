@@ -12,7 +12,7 @@ apps/desktop/electron/   main process (TypeScript → tsc)
   ├── window/lifecycle, file dialogs
   ├── ProjectStore service (node:sqlite — main process only)
   ├── project session: every open model cache, the draft profile, derived engine state
-  ├── compile service (runs @matchline/compiler; worker_threads when slow)
+  ├── compile service (runs @matchline/compiler in a worker_thread; Stop cancels)
   └── IPC: ipcMain.handle per channel, every payload Zod-validated, sender-checked
 apps/desktop/preload/    contextBridge → window.matchline.<domain>.<verb>(...)
   └── typed façade only — no logic, no Node APIs leaked

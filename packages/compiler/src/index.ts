@@ -19,10 +19,12 @@
  */
 export { compileProject } from './compile.js';
 
-export { DEFAULT_MEL_SHEET } from './types.js';
+export { COMPILE_STAGES, DEFAULT_MEL_SHEET } from './types.js';
 export type {
   CompiledProject,
   CompileProjectInput,
+  CompileStage,
+  CompileStageListener,
   CompileStats,
   ConnectivityWorkbookInput,
   DerivedAssetAttributes,

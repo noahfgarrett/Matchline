@@ -347,11 +347,11 @@ test('a split project compiles to the same hierarchy the federated file does', a
   let splitSummary = null;
   let federatedSummary = null;
   try {
-    const splitStatus = split.service.compile();
+    const splitStatus = await split.service.compile();
     assert.equal(splitStatus.state, 'done', splitStatus.reason ?? '');
     splitSummary = splitStatus.summary;
 
-    const federatedStatus = federated.service.compile();
+    const federatedStatus = await federated.service.compile();
     assert.equal(federatedStatus.state, 'done', federatedStatus.reason ?? '');
     federatedSummary = federatedStatus.summary;
 
@@ -519,7 +519,7 @@ test('a model source whose bytes changed refuses the compile and is named in it'
 
   const setup = await projectOver('Changed', [ownMechanical, ownControls, melPath]);
   try {
-    assert.equal(setup.service.compile().state, 'done', 'it compiles before anything is touched');
+    assert.equal((await setup.service.compile()).state, 'done', 'it compiles before anything is touched');
   } finally {
     setup.service.close();
   }
@@ -530,7 +530,7 @@ test('a model source whose bytes changed refuses the compile and is named in it'
 
   const service = newService();
   try {
-    assert.equal(service.open(setup.path, false).outcome, 'opened');
+    assert.equal((await service.open(setup.path, false)).outcome, 'opened');
 
     const controls = service
       .listSources()
@@ -544,7 +544,7 @@ test('a model source whose bytes changed refuses the compile and is named in it'
       'the file that did not change is untouched by this',
     );
 
-    const refused = service.compile();
+    const refused = await service.compile();
     assert.equal(refused.state, 'failed');
     assert.match(refused.reason, /Dragon-Controls\.matchline-cache/, 'the refusal names the source');
     assert.match(refused.reason, /changed on disk/);
@@ -556,7 +556,7 @@ test('a model source whose bytes changed refuses the compile and is named in it'
     assert.equal(readded.source.sourceId, 'model:dragon-controls.matchline-cache');
     assert.equal(readded.source.status, 'ready');
     assert.equal(modelSources(service).length, 2, 'still two model sources');
-    assert.equal(service.compile().state, 'done', 'and the compile runs again');
+    assert.equal((await service.compile()).state, 'done', 'and the compile runs again');
   } finally {
     service.close();
   }
@@ -593,7 +593,7 @@ test('a raw Navisworks file is a registered source that no compile waits for', a
     // It is not part of the universe, and it does not hold the compile up: its
     // status on screen 1 is what says the extraction has not run.
     assert.equal(project.service.modelUniverse().sourceCount, 1);
-    assert.equal(project.service.compile().state, 'done');
+    assert.equal((await project.service.compile()).state, 'done');
   } finally {
     project.service.close();
   }
@@ -621,7 +621,7 @@ test('a one-source project reports exactly what it did before the universe exist
     assert.equal(project.service.anatomyPreview().coverage, 1);
     assert.equal(project.service.resolverPreview().resolvedCount, DRAGON_TAGGED_COUNT);
 
-    const status = project.service.compile();
+    const status = await project.service.compile();
     assert.equal(status.state, 'done', status.reason ?? '');
     assert.equal(status.summary.assetCount, DRAGON_TAGGED_COUNT);
     assert.equal(status.summary.duplicateTagCount, 0);

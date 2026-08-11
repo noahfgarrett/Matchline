@@ -13,6 +13,10 @@
     "./fixtures/dragon": {
       "types": "./dist/fixtures/dragon.d.ts",
       "default": "./dist/fixtures/dragon.js"
+    },
+    "./fixtures/scale": {
+      "types": "./dist/fixtures/scale.d.ts",
+      "default": "./dist/fixtures/scale.js"
     }
   },
   "files": [

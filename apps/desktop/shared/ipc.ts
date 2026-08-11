@@ -961,6 +961,21 @@ export const IPC_CHANNELS = {
     },
   },
 
+  /**
+   * Stops the compile that is running, if one is.
+   *
+   * A separate channel rather than an argument to `compile:run`, because the
+   * two are concurrent by construction: `compile:run` does not resolve until
+   * the worker has returned, so the only invoke that can cancel it is one made
+   * while it is still outstanding. `cancelled: false` means there was nothing
+   * to stop — the compile had already finished, or none had started.
+   */
+  'compile:cancel': {
+    request: z.void(),
+    response: z.object({ cancelled: z.boolean() }),
+    example: { request: undefined, response: { cancelled: true } },
+  },
+
   /** The current compile, so a reopened workspace knows what it is looking at. */
   'compile:status': {
     request: z.void(),

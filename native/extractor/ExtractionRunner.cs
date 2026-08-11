@@ -62,19 +62,48 @@ namespace Matchline.Extraction.Extractor
                 FileInfo inputInfo = new FileInfo(_arguments.InputPath);
 
                 string sha256;
-                try
+                if (!string.IsNullOrEmpty(_arguments.InputSha256))
                 {
-                    sha256 = FileHasher.Sha256(_arguments.InputPath, _reporter, IsCancelled);
+                    // The caller hashed these bytes already and said so
+                    // (--input-sha256), so this run does not read the file a
+                    // second time to learn what it is. Matchline's own app is
+                    // the caller that matters: it streams the hash when a model
+                    // is registered and will not compile from a file whose
+                    // bytes have moved since, so hashing again here was a full
+                    // extra read of a multi-gigabyte model for an answer it had
+                    // already paid for (docs/RELEASE-1.0-PLAN.md, "Performance
+                    // / isolation").
+                    //
+                    // TRUSTED, not verified: verifying it would be the read it
+                    // exists to avoid. The value is what addresses the cache and
+                    // what the cache records as its input_sha256, so a caller
+                    // that lies gets a cache filed under the wrong name -- which
+                    // is why the flag is documented as an assertion and why the
+                    // spelling is refused at parse time rather than here.
+                    sha256 = _arguments.InputSha256;
+
+                    // The stage is still announced, complete, with the file's
+                    // real size: a parent process draws its progress from these
+                    // lines, and a run that silently skipped a stage would look
+                    // like a run that had stalled before it.
+                    _reporter.Progress(ExtractionStages.Hash, inputInfo.Length, inputInfo.Length);
                 }
-                catch (IOException ex)
+                else
                 {
-                    // Commonly: the NWD is open in Navisworks and locked. That is
-                    // an open failure, not a cache failure.
-                    return Fail(ExtractionErrorCodes.OpenFailed, "Could not read the input file: " + ex.Message);
-                }
-                catch (UnauthorizedAccessException ex)
-                {
-                    return Fail(ExtractionErrorCodes.OpenFailed, "Could not read the input file: " + ex.Message);
+                    try
+                    {
+                        sha256 = FileHasher.Sha256(_arguments.InputPath, _reporter, IsCancelled);
+                    }
+                    catch (IOException ex)
+                    {
+                        // Commonly: the NWD is open in Navisworks and locked. That is
+                        // an open failure, not a cache failure.
+                        return Fail(ExtractionErrorCodes.OpenFailed, "Could not read the input file: " + ex.Message);
+                    }
+                    catch (UnauthorizedAccessException ex)
+                    {
+                        return Fail(ExtractionErrorCodes.OpenFailed, "Could not read the input file: " + ex.Message);
+                    }
                 }
 
                 ThrowIfCancelled();

@@ -10,7 +10,7 @@ namespace Matchline.Extraction.Extractor
     {
         internal static readonly string UsageText =
             "Matchline.Extractor --input <file.nwd> [--cache-dir <dir>] [--navisworks-dir <dir>]\n" +
-            "                    [--navisworks-version <year>]\n" +
+            "                    [--navisworks-version <year>] [--input-sha256 <hex>]\n" +
             "\n" +
             "  --input               NWD/NWF/NWC file to extract. Required.\n" +
             "  --cache-dir           Cache root. Default: %LOCALAPPDATA%\\Matchline\\cache\\models\n" +
@@ -18,6 +18,9 @@ namespace Matchline.Extraction.Extractor
             "                        Default: newest installed Navisworks Manage/Simulate.\n" +
             "  --navisworks-version  Use this release year instead of the newest installed one.\n" +
             "                        Adapters exist for " + SupportedAdapters.YearList() + ".\n" +
+            "  --input-sha256        The input's SHA-256, already computed by the caller. Skips\n" +
+            "                        the hash stage and is TRUSTED: pass it only when you hashed\n" +
+            "                        the same bytes this run will read. 64 hex digits.\n" +
             "\n" +
             "Emits JSON lines on stdout. Send a line reading 'cancel' on stdin to abort.";
 
@@ -39,6 +42,27 @@ namespace Matchline.Extraction.Extractor
         /// </summary>
         internal int? NavisworksYear { get; private set; }
 
+        /// <summary>
+        /// The input's SHA-256 as the caller already computed it, or null to
+        /// hash it here.
+        /// <para>
+        /// The cache is addressed by this value and the cache's own
+        /// <c>input_sha256</c> meta row is written from it, so a caller that
+        /// passes it is asserting that it hashed the very bytes this run will
+        /// open. Matchline's own app is such a caller: it streams the hash when
+        /// the file is registered, refuses to compile from a file whose bytes
+        /// have changed since, and would otherwise pay for a second full read
+        /// of a multi-gigabyte model on every extraction.
+        /// </para>
+        /// <para>
+        /// Always 64 lowercase hex digits once parsed. Anything else is refused
+        /// at parse time rather than reinterpreted: a malformed hash would
+        /// become a cache file name, and a cache nobody can find again is worse
+        /// than a wrong command line.
+        /// </para>
+        /// </summary>
+        internal string InputSha256 { get; private set; }
+
         internal static bool TryParse(string[] args, out ExtractorArguments parsed, out string error)
         {
             parsed = null;
@@ -48,6 +72,7 @@ namespace Matchline.Extraction.Extractor
             string cacheDir = null;
             string navisworksDir = null;
             string navisworksVersion = null;
+            string inputSha256 = null;
 
             if (args == null)
             {
@@ -86,6 +111,14 @@ namespace Matchline.Extraction.Extractor
 
                     case "--navisworks-version":
                         if (!TryTakeValue(args, ref i, "--navisworks-version", ref navisworksVersion, out error))
+                        {
+                            return false;
+                        }
+
+                        break;
+
+                    case "--input-sha256":
+                        if (!TryTakeValue(args, ref i, "--input-sha256", ref inputSha256, out error))
                         {
                             return false;
                         }
@@ -146,8 +179,23 @@ namespace Matchline.Extraction.Extractor
                 year = parsedYear;
             }
 
+            string normalisedSha = null;
+            // `!= null` rather than `IsNullOrEmpty`: passing the flag with an
+            // empty value is a caller that meant to supply a hash and supplied
+            // nothing, which is a wrong command line -- not the same fact as
+            // never passing it at all.
+            if (inputSha256 != null)
+            {
+                if (!TryNormaliseSha256(inputSha256, out normalisedSha))
+                {
+                    error = "--input-sha256 takes 64 hex digits, not '" + inputSha256 + "'.\n" + UsageText;
+                    return false;
+                }
+            }
+
             ExtractorArguments result = new ExtractorArguments();
             result.NavisworksYear = year;
+            result.InputSha256 = normalisedSha;
 
             try
             {
@@ -176,6 +224,51 @@ namespace Matchline.Extraction.Extractor
             }
 
             parsed = result;
+            return true;
+        }
+
+        /// <summary>
+        /// A SHA-256 in the one spelling everything downstream uses: 64
+        /// lowercase hex digits.
+        /// <para>
+        /// Upper case is accepted and folded, because a hash is the same number
+        /// either way and refusing a caller over letter case would be pedantry.
+        /// Everything else -- a short digest, a long one, a "0x" prefix, a
+        /// non-hex character -- is refused: the value becomes a file name and a
+        /// path, and there is no safe way to guess what was meant.
+        /// </para>
+        /// </summary>
+        internal static bool TryNormaliseSha256(string value, out string normalised)
+        {
+            normalised = null;
+            if (value == null || value.Length != 64)
+            {
+                return false;
+            }
+
+            char[] folded = new char[64];
+            for (int i = 0; i < 64; i++)
+            {
+                char c = value[i];
+                if (c >= '0' && c <= '9')
+                {
+                    folded[i] = c;
+                }
+                else if (c >= 'a' && c <= 'f')
+                {
+                    folded[i] = c;
+                }
+                else if (c >= 'A' && c <= 'F')
+                {
+                    folded[i] = (char)(c + ('a' - 'A'));
+                }
+                else
+                {
+                    return false;
+                }
+            }
+
+            normalised = new string(folded);
             return true;
         }
 

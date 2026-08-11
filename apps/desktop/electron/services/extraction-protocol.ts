@@ -222,9 +222,28 @@ export function parseExtractionLine(line: string): ExtractionMessage | null {
  * install is deliberately not pinned: the launcher picks the newest installed
  * year it has an adapter for and says which one on its `detect` line, and
  * second-guessing that from here would put the choice in two places.
+ *
+ * `inputSha256` is the hash the service has already streamed for this file, and
+ * passing it is what stops the launcher reading a multi-gigabyte model a second
+ * time to learn something main worked out minutes ago. The launcher trusts it —
+ * see `--input-sha256` in `ExtractorArguments` — which is honest here precisely
+ * because the two hashes are of the same bytes: the service refuses to touch a
+ * source whose file has changed since it was registered, and a re-added file is
+ * re-digested before anything is launched for it.
  */
-export function extractorArguments(inputPath: string, cacheDirectory: string): readonly string[] {
-  return ['--input', inputPath, '--cache-dir', cacheDirectory];
+export function extractorArguments(
+  inputPath: string,
+  cacheDirectory: string,
+  inputSha256: string,
+): readonly string[] {
+  return [
+    '--input',
+    inputPath,
+    '--cache-dir',
+    cacheDirectory,
+    '--input-sha256',
+    inputSha256,
+  ];
 }
 
 /** The file name the launcher gives a cache built from these bytes. */

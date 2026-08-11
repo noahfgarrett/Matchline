@@ -64,6 +64,7 @@ namespace Matchline.Extraction.Smoke
                 CheckExtractionSession(outputDirectory);
                 CheckAdapterSelection();
                 CheckVersionArgument();
+                CheckInputShaArgument();
 
                 List<StreamItem> expected = BuildSyntheticStream();
                 WriteStream(streamPath, expected);
@@ -366,6 +367,106 @@ namespace Matchline.Extraction.Smoke
                         "--navisworks-version", "2025"
                     },
                     out parsed, out error));
+        }
+
+        /// <summary>
+        /// --input-sha256, both ways.
+        /// <para>
+        /// The flag exists so a caller that already streamed the input's hash
+        /// does not make the launcher read a multi-gigabyte model a second time
+        /// to compute the same number (docs/RELEASE-1.0-PLAN.md, "Performance /
+        /// isolation"). The value is TRUSTED at run time -- verifying it would
+        /// be the read it exists to avoid -- so the whole of the checking is
+        /// here, at parse time, and it has to be strict: this value becomes a
+        /// file name and a cache nobody can find again is worse than a refused
+        /// command line.
+        /// </para>
+        /// <para>
+        /// The run-time half of the flag lives in ExtractionRunner, which is
+        /// net48 and cannot be executed here. What can be checked here is what
+        /// the parser accepts, what it refuses, and the one normalisation it
+        /// performs; the TypeScript side exercises the skip itself against a
+        /// second implementation of the same protocol
+        /// (apps/desktop/test/extraction-service.test.mjs).
+        /// </para>
+        /// </summary>
+        private static void CheckInputShaArgument()
+        {
+            ExtractorArguments parsed;
+            string error;
+
+            string lower = new string('a', 64);
+            Check(
+                "a 64-digit hash parses",
+                ExtractorArguments.TryParse(
+                    new string[] { "--input", "model.nwd", "--input-sha256", lower },
+                    out parsed, out error) && parsed.InputSha256 == lower,
+                error);
+
+            Check(
+                "no flag means the launcher hashes the input itself",
+                ExtractorArguments.TryParse(new string[] { "--input", "model.nwd" }, out parsed, out error) &&
+                parsed.InputSha256 == null,
+                error);
+
+            Check(
+                "an upper-case hash is folded rather than refused",
+                ExtractorArguments.TryParse(
+                    new string[] { "--input", "model.nwd", "--input-sha256", new string('C', 64) },
+                    out parsed, out error) && parsed.InputSha256 == new string('c', 64),
+                error);
+
+            // Every one of these would otherwise become a cache file name.
+            string[] malformed = new string[]
+            {
+                string.Empty,
+                "abc",
+                new string('z', 64),
+                new string('a', 63),
+                new string('a', 65),
+                "0x" + new string('a', 62),
+                new string('a', 63) + " ",
+            };
+
+            bool allRefused = true;
+            string accepted = null;
+            for (int i = 0; i < malformed.Length; i++)
+            {
+                if (ExtractorArguments.TryParse(
+                        new string[] { "--input", "model.nwd", "--input-sha256", malformed[i] },
+                        out parsed, out error))
+                {
+                    allRefused = false;
+                    accepted = "'" + malformed[i] + "'";
+                    break;
+                }
+            }
+
+            Check("a malformed hash is refused, never reinterpreted", allRefused, accepted);
+
+            Check(
+                "and the refusal says what the flag takes",
+                !ExtractorArguments.TryParse(
+                    new string[] { "--input", "model.nwd", "--input-sha256", "abc" },
+                    out parsed, out error) && error != null && error.Contains("64 hex digits"),
+                error);
+
+            Check(
+                "a hash flag with no value is refused",
+                !ExtractorArguments.TryParse(
+                    new string[] { "--input", "model.nwd", "--input-sha256" },
+                    out parsed, out error));
+
+            // The normaliser is what the parser leans on, checked directly so a
+            // failure names the rule rather than the command line around it.
+            string normalised;
+            Check(
+                "the normaliser folds case and nothing else",
+                ExtractorArguments.TryNormaliseSha256("AbCdEf" + new string('0', 58), out normalised) &&
+                normalised == "abcdef" + new string('0', 58));
+            Check(
+                "the normaliser refuses null",
+                !ExtractorArguments.TryNormaliseSha256(null, out normalised) && normalised == null);
         }
 
         /// <summary>Stands in for a version adapter's walk: header, then records or a failure.</summary>

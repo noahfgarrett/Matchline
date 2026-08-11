@@ -26,7 +26,7 @@ import {
   type ExtractionMessage,
 } from './extraction-protocol.js';
 import type { ExtractorChild, ExtractorLauncher } from './extractor-launcher.js';
-import { digestFile } from './sources.js';
+import { digestFile } from './digest.js';
 
 /**
  * The Navisworks extraction service (RELEASE-1.0-PLAN P0-2).
@@ -479,7 +479,7 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
       let settled = false;
 
       const child = options.launcher(
-        extractorArguments(job.inputPath, options.cacheDirectory),
+        extractorArguments(job.inputPath, options.cacheDirectory, rawSha256),
         {
           onMessage(message: ExtractionMessage): void {
             switch (message.type) {
@@ -657,11 +657,10 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
       // processes deleting the same file is one race nobody needs.
     }
 
-    // The launcher hashes the input again on its own — it is a standalone tool
-    // and does not take a hash on its command line — so the row will step back
-    // through `hashing` once the child starts talking. Saying "starting" here
-    // rather than nothing is what keeps the row from claiming it is still
-    // waiting in a queue it has already left.
+    // The hash goes on the command line (`--input-sha256`), so the launcher
+    // does not read the whole model again to work out what it already knows —
+    // it reports the hash stage as done and goes straight to detection. The row
+    // therefore steps forward from here rather than back through `hashing`.
     moveTo(job, 'opening', null, 'Starting the extractor.');
     await runLauncher(job, rawSha256);
   }

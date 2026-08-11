@@ -19,9 +19,11 @@ import type { WizardContext } from './Wizard';
  * number is a count the compiler produced; the cards add only the sentence that
  * says what the number means and whether it is something to act on.
  *
- * Compile state is honest. `compileProject` runs synchronously in the main
- * process, so "Compiling…" is on screen for exactly as long as main is busy,
- * and a failure shows the message the service wrote rather than a generic one.
+ * Compile state is honest. The pipeline runs on a worker thread now, so the
+ * window keeps drawing while it works, the panel reports which stage it is on
+ * out of how many, and Stop actually stops it — a cancelled compile leaves the
+ * project file untouched and the previous compile still open in the workspace.
+ * A failure shows the message the service wrote rather than a generic one.
  */
 
 const PAGE_SIZE = 100;
@@ -138,6 +140,8 @@ export function Screen8Preview({
 }): JSX.Element {
   const [status, setStatus] = useState<WireCompileStatus>({ state: 'never-run' });
   const [running, setRunning] = useState<boolean>(false);
+  /** What main last said it was doing, polled while a compile is outstanding. */
+  const [progress, setProgress] = useState<WireCompileStatus | null>(null);
   const [openKind, setOpenKind] = useState<WireCompileIssueKind | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -159,10 +163,41 @@ export function Screen8Preview({
     };
   }, []);
 
+  /**
+   * Follows the compile while it runs.
+   *
+   * Polled rather than pushed: `compile:run` does not resolve until the worker
+   * has returned, and every other channel goes on answering in the meantime —
+   * which is the whole point of moving the compile off the main loop, and is
+   * also the cheapest possible proof that it worked.
+   */
+  useEffect((): (() => void) | undefined => {
+    if (!running) {
+      return undefined;
+    }
+    const timer = setInterval((): void => {
+      void call(window.matchline.compile.status()).then(
+        (data): void => {
+          if (data.status.state === 'running') {
+            setProgress(data.status);
+          }
+        },
+        (): void => {
+          // A dropped status read says nothing about the compile itself; the
+          // run's own answer is what settles it.
+        },
+      );
+    }, 250);
+    return (): void => {
+      clearInterval(timer);
+    };
+  }, [running]);
+
   const compile = useCallback(async (): Promise<void> => {
     setRunning(true);
     setError(null);
     setOpenKind(null);
+    setProgress(null);
     try {
       const data = await call(window.matchline.compile.run());
       setStatus(data.status);
@@ -174,8 +209,17 @@ export function Screen8Preview({
       setStatus({ state: 'failed', reason: messageOf(caught) });
     } finally {
       setRunning(false);
+      setProgress(null);
     }
   }, [onCompiled]);
+
+  const cancel = useCallback(async (): Promise<void> => {
+    try {
+      await call(window.matchline.compile.cancel());
+    } catch (caught: unknown) {
+      setError(messageOf(caught));
+    }
+  }, []);
 
   const summary = status.state === 'done' ? status.summary : null;
 
@@ -194,20 +238,50 @@ export function Screen8Preview({
         title="Compile"
         description="Reads the model cache, the connectivity workbooks and the MEL, then builds the hierarchy, the flow and the generated MEL."
         actions={
-          <button
-            className="button button--primary"
-            type="button"
-            data-testid="compile-run"
-            disabled={running}
-            onClick={(): void => {
-              void compile();
-            }}
-          >
-            {running ? 'Compiling…' : 'Compile'}
-          </button>
+          <>
+            <button
+              className="button button--primary"
+              type="button"
+              data-testid="compile-run"
+              disabled={running}
+              onClick={(): void => {
+                void compile();
+              }}
+            >
+              {running ? 'Compiling…' : 'Compile'}
+            </button>
+            {running ? (
+              <button
+                className="button"
+                type="button"
+                data-testid="compile-cancel"
+                onClick={(): void => {
+                  void cancel();
+                }}
+              >
+                Stop
+              </button>
+            ) : null}
+          </>
         }
       >
-        {running ? <Callout tone="info">Compiling. This runs in the main process.</Callout> : null}
+        {running ? (
+          <Callout tone="info">
+            <span data-testid="compile-progress">
+              {progress !== null && progress.state === 'running' && progress.stageIndex > 0
+                ? `${progress.note} (step ${count(progress.stageIndex)} of ${count(progress.stageCount)})`
+                : 'Starting the compile.'}
+            </span>{' '}
+            It runs on a worker thread, so the rest of the app stays usable — and Stop really
+            stops it, leaving the project exactly as it is.
+          </Callout>
+        ) : null}
+        {status.state === 'cancelled' && !running ? (
+          <Callout tone="info">
+            The compile was stopped. Nothing was written to the project, and whatever the last
+            finished compile produced is still what the workspace is showing.
+          </Callout>
+        ) : null}
         {error === null ? null : <Callout tone="error">{error}</Callout>}
         {status.state === 'failed' && error === null ? (
           <Callout tone="error">{status.reason}</Callout>

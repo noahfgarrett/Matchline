@@ -1,5 +1,4 @@
-import { createHash } from 'node:crypto';
-import { closeSync, createReadStream, openSync, readFileSync, readSync, statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import { detectWorkbook } from '@matchline/connectivity-import';
@@ -62,11 +61,6 @@ export type SourceIdentification =
   | { readonly recognized: true; readonly registrations: readonly SourceRegistration[] }
   | { readonly recognized: false; readonly reason: string };
 
-export interface FileDigest {
-  readonly sha256: string;
-  readonly byteSize: number;
-}
-
 /** Extraction caches produced by the Navisworks extractor (docs/EXTRACTION.md). */
 const MODEL_CACHE_EXTENSIONS: readonly string[] = ['.matchline-cache', '.sqlite', '.db'];
 /** Raw Navisworks documents. Readable only after a Windows extraction run. */
@@ -83,98 +77,6 @@ function extensionOf(filePath: string): string {
     }
   }
   return path.extname(fileName);
-}
-
-/** Bytes read per hashing step. Matches `FileHasher.BufferBytes` in the launcher. */
-const HASH_CHUNK_BYTES = 1 << 20;
-
-/**
- * Files below this get no progress events: they are hashed inside one tick of
- * the wizard's own "Reading…" state and a progress bar for them would flicker
- * rather than inform.
- */
-const HASH_PROGRESS_THRESHOLD_BYTES = 64 * 1024 * 1024;
-
-/** How much has to be read between progress events on a file large enough to have them. */
-const HASH_PROGRESS_INTERVAL_BYTES = 32 * 1024 * 1024;
-
-export type DigestProgress = (bytesDone: number, bytesTotal: number) => void;
-
-/**
- * The sha256 of a file, streamed.
- *
- * Never `readFileSync`: a source may be a multi-gigabyte NWD, and reading one
- * into a Buffer to hash it is both a main-process stall and an allocation the
- * size of the model (RELEASE-1.0-PLAN, "Streaming SHA-256, no full-file
- * buffers"). The stream reads a megabyte at a time and the event loop is free
- * between chunks, which is what lets the window keep drawing while a 700 MB
- * model is hashed.
- *
- * Progress is reported for a file big enough for the wait to be noticeable,
- * which is the same reason the launcher's own hash stage reports it.
- */
-export function digestFile(absolutePath: string, onProgress?: DigestProgress): Promise<FileDigest> {
-  const byteSize = statSync(absolutePath).size;
-  const reportProgress = onProgress !== undefined && byteSize > HASH_PROGRESS_THRESHOLD_BYTES;
-
-  return new Promise<FileDigest>((resolve, reject): void => {
-    const hash = createHash('sha256');
-    const stream = createReadStream(absolutePath, { highWaterMark: HASH_CHUNK_BYTES });
-    let done = 0;
-    /** How far along the last progress event was, so they land evenly. */
-    let reportedAt = 0;
-
-    if (reportProgress) {
-      onProgress(0, byteSize);
-    }
-
-    stream.on('data', (chunk: string | Buffer): void => {
-      hash.update(chunk);
-      done += typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.length;
-      if (reportProgress && done - reportedAt >= HASH_PROGRESS_INTERVAL_BYTES) {
-        reportedAt = done;
-        onProgress(done, byteSize);
-      }
-    });
-    stream.on('error', (error: Error): void => {
-      reject(error);
-    });
-    stream.on('end', (): void => {
-      if (reportProgress) {
-        onProgress(done, byteSize);
-      }
-      resolve({ sha256: hash.digest('hex'), byteSize });
-    });
-  });
-}
-
-/**
- * The same digest, for the one caller that cannot wait for a promise.
- *
- * Reopening a project re-proves every registered file against the hash the
- * project recorded, and that happens inside a synchronous `open`. The read is
- * still chunked — a fixed one-megabyte buffer, reused — so a big source costs
- * time here but never memory. Everything that can be asynchronous uses
- * {@link digestFile} instead.
- */
-export function digestFileSync(absolutePath: string): FileDigest {
-  const hash = createHash('sha256');
-  const buffer = Buffer.allocUnsafe(HASH_CHUNK_BYTES);
-  const handle = openSync(absolutePath, 'r');
-  let byteSize = 0;
-  try {
-    for (;;) {
-      const read = readSync(handle, buffer, 0, HASH_CHUNK_BYTES, null);
-      if (read <= 0) {
-        break;
-      }
-      hash.update(buffer.subarray(0, read));
-      byteSize += read;
-    }
-  } finally {
-    closeSync(handle);
-  }
-  return { sha256: hash.digest('hex'), byteSize };
 }
 
 function messageOf(error: unknown): string {

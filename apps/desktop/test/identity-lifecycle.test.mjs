@@ -180,7 +180,7 @@ test('the ledger is written, reloaded and honoured across a tag correction', asy
 
   /* --- the first compile mints the ids and writes them down ------------- */
 
-  const first = summaryOf(service.compile());
+  const first = summaryOf(await service.compile());
   assert.equal(first.assetCount, DRAGON_ASSET_COUNT);
   assert.equal(
     first.ledgerNewAssetCount,
@@ -211,7 +211,7 @@ test('the ledger is written, reloaded and honoured across a tag correction', asy
   // what a project file written before the ledger holds. It has to keep working.
   service.setRelationshipOverride(`tag:${TYPO_TAG}`, `tag:${PARENT_TAG}`, 'One hot water train.');
 
-  const second = summaryOf(service.compile());
+  const second = summaryOf(await service.compile());
   assert.equal(second.ledgerNewAssetCount, 0, 'nothing is new the second time round');
   assert.equal(second.ledgerTagChangedCount, 0);
   assert.equal(second.orphanedDecisionCount, 0, 'the tag-keyed override resolved');
@@ -233,7 +233,7 @@ test('the ledger is written, reloaded and honoured across a tag correction', asy
   // refuses to compile against bytes it has not recorded.
   await service.addSources([cachePath]);
 
-  const third = summaryOf(service.compile());
+  const third = summaryOf(await service.compile());
   assert.equal(third.assetCount, DRAGON_ASSET_COUNT, 'still the same equipment');
   assert.equal(
     third.ledgerNewAssetCount,
@@ -284,11 +284,11 @@ test('the ledger is written, reloaded and honoured across a tag correction', asy
 
   service.close();
   service = newService();
-  const reopened = service.open(projectPath, false);
+  const reopened = await service.open(projectPath, false);
   assert.equal(reopened.outcome, 'opened');
   assert.equal(reopened.notice.migration, null, 'the file this build wrote is the file it reads');
 
-  const fourth = summaryOf(service.compile());
+  const fourth = summaryOf(await service.compile());
   assert.equal(
     fourth.ledgerNewAssetCount,
     0,
@@ -311,7 +311,7 @@ test('a decision naming equipment no compile has becomes a review item, not a si
   });
 
   await configure(service, projectPath);
-  summaryOf(service.compile());
+  summaryOf(await service.compile());
 
   service.setRelationshipOverride(
     'tag:GHOST999-99-99',
@@ -319,7 +319,7 @@ test('a decision naming equipment no compile has becomes a review item, not a si
     'Walked down with the mechanical lead.',
   );
 
-  const summary = summaryOf(service.compile());
+  const summary = summaryOf(await service.compile());
   assert.equal(summary.orphanedDecisionCount, 1);
 
   const page = service.reviewPage('', 0, 100);
@@ -364,7 +364,7 @@ async function writeV4Project(name) {
   const olderPath = join(workDir, name);
   const service = newService();
   await configure(service, olderPath);
-  summaryOf(service.compile());
+  summaryOf(await service.compile());
   service.close();
 
   const db = new DatabaseSync(olderPath);
@@ -385,13 +385,13 @@ test('a v4 project is not upgraded to v5 until the user says so', async (t) => {
     service.close();
   });
 
-  const asked = service.open(olderPath, false);
+  const asked = await service.open(olderPath, false);
   assert.equal(asked.outcome, 'migration-needed');
   assert.equal(asked.migrationNeeded.fromVersion, 4);
   assert.equal(asked.migrationNeeded.toVersion, PROJECT_SCHEMA_VERSION);
   assert.equal(service.current(), null, 'nothing was opened');
 
-  const accepted = service.open(olderPath, true);
+  const accepted = await service.open(olderPath, true);
   assert.equal(accepted.outcome, 'opened');
   assert.equal(accepted.project.schemaVersion, PROJECT_SCHEMA_VERSION);
   assert.deepEqual(accepted.notice.migration, {
@@ -403,7 +403,7 @@ test('a v4 project is not upgraded to v5 until the user says so', async (t) => {
   // A migrated project has no ledger yet, so its first compile mints the ids —
   // and writes them where the next one will find them.
   assert.equal(ledgerOnDisk(olderPath), null);
-  const summary = summaryOf(service.compile());
+  const summary = summaryOf(await service.compile());
   assert.equal(summary.ledgerNewAssetCount, DRAGON_ASSET_COUNT);
   assert.equal(ledgerOnDisk(olderPath).ledger.entries.length, DRAGON_ASSET_COUNT);
 });

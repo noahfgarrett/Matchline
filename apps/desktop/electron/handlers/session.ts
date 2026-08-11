@@ -6,6 +6,7 @@ import type { ProjectService } from '../services/project-session.js';
 import { screenDroppedPaths } from '../services/sources.js';
 
 import type { IpcChannelName, IpcRequest, IpcResponse } from '../../shared/ipc.js';
+import type { WireCompileStatus } from '../../shared/schemas.js';
 
 /**
  * Every channel that reads or writes the open project.
@@ -48,6 +49,7 @@ export type SessionChannel = Extract<
   | 'learned:train'
   | 'learned:list'
   | 'compile:run'
+  | 'compile:cancel'
   | 'compile:status'
   | 'compile:issues'
   | 'compile:ledger-events'
@@ -340,7 +342,18 @@ export function createSessionHandlers(
     /* ------------------------------------------------------------ screen 8 */
 
     async 'compile:run'(): Promise<IpcResponse<'compile:run'>> {
-      return { status: guard(() => service.compile()) };
+      return { status: await guardAsync((): Promise<WireCompileStatus> => service.compile()) };
+    },
+
+    /**
+     * Stops the running compile.
+     *
+     * Answered while `compile:run` is still outstanding — that is the only time
+     * it can be useful — which the transport allows because every invoke is
+     * independent.
+     */
+    async 'compile:cancel'(): Promise<IpcResponse<'compile:cancel'>> {
+      return { cancelled: guard(() => service.cancelCompile()) };
     },
 
     async 'compile:status'(): Promise<IpcResponse<'compile:status'>> {
