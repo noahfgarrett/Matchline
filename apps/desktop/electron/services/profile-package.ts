@@ -245,8 +245,23 @@ export function describeSections(
       ['discipline', mappings.nativeDiscipline],
     ] as const
   )
-    .filter(([, ref]) => ref !== null)
+    .filter(([, mapping]) => mapping.chain.length > 0)
     .map(([label]) => label);
+
+  // A chain reads as its first rung plus a count: "and 1 fallback" is the fact
+  // a reader needs, and printing three addresses in a summary line would push
+  // the rest of the sentence off the card.
+  const tagChain = mappings.equipmentTag.chain;
+  const tagRoot = tagChain[0];
+  const tagOverrideCount = mappings.equipmentTag.bySource.filter(
+    (override) => override.chain.length > 0,
+  ).length;
+  const chainNote = [
+    tagChain.length > 1 ? `${String(tagChain.length - 1)} fallback` : '',
+    tagOverrideCount > 0 ? `${String(tagOverrideCount)} per-source override` : '',
+  ]
+    .filter((part) => part !== '')
+    .join(', ');
 
   const filters = profile.assetFilters;
   const filterNotes: string[] = [];
@@ -269,11 +284,12 @@ export function describeSections(
     {
       name: 'Model property mappings',
       what: 'Which extracted property is the tag, the description, the building.',
-      configured: mappings.equipmentTag !== null,
+      configured: tagRoot !== undefined,
       detail:
-        mappings.equipmentTag === null
+        tagRoot === undefined
           ? ''
-          : `Tag from ${mappings.equipmentTag.category} > ${mappings.equipmentTag.name}` +
+          : `Tag from ${tagRoot.category} > ${tagRoot.name}` +
+            (chainNote === '' ? '' : ` (${chainNote})`) +
             (mapped.length === 0 ? '' : `, plus ${listed(mapped, 4)}.`),
     },
     {

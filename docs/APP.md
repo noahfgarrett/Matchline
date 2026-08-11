@@ -190,19 +190,37 @@ a DECISIONS.md entry.
 
 ## UI surface (built across A1 rounds, extended in the 1.0 campaign)
 
+A new project opens on a fork — **Quick Setup** or the full setup — and both write the
+same draft, so switching between them at any point keeps everything decided so far. Quick
+Setup is one decision per screen with a data-driven proposal, the evidence behind it and
+its impact in counts: suggested tag/description/type/building/discipline properties (and
+Manufacturer, Model Number, Area, Level, Functional Location and System/UPN as derived
+attributes, since the profile has no mapping slot for those), an inferred tag anatomy, six
+System Resolver starter templates each previewed against the real assets, class
+include/exclude judged by which classes carry tags, and the P0-5 level preset with the
+boundary consequence confirmed inline. Nothing is written until Accept is pressed;
+`setup:suggest` computes and returns, and every acceptance is an ordinary `profile:update`.
+
 Wizard screens 1–9 (PRODUCT.md §7) → project workspace: SSM tree + Electrical Flow views
 (virtualized), review queue, Site Profile Studio, exports panel. Drag reparent creates a
 persistent ManualRelationshipOverride via IPC (never a tree-local mutation — §11.5); a
 manual parent that crosses an enabled boundary is demoted to a dependency with a review
-item, like any other parent. Screen 3 picks the tier-1 stable id property; screen 6
+item, like any other parent. Screen 3 edits every mapped field as an ordered fallback
+chain with per-source overrides (P0-8) and picks the tier-1 stable id property; screen 6
 exposes each level's key, display and boundary attributes, with the two optional ones
-behind a disclosure that opens when a level uses them; screen 9 shows a "before you
-publish" card summarising levels, boundaries, what each boundary compares and the
-cross-boundary consequence, and Save revision stays disabled until it is confirmed — once
-per publish, reset by every profile edit. Plain-language UI text throughout: what it does,
-an example, when to change it.
+behind a disclosure that opens when a level uses them, and carries the two registry
+editors a level can address — derived attributes (per-resolver-kind forms with a live
+coverage/rung/example preview) and source-assignment rules (scope, match with pattern
+help, assigned fields including custom keys, with a live match preview naming the
+documents and object counts a rule hits); screen 9 shows a "before you publish" card
+summarising levels, boundaries, what each boundary compares and the cross-boundary
+consequence, and Save revision stays disabled until it is confirmed — once per publish,
+reset by every profile edit. Plain-language UI text throughout: what it does, an example,
+when to change it.
 
-Still open as of this writing: editors for the property chains, the source assignment
-rules and the derived-attribute registry. All three sections travel in the profile and are
-honoured by the compiler; screen 3 edits one property per field and the profile keeps the
-rest.
+A property picker whose mapping the loaded model does not carry says so — `Mapped:
+<category> <name> — not present in the current model sources` — and is never silently
+cleared. A profile outlives any one model, so a mapped-but-absent property is an ordinary
+state (a source mid re-extraction, a model swapped for a newer issue, a package imported
+before its models were added), and rendering it as "Not mapped" both stated a decision
+nobody made and let the next interaction write that emptiness into the draft.

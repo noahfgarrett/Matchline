@@ -407,6 +407,23 @@ code {
   max-width: none;
 }
 
+/*
+ * A screen that is a split grid AND full-width blocks. Screen 6 is the only one
+ * so far: the level stack wants the two-column reading layout, and the two
+ * registry editors want the whole width, because their previews are tables of
+ * file names and object counts that are simply wrong at half of it.
+ */
+.screen--stacked {
+  max-width: none;
+}
+
+.screen__split {
+  display: grid;
+  align-items: start;
+  gap: var(--space-5);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+}
+
 .screen__column {
   display: flex;
   min-width: 0;
@@ -1710,4 +1727,346 @@ code {
 
 .level-card__advanced[open] > summary {
   color: var(--text-muted);
+}
+
+/* ============================================================ the one-hour UX
+ *
+ * Everything below belongs to the three editors owed from M4c and to the Quick
+ * Setup path. The rules stay on the existing tokens — four surfaces, one accent
+ * — because a "quick" path that looked like a different application would read
+ * as a lesser one.
+ */
+
+/*
+ * A picker whose mapped property is not in the loaded model.
+ *
+ * Warned rather than errored: the mapping is valid and the model is what is
+ * absent. The border is the only signal that survives being read at a glance;
+ * the option text is what actually explains it.
+ */
+.control--absent {
+  border-color: var(--warning);
+}
+
+/* ------------------------------------------------ property mapping chains */
+
+.chain--property {
+  width: 100%;
+}
+
+/*
+ * A rung's picker has to be readable, and four controls in one row on a split
+ * column do not leave it room: `Dragon Data > Building` truncates to
+ * `Dragon Data > Build…`, which is the exact failure `.inline-field--wide`
+ * exists to prevent elsewhere. The row wraps instead — the picker takes a full
+ * line and the three buttons drop underneath it whenever the column is narrow.
+ */
+.chain__item--rung .chain__head {
+  flex-wrap: wrap;
+}
+
+.chain__item--rung .chain__head .control--select {
+  flex: 1 1 16rem;
+  min-width: 12rem;
+}
+
+/* The three buttons move as one, so a wrap never orphans the ↑ on its own. */
+.chain__rung-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.chain__add {
+  width: 100%;
+}
+
+.chain__overrides {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--surface-sunken);
+}
+
+.chain__overrides > summary {
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+
+.chain__overrides[open] > summary {
+  margin-bottom: var(--space-2);
+  color: var(--text);
+}
+
+.chain__override {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border);
+}
+
+.chain__override-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.chain__override-name {
+  flex: 1 1 auto;
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.chain__override-absent {
+  color: var(--warning);
+  font-size: 0.72rem;
+}
+
+/* ------------------------------------------------- screen 6's two editors */
+
+.editor-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-small);
+  background: var(--surface-sunken);
+}
+
+.editor-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.editor-card__head .control--select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.preview-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--surface);
+}
+
+.assign-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.assign-grid .inline-field {
+  align-items: center;
+}
+
+/* The "assign another field" row: the name is the long half, so it gets the space. */
+.assign-grid + .button-row .control--text {
+  flex: 1 1 14rem;
+  min-width: 10rem;
+}
+
+/*
+ * A match table's cells are file names and captures, and both are meaningless
+ * once broken across three lines. One line per row, and the `.table-scroll`
+ * around it does what it is for.
+ */
+.table--nowrap th,
+.table--nowrap td {
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------- the setup fork */
+
+.fork-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+}
+
+.fork-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.fork-card__title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.fork-card__body {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.fork-card__list {
+  margin: 0;
+  padding-left: var(--space-5);
+  color: var(--text-faint);
+  font-size: 0.8rem;
+}
+
+.fork-card__list > li {
+  margin-bottom: var(--space-1);
+}
+
+/* --------------------------------------------------------- the quick path */
+
+.step--quick {
+  margin-bottom: var(--space-3);
+  border: 1px solid var(--border-strong);
+}
+
+.quick-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  list-style: none;
+}
+
+.quick-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+}
+
+.quick-step:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.quick-step:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.quick-step--current {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.quick-step--done .quick-step__number {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.quick-step__number {
+  display: flex;
+  width: 1.3rem;
+  height: 1.3rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* One suggestion, with the evidence that produced it underneath. */
+
+.candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.candidate {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--surface-sunken);
+  cursor: pointer;
+}
+
+.candidate:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.candidate--chosen {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.candidate--unavailable {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.candidate__body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.candidate__name {
+  font-size: 0.86rem;
+  font-weight: 500;
+}
+
+.candidate__why {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.candidate__examples {
+  color: var(--text-faint);
+  font-size: 0.74rem;
+}
+
+.candidate__blocked {
+  color: var(--warning);
+  font-size: 0.74rem;
+}
+
+.badge {
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.badge--strong {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.badge--possible {
+  background: var(--warning-soft);
+  color: var(--warning);
 }

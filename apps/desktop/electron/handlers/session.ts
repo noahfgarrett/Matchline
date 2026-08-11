@@ -38,6 +38,10 @@ export type SessionChannel = Extract<
   | 'asset:preview'
   | 'anatomy:preview'
   | 'resolver:preview'
+  | 'derived:preview'
+  | 'assignment:preview'
+  | 'setup:suggest'
+  | 'setup:resolver-preview'
   | 'profile:draft'
   | 'profile:update'
   | 'profile:save'
@@ -282,6 +286,28 @@ export function createSessionHandlers(
 
     async 'resolver:preview'(): Promise<IpcResponse<'resolver:preview'>> {
       return { preview: guard(() => service.resolverPreview()) };
+    },
+
+    async 'derived:preview'(
+      request: IpcRequest<'derived:preview'>,
+    ): Promise<IpcResponse<'derived:preview'>> {
+      return { preview: guard(() => service.derivedPreview(request.definition)) };
+    },
+
+    async 'assignment:preview'(
+      request: IpcRequest<'assignment:preview'>,
+    ): Promise<IpcResponse<'assignment:preview'>> {
+      return { preview: guard(() => service.assignmentPreview(request.rule)) };
+    },
+
+    async 'setup:suggest'(): Promise<IpcResponse<'setup:suggest'>> {
+      return { suggestions: guard(() => service.quickSetupSuggestions()) };
+    },
+
+    async 'setup:resolver-preview'(
+      request: IpcRequest<'setup:resolver-preview'>,
+    ): Promise<IpcResponse<'setup:resolver-preview'>> {
+      return { preview: guard(() => service.resolverTemplatePreview(request.resolver)) };
     },
 
     async 'profile:draft'(): Promise<IpcResponse<'profile:draft'>> {

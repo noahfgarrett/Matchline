@@ -5,14 +5,16 @@ import type {
   WireClassCount,
   WireDraftPatch,
   WireFilterStage,
+  WireMappedProperty,
+  WirePropertyCatalogRow,
   WirePropertyMappings,
-  WirePropertyRef,
   WireSampleAsset,
   WireSourceImpact,
 } from '../../../shared/schemas';
 import { call, count, percent } from '../api';
 import { Field } from '../components/Field';
 import { Callout, Panel, Stat, StatRow, TableScroll } from '../components/Panel';
+import { PropertyChainEditor, type ChainSource } from '../components/PropertyChainEditor';
 import { PropertyPicker } from '../components/PropertyPicker';
 import { usePreview } from '../usePreview';
 
@@ -35,12 +37,20 @@ export function Screen3Assets({ context }: { readonly context: WizardContext }):
   // Every write reads the draft main currently holds, not the one this render
   // captured: two picks in a row must not undo each other (see WizardContext).
   const setMapping = useCallback(
-    (key: keyof WirePropertyMappings, ref: WirePropertyRef | null): void => {
+    (key: keyof WirePropertyMappings, mapping: WireMappedProperty): void => {
       void context.update((current) => ({
-        propertyMappings: { ...current.propertyMappings, [key]: ref },
+        propertyMappings: { ...current.propertyMappings, [key]: mapping },
       }));
     },
     [context],
+  );
+
+  /** The model sources a per-source override can name. Never file names (P0-1). */
+  const chainSources: readonly ChainSource[] = (context.universe?.sources ?? []).map(
+    (source): ChainSource => ({
+      sourceId: source.sourceId,
+      displayName: source.displayName,
+    }),
   );
 
   const setFilters = useCallback(
@@ -88,147 +98,110 @@ export function Screen3Assets({ context }: { readonly context: WizardContext }):
           </p>
         </header>
 
-        <Panel title="Which property is which">
-          <Field
+        <Panel
+          title="Which property is which"
+          description="Each field is a list, tried top to bottom. One address is the ordinary case; add a second when a different model keeps the same fact somewhere else."
+        >
+          <MappingField
             label="Equipment tag"
-            what="The property Matchline reads the equipment tag from. This is the identity of every asset — nothing else can stand in for it."
-            example="Dragon Data > Tag holding MAH001-10-01"
-            htmlFor="map-tag"
-          >
-            <PropertyPicker
-              id="map-tag"
-              properties={properties}
-              value={mappings.equipmentTag}
-              noneLabel="Not chosen yet"
-              onChange={(ref): void => {
-                setMapping('equipmentTag', ref);
-              }}
-            />
-          </Field>
+            what="The property Matchline reads the equipment tag from. This is the identity of every asset — nothing else can stand in for it. If the first address is blank on an object, the next one is tried."
+            example="Dragon Data > Tag holding MAH001-10-01, falling back to Item > Name"
+            field="equipmentTag"
+            noneLabel="Not chosen yet"
+            mappings={mappings}
+            properties={properties}
+            sources={chainSources}
+            onChange={setMapping}
+          />
 
-          <Field
+          <MappingField
             label="Description"
             what="Free text shown next to the tag in the register and in the generated MEL."
             example="Primary dry air handling unit"
-            htmlFor="map-description"
-          >
-            <PropertyPicker
-              id="map-description"
-              properties={properties}
-              value={mappings.description}
-              noneLabel="Not mapped"
-              onChange={(ref): void => {
-                setMapping('description', ref);
-              }}
-            />
-          </Field>
+            field="description"
+            noneLabel="Not mapped"
+            mappings={mappings}
+            properties={properties}
+            sources={chainSources}
+            onChange={setMapping}
+          />
 
-          <Field
+          <MappingField
             label="Equipment type"
             what="What kind of thing this is. Used for grouping and for the role rules later on."
             example="Air Handler"
-            htmlFor="map-type"
-          >
-            <PropertyPicker
-              id="map-type"
-              properties={properties}
-              value={mappings.equipmentType}
-              noneLabel="Not mapped"
-              onChange={(ref): void => {
-                setMapping('equipmentType', ref);
-              }}
-            />
-          </Field>
+            field="equipmentType"
+            noneLabel="Not mapped"
+            mappings={mappings}
+            properties={properties}
+            sources={chainSources}
+            onChange={setMapping}
+          />
 
-          <Field
+          <MappingField
             label="Building"
             what="Which building the asset sits in. Becomes the top level of the hierarchy."
             example="B14"
-            htmlFor="map-building"
-          >
-            <PropertyPicker
-              id="map-building"
-              properties={properties}
-              value={mappings.building}
-              noneLabel="Not mapped"
-              onChange={(ref): void => {
-                setMapping('building', ref);
-              }}
-            />
-          </Field>
+            field="building"
+            noneLabel="Not mapped"
+            mappings={mappings}
+            properties={properties}
+            sources={chainSources}
+            onChange={setMapping}
+          />
 
-          <Field
+          <MappingField
             label="Discipline"
             what="The discipline as the model authors wrote it. Matchline maps it to an SSM discipline later; it never overwrites what the model said."
             example="Mechanical"
-            htmlFor="map-discipline"
-          >
-            <PropertyPicker
-              id="map-discipline"
-              properties={properties}
-              value={mappings.nativeDiscipline}
-              noneLabel="Not mapped"
-              onChange={(ref): void => {
-                setMapping('nativeDiscipline', ref);
-              }}
-            />
-          </Field>
+            field="nativeDiscipline"
+            noneLabel="Not mapped"
+            mappings={mappings}
+            properties={properties}
+            sources={chainSources}
+            onChange={setMapping}
+          />
         </Panel>
 
         <Panel
           title="Register fields the model already knows"
           description="Leave these unmapped and Matchline learns them from a prior registry. Map one and the model wins: a value the model states is a fact, and a learned value is an inference."
         >
-          <Field
+          <MappingField
             label="WBS"
             what="The work-breakdown code. Unmapped, Matchline learns one code per system from a prior registry and fills it in above the 0.9 confidence gate."
             example="1811"
-            htmlFor="map-wbs"
-          >
-            <PropertyPicker
-              id="map-wbs"
-              properties={properties}
-              value={mappings.wbs}
-              noneLabel="Not mapped — learn it"
-              onChange={(ref): void => {
-                setMapping('wbs', ref);
-              }}
-            />
-          </Field>
+            field="wbs"
+            noneLabel="Not mapped — learn it"
+            mappings={mappings}
+            properties={properties}
+            sources={chainSources}
+            onChange={setMapping}
+          />
 
-          <Field
+          <MappingField
             label="Item Master Unique Identifier"
             what="The item-master name. Unmapped, Matchline learns it from a prior registry by discipline, classification and system."
             example="VF_MECH_AHU"
-            htmlFor="map-item-master"
-          >
-            <PropertyPicker
-              id="map-item-master"
-              properties={properties}
-              value={mappings.itemMaster}
-              noneLabel="Not mapped — learn it"
-              onChange={(ref): void => {
-                setMapping('itemMaster', ref);
-              }}
-            />
-          </Field>
+            field="itemMaster"
+            noneLabel="Not mapped — learn it"
+            mappings={mappings}
+            properties={properties}
+            sources={chainSources}
+            onChange={setMapping}
+          />
 
-          <Field
+          <MappingField
             label="Equipment Classification"
             what="The register's classification column. Unmapped, Matchline falls back to the equipment type above, then to what it learned from descriptions."
             example="AHU"
-            htmlFor="map-classification"
-          >
-            <PropertyPicker
-              id="map-classification"
-              properties={properties}
-              value={mappings.equipmentClassification}
-              noneLabel="Not mapped — learn it"
-              onChange={(ref): void => {
-                setMapping('equipmentClassification', ref);
-              }}
-            />
-          </Field>
+            field="equipmentClassification"
+            noneLabel="Not mapped — learn it"
+            mappings={mappings}
+            properties={properties}
+            sources={chainSources}
+            onChange={setMapping}
+          />
         </Panel>
 
         <Panel
@@ -420,6 +393,51 @@ export function Screen3Assets({ context }: { readonly context: WizardContext }):
         </Panel>
       </div>
     </div>
+  );
+}
+
+/**
+ * One mapped field, with its chain and its per-source overrides.
+ *
+ * The `Field` wrapper still enforces APP.md's what-and-example rule; what the
+ * chain editor adds underneath it is the ordering, which is the part of the
+ * decision the single picker could not express.
+ */
+function MappingField({
+  label,
+  what,
+  example,
+  field,
+  noneLabel,
+  mappings,
+  properties,
+  sources,
+  onChange,
+}: {
+  readonly label: string;
+  readonly what: string;
+  readonly example: string;
+  readonly field: keyof WirePropertyMappings;
+  readonly noneLabel: string;
+  readonly mappings: WirePropertyMappings;
+  readonly properties: readonly WirePropertyCatalogRow[];
+  readonly sources: readonly ChainSource[];
+  readonly onChange: (field: keyof WirePropertyMappings, mapping: WireMappedProperty) => void;
+}): JSX.Element {
+  return (
+    <Field label={label} what={what} example={example}>
+      <PropertyChainEditor
+        idPrefix={`map-${field}`}
+        label={label}
+        mapping={mappings[field]}
+        properties={properties}
+        sources={sources}
+        noneLabel={noneLabel}
+        onChange={(mapping): void => {
+          onChange(field, mapping);
+        }}
+      />
+    </Field>
   );
 }
 

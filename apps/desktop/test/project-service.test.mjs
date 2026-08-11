@@ -448,10 +448,11 @@ test('reopening restores the draft from the saved revision', async () => {
 
     const { draft, savedRevision } = service.draftState();
     assert.equal(savedRevision, 1);
-    assert.deepEqual(draft.propertyMappings.equipmentTag, {
-      category: 'Dragon Data',
-      name: 'Tag',
-    });
+    assert.deepEqual(
+      draft.propertyMappings.equipmentTag,
+      { chain: [{ category: 'Dragon Data', name: 'Tag' }], bySource: [] },
+      'the stored revision rehydrates as a chain, whichever way it was written',
+    );
     assert.deepEqual(draft.tagAnatomy.segments, DRAGON_ANATOMY.segments);
     assert.equal(draft.tagAnatomy.familyKeyTemplate, '{system}-{token:1}-{token:2}');
     assert.deepEqual(draft.systemResolver.keyChain, DRAGON_RESOLVER.keyChain);

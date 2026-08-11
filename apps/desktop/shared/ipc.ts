@@ -4,6 +4,7 @@ import {
   addSourceResultSchema,
   anatomyPreviewSchema,
   assetPreviewSchema,
+  assignmentPreviewSchema,
   attributeChoiceSchema,
   classCountSchema,
   compileHistoryEntrySchema,
@@ -12,6 +13,8 @@ import {
   compileStatusSchema,
   configPatchSchema,
   decisionValueSchema,
+  derivedAttributeSchema,
+  derivedPreviewSchema,
   draftPatchSchema,
   draftProfileSchema,
   exportResultSchema,
@@ -29,11 +32,14 @@ import {
   projectSummarySchema,
   propertyCatalogRowSchema,
   propertySortSchema,
+  quickSetupSuggestionsSchema,
   recentProjectSchema,
   reparentPreviewSchema,
   resolverPreviewSchema,
   reviewPageSchema,
+  sourceAssignmentRuleSchema,
   sourceSummarySchema,
+  systemResolverSchema,
   templateAnalysisSchema,
   templateBindingSchema,
   treeNodeSchema,
@@ -138,15 +144,26 @@ const EXAMPLE_DRAFT = {
   profileId: 'dragon',
   name: 'Dragon',
   version: 1,
+  // Chains with per-source overrides since P0-8 (hard gate 5): the building is
+  // read from `Dragon Data > Building` everywhere except the controls model,
+  // where the same fact lives under `Controls Data > Area`.
   propertyMappings: {
-    equipmentTag: { category: 'Dragon Data', name: 'Tag' },
-    description: null,
-    equipmentType: null,
-    building: null,
-    nativeDiscipline: null,
-    wbs: null,
-    itemMaster: null,
-    equipmentClassification: null,
+    equipmentTag: { chain: [{ category: 'Dragon Data', name: 'Tag' }], bySource: [] },
+    description: { chain: [], bySource: [] },
+    equipmentType: { chain: [], bySource: [] },
+    building: {
+      chain: [{ category: 'Dragon Data', name: 'Building' }],
+      bySource: [
+        {
+          sourceId: 'model:dragon-controls.matchline-cache',
+          chain: [{ category: 'Controls Data', name: 'Area' }],
+        },
+      ],
+    },
+    nativeDiscipline: { chain: [], bySource: [] },
+    wbs: { chain: [], bySource: [] },
+    itemMaster: { chain: [], bySource: [] },
+    equipmentClassification: { chain: [], bySource: [] },
   },
   assetFilters: {
     includedClasses: [],
@@ -803,6 +820,178 @@ export const IPC_CHANNELS = {
               conflictStatus: 'AGREED',
             },
           ],
+          conflicts: [],
+          unresolvedExamples: [],
+        },
+      },
+    },
+  },
+
+  /**
+   * What one derived attribute would resolve to, over the whole universe (P0-7).
+   *
+   * The definition travels in the request rather than being read off the draft:
+   * screen 6's manager previews the definition being EDITED, which is not in the
+   * draft until somebody saves it, and a preview of the saved one would answer a
+   * question nobody asked.
+   */
+  'derived:preview': {
+    request: z.object({ definition: derivedAttributeSchema }),
+    response: z.object({ preview: derivedPreviewSchema }),
+    example: {
+      request: {
+        definition: {
+          attributeId: 'turnover-package',
+          displayName: 'Turnover Package',
+          resolverChain: [{ kind: 'tag-segment', segment: 'unit' }],
+        },
+      },
+      response: {
+        preview: {
+          state: 'ready',
+          assetCount: 34,
+          resolvedCount: 34,
+          coverage: 1,
+          distinctValueCount: 2,
+          rungUsage: [
+            {
+              rungIndex: 0,
+              kind: 'tag-segment',
+              label: 'Tag segment "unit"',
+              wonCount: 34,
+              claimCount: 34,
+            },
+          ],
+          samples: [
+            {
+              assetId: 'tag:MAH001-10-01',
+              canonicalTag: 'MAH001-10-01',
+              value: '10',
+              from: 'Tag segment "unit"',
+            },
+          ],
+          unresolvedExamples: [],
+        },
+      },
+    },
+  },
+
+  /** Which documents one source-assignment rule speaks for (P0-8). */
+  'assignment:preview': {
+    request: z.object({ rule: sourceAssignmentRuleSchema }),
+    response: z.object({ preview: assignmentPreviewSchema }),
+    example: {
+      request: {
+        rule: {
+          scope: 'filename-pattern',
+          match: 'Dragon-*.nwc',
+          assign: { building: '', nativeDiscipline: '$1', custom: [] },
+        },
+      },
+      response: {
+        preview: {
+          state: 'ready',
+          matches: [
+            {
+              sourceId: 'model:dragon-mechanical.matchline-cache',
+              label: 'dragon-mechanical',
+              sourceModelFile: 'Dragon-Mechanical.nwc',
+              objectCount: 51,
+              capture: 'Mechanical',
+            },
+          ],
+          matchedObjectCount: 51,
+          universeObjectCount: 76,
+          assigned: [{ field: 'Discipline', value: 'Mechanical' }],
+          problem: '',
+          candidates: ['Dragon-Mechanical.nwc', 'Dragon-Controls.nwc'],
+        },
+      },
+    },
+  },
+
+  /* ------------------------------------------------------------ quick setup */
+
+  /**
+   * Everything the Quick Setup path proposes, over the real universe.
+   *
+   * One channel rather than one per screen: the signals are computed from a
+   * single pass over the Property Catalog and the class counts, and splitting
+   * them would make five screens pay for it five times. Nothing here is
+   * applied — accepting is a `profile:update` like any other edit.
+   */
+  'setup:suggest': {
+    request: z.void(),
+    response: z.object({ suggestions: quickSetupSuggestionsSchema }),
+    example: {
+      request: undefined,
+      response: {
+        suggestions: {
+          ready: true,
+          blockedReason: '',
+          objectCount: 76,
+          sourceCount: 1,
+          fields: [
+            {
+              target: { kind: 'mapped-field', field: 'equipmentTag' },
+              label: 'Equipment tag',
+              what: 'The property Matchline reads the equipment tag from.',
+              example: 'Dragon Data > Tag holding MAH001-10-01',
+              confidence: 'strong',
+              candidates: [
+                {
+                  property: { category: 'Dragon Data', name: 'Tag' },
+                  score: 0.94,
+                  coverage: 0.45,
+                  distinctValueCount: 34,
+                  objectCount: 34,
+                  examples: ['MAH001-10-01', 'MAH001-10-02'],
+                  reasons: ['Named “Tag”', 'Every value distinct', 'Values are shaped like tags'],
+                },
+              ],
+            },
+          ],
+          anatomy: null,
+          resolverTemplates: [],
+          classes: [],
+          hierarchy: { levels: [] },
+        },
+      },
+    },
+  },
+
+  /**
+   * One starter template previewed before it is accepted.
+   *
+   * Separate from `resolver:preview`, which previews the draft: a template has
+   * not been written to the draft and must not be, because writing it to find
+   * out what it does is exactly the silent publication the plan forbids.
+   */
+  'setup:resolver-preview': {
+    request: z.object({ resolver: systemResolverSchema }),
+    response: z.object({ preview: resolverPreviewSchema }),
+    example: {
+      request: {
+        resolver: {
+          keyChain: [{ kind: 'tag-segment', segment: 'system' }],
+          descriptionChain: [],
+          normalization: [{ kind: 'trim' }],
+          conflictPolicy: 'review',
+          labelTemplate: '',
+        },
+      },
+      response: {
+        preview: {
+          state: 'ready',
+          subjectCount: 34,
+          resolvedCount: 34,
+          coverage: 1,
+          describedCount: 0,
+          conflictCount: 0,
+          distinctSystemCount: 3,
+          melRowCount: 0,
+          rungUsage: [],
+          samples: [],
           conflicts: [],
           unresolvedExamples: [],
         },

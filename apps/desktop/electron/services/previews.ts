@@ -14,7 +14,6 @@ import type {
   WireAnatomyExample,
   WireAnatomyPreview,
   WireAssetPreview,
-  WireDraftProfile,
   WireFilterStage,
   WireResolvedSample,
   WireResolverPreview,
@@ -22,6 +21,7 @@ import type {
   WireSampleAsset,
   WireSourceImpact,
   WireSystemConflict,
+  WireSystemResolver,
   WireTagAnatomy,
 } from '../../shared/schemas.js';
 
@@ -243,18 +243,28 @@ function tallyKey(chain: 'keyChain' | 'descriptionChain', rungIndex: number): st
   return `${chain}:${String(rungIndex)}`;
 }
 
+/**
+ * Runs one resolver over the project's subjects and reports what it did.
+ *
+ * Takes the resolver rather than the draft since the one-hour round: screen 5
+ * previews the draft's own, and Quick Setup previews a starter template that
+ * has deliberately NOT been written to the draft — running it to find out what
+ * it does is exactly the silent publication the plan forbids. The anatomy still
+ * comes from the draft, because a template does not change how tags split.
+ */
 export function buildResolverPreview(
-  draft: WireDraftProfile,
+  resolverWire: WireSystemResolver,
+  anatomyWire: WireTagAnatomy,
   subjects: readonly ResolverSubject[],
   catalog: AssetCatalog,
   melRows: readonly MelCatalogRow[],
 ): WireResolverPreview {
-  const config = toSystemResolver(draft.systemResolver);
+  const config = toSystemResolver(resolverWire);
   if (config === null) {
     return { state: 'blocked', reason: 'Add at least one System Key source to preview it.' };
   }
 
-  const anatomy = toTagAnatomy(draft.tagAnatomy);
+  const anatomy = toTagAnatomy(anatomyWire);
   const systemCatalog = buildSystemCatalog(melRows);
 
   const result = resolveSystems(subjects, config, {
@@ -389,6 +399,54 @@ export function buildResolverPreview(
     conflicts,
     unresolvedExamples,
   };
+}
+
+/**
+ * What the System Resolver settled on for each asset, for the rungs that read
+ * it.
+ *
+ * A derived attribute may resolve through a `system-field` rung (P0-7), so the
+ * derived preview needs the same answers screen 5 shows — and it needs them as
+ * a map by asset id rather than as a summary. An empty map when the site has
+ * configured no resolver, which is the honest reading: a `system-field` rung on
+ * a project with no resolver answers nothing, exactly as it would in a compile.
+ */
+export function resolveSystemMap(
+  resolverWire: WireSystemResolver,
+  anatomyWire: WireTagAnatomy,
+  subjects: readonly ResolverSubject[],
+  melRows: readonly MelCatalogRow[],
+): ReadonlyMap<
+  string,
+  { readonly systemKey: string; readonly systemDescription: string; readonly systemLabel: string }
+> {
+  const config = toSystemResolver(resolverWire);
+  if (config === null) {
+    return new Map();
+  }
+  const anatomy = toTagAnatomy(anatomyWire);
+  const systemCatalog = buildSystemCatalog(melRows);
+  const result = resolveSystems(subjects, config, {
+    ...(anatomy === null ? {} : { anatomy }),
+    catalog: systemCatalog.catalog,
+    melRows,
+  });
+
+  const systems = new Map<
+    string,
+    { systemKey: string; systemDescription: string; systemLabel: string }
+  >();
+  for (const [assetId, resolution] of result.bySubject) {
+    if (resolution.resolution === null) {
+      continue;
+    }
+    systems.set(assetId, {
+      systemKey: resolution.resolution.systemKey,
+      systemDescription: resolution.resolution.systemDescription ?? '',
+      systemLabel: resolution.resolution.systemLabel,
+    });
+  }
+  return systems;
 }
 
 function usageRow(

@@ -101,6 +101,18 @@ const PROPERTY_MAPPINGS = {
   nativeDiscipline: { category: 'Dragon Data', name: 'Service' },
 };
 
+/**
+ * The chain shape a single-property mapping lifts to (P0-8, hard gate 5).
+ *
+ * The mappings above are still written the pre-chain way on purpose: a service
+ * caller handing over a bare `PropertyRef` is exactly what a stored draft, an
+ * older test and a hand-edited profile all do, and the lift keeping them
+ * working is the promise this milestone made. This is what they become.
+ */
+function lifted(ref) {
+  return { chain: [ref], bySource: [] };
+}
+
 const ASSET_FILTERS = {
   includedClasses: [],
   excludedClasses: [],
@@ -1007,10 +1019,11 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     assert.equal(written.draft, undefined, 'one versioned profile, not a draft/config pair');
     assert.equal(written.config, undefined);
     assert.deepEqual(written.profile.roleGraph.rules, [{ parentRole: 'PNL', childRole: 'RIO' }]);
-    assert.deepEqual(written.profile.propertyMappings.equipmentTag, {
-      category: 'Dragon Data',
-      name: 'Tag',
-    });
+    assert.deepEqual(
+      written.profile.propertyMappings.equipmentTag,
+      lifted({ category: 'Dragon Data', name: 'Tag' }),
+      'a package carries the chain, not the first rung of it',
+    );
     // §13.3: a package is decisions only.
     const text = readFileSync(target, 'utf8');
     assert.equal(text.includes('Dragon.matchline-cache'), false, 'no source file names');
@@ -1403,7 +1416,7 @@ test('a pre-v2 project moves its config sections into a new profile revision', a
     assert.deepEqual(draft.parentTagProperty, FULL_PROFILE_PATCH.parentTagProperty);
     assert.deepEqual(
       draft.propertyMappings.equipmentTag,
-      PROPERTY_MAPPINGS.equipmentTag,
+      lifted(PROPERTY_MAPPINGS.equipmentTag),
       'and the profile it merged into is still the profile',
     );
     revisionAfterMerge = project.savedRevision;
@@ -1498,10 +1511,11 @@ test('a v1 profile package written by an older build imports and migrates', () =
     const { draft } = service.importProfilePackage(packagePath);
 
     // The draft's own four sections.
-    assert.deepEqual(draft.propertyMappings.equipmentTag, {
-      category: 'Dragon Data',
-      name: 'Tag',
-    });
+    assert.deepEqual(
+      draft.propertyMappings.equipmentTag,
+      lifted({ category: 'Dragon Data', name: 'Tag' }),
+      'a v1 package spells one property; it lifts to a one-rung chain',
+    );
     assert.equal(draft.tagAnatomy.familyKeyTemplate, '{system}-{token:1}-{token:2}');
     // And the five that were in the config half, now sections of one profile.
     assert.deepEqual(draft.hierarchy, FULL_PROFILE_PATCH.hierarchy);

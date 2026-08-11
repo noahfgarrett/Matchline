@@ -11,6 +11,8 @@ import { Field } from '../components/Field';
 import { Callout, Panel, TableScroll } from '../components/Panel';
 import { SortableList } from '../components/Sortable';
 
+import { DerivedAttributes } from './DerivedAttributes';
+import { SourceAssignments } from './SourceAssignments';
 import type { WizardContext } from './Wizard';
 
 /**
@@ -115,19 +117,28 @@ export function Screen6Hierarchy({ context }: { readonly context: WizardContext 
   const boundaryCount = levels.filter((level) => level.boundary).length;
 
   return (
-    <div className="screen screen--split" data-testid="screen-6">
-      <div className="screen__column">
-        <header className="screen__header">
-          <h1 className="screen__title">6. Hierarchy Composer</h1>
-          <p className="screen__lede">
-            The level stack the commissioning register is grouped by, outermost first. Drag to
-            reorder. The boundary toggle on each level is the structural one — everything else
-            here changes how the register reads, not what nests under what.
-          </p>
-        </header>
+    /* Two layouts on one screen, deliberately. The level stack is a narrow list
+       beside a wide summary, which is what the split grid is for; the two
+       registry editors are wide forms whose previews are tables of file names
+       and counts, and squeezing them into half the width is what made the
+       first pass unreadable. So the split is a block inside the screen rather
+       than the screen itself. */
+    <div className="screen screen--stacked" data-testid="screen-6">
+      <header className="screen__header">
+        <h1 className="screen__title">6. Hierarchy Composer</h1>
+        <p className="screen__lede">
+          The level stack the commissioning register is grouped by, outermost first. Drag to
+          reorder. The boundary toggle on each level is the structural one — everything else
+          here changes how the register reads, not what nests under what. Below the stack are
+          the two things a level can group by that this site defines for itself: fields built
+          out of your own evidence, and facts that are true of a whole model file.
+        </p>
+      </header>
 
-        {error === null ? null : <Callout tone="error">{error}</Callout>}
+      {error === null ? null : <Callout tone="error">{error}</Callout>}
 
+      <div className="screen__split">
+        <div className="screen__column">
         <Panel
           title="Levels"
           description="Outermost at the top. Equipment is filed by these values in order."
@@ -193,7 +204,8 @@ export function Screen6Hierarchy({ context }: { readonly context: WizardContext 
             </div>
           )}
         </Panel>
-      </div>
+
+        </div>
 
       <div className="screen__column screen__column--sticky">
         <Panel title="What this stack does">
@@ -261,6 +273,14 @@ export function Screen6Hierarchy({ context }: { readonly context: WizardContext 
           </Callout>
         </Panel>
       </div>
+      </div>
+
+      {/* The two registry sections a level can address. They live on this screen
+          rather than one of their own because the only reason to define either
+          is to group, label or bound by it, and that decision is directly
+          above. */}
+      <DerivedAttributes context={context} />
+      <SourceAssignments context={context} />
     </div>
   );
 }

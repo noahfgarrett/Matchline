@@ -6,6 +6,7 @@ import type {
   DerivedAttributeDefinitionInput,
   DisciplineRewrite,
   HierarchyConfigInput,
+  MappedPropertyChainInput,
   MappedPropertyInput,
   NormalizationStep,
   ParentLadderConfig,
@@ -25,6 +26,7 @@ import type {
   TagAnatomyConfig,
 } from '@matchline/domain';
 
+import { liftMappedProperty, MAPPED_PROPERTY_FIELDS } from '../../shared/schemas.js';
 import type {
   WireAssetFilters,
   WireAttributeResolver,
@@ -32,7 +34,10 @@ import type {
   WireDraftProfile,
   WireHierarchyLevel,
   WireIdentityConfig,
+  WireMappedProperty,
+  WireMappedPropertyField,
   WirePropertyMappings,
+  WirePropertyRef,
   WireSourceAssignmentRule,
   WireSystemResolver,
   WireTagAnatomy,
@@ -127,16 +132,7 @@ export function emptyDraft(name: string): WireDraftProfile {
     profileId: slugify(name),
     name,
     version: 1,
-    propertyMappings: {
-      equipmentTag: null,
-      description: null,
-      equipmentType: null,
-      building: null,
-      nativeDiscipline: null,
-      wbs: null,
-      itemMaster: null,
-      equipmentClassification: null,
-    },
+    propertyMappings: emptyMappings(),
     assetFilters: {
       includedClasses: [],
       excludedClasses: [],
@@ -181,6 +177,64 @@ export function emptyDraft(name: string): WireDraftProfile {
   };
 }
 
+/**
+ * Every mapped field as an empty chain: nobody has mapped anything yet.
+ *
+ * Spelled out field by field rather than built from `MAPPED_PROPERTY_FIELDS` in
+ * a loop, because a loop produces a partial record as far as the compiler is
+ * concerned and this shape has no optional keys. The guard against forgetting a
+ * new field is `EveryMappedFieldListed` in the schema, which is a compile-time
+ * check on the list itself.
+ */
+function emptyMappings(): WirePropertyMappings {
+  const unmapped = (): WireMappedProperty => ({ chain: [], bySource: [] });
+  return {
+    equipmentTag: unmapped(),
+    description: unmapped(),
+    equipmentType: unmapped(),
+    building: unmapped(),
+    nativeDiscipline: unmapped(),
+    wbs: unmapped(),
+    itemMaster: unmapped(),
+    equipmentClassification: unmapped(),
+  };
+}
+
+/**
+ * One mapping in the chain shape, whichever spelling arrived.
+ *
+ * A patch handed straight to the service — a test, a future importer — has not
+ * been through `draftPatchSchema`, so the lift has to run here too. It is the
+ * schema's own {@link liftMappedProperty}, called rather than reimplemented.
+ */
+function liftWireMapping(value: unknown): WireMappedProperty {
+  const lifted = liftMappedProperty(value) as {
+    readonly chain?: readonly WirePropertyRef[];
+    readonly bySource?: readonly { readonly sourceId: string; readonly chain: readonly WirePropertyRef[] }[];
+  };
+  return {
+    chain: [...(lifted.chain ?? [])],
+    bySource: (lifted.bySource ?? []).map((override) => ({
+      sourceId: override.sourceId,
+      chain: [...override.chain],
+    })),
+  };
+}
+
+/** {@link liftWireMapping} over a whole mapping set, field by declared field. */
+export function liftWireMappings(input: WirePropertyMappings): WirePropertyMappings {
+  return {
+    equipmentTag: liftWireMapping(input.equipmentTag),
+    description: liftWireMapping(input.description),
+    equipmentType: liftWireMapping(input.equipmentType),
+    building: liftWireMapping(input.building),
+    nativeDiscipline: liftWireMapping(input.nativeDiscipline),
+    wbs: liftWireMapping(input.wbs),
+    itemMaster: liftWireMapping(input.itemMaster),
+    equipmentClassification: liftWireMapping(input.equipmentClassification),
+  };
+}
+
 /** `Dragon Building 14` -> `dragon-building-14`. Never empty. */
 function slugify(name: string): string {
   const slug = name
@@ -196,7 +250,10 @@ export function applyPatch(draft: WireDraftProfile, patch: WireDraftPatch): Wire
     profileId: patch.name === undefined ? draft.profileId : slugify(patch.name),
     name: patch.name ?? draft.name,
     version: draft.version,
-    propertyMappings: patch.propertyMappings ?? draft.propertyMappings,
+    propertyMappings:
+      patch.propertyMappings === undefined
+        ? draft.propertyMappings
+        : liftWireMappings(patch.propertyMappings),
     sourceAssignments: patch.sourceAssignments ?? draft.sourceAssignments,
     assetFilters: patch.assetFilters ?? draft.assetFilters,
     tagAnatomy: patch.tagAnatomy ?? draft.tagAnatomy,
@@ -222,9 +279,15 @@ export function applyPatch(draft: WireDraftProfile, patch: WireDraftPatch): Wire
 
 /* --------------------------------------------------------------- predicates */
 
-/** Screen 3 is answered: there is a property to read equipment tags from. */
+/**
+ * Screen 3 is answered: there is at least one property to read tags from.
+ *
+ * The chain, not one rung: a site whose tag lives in one place on the mechanical
+ * model and another on the controls model has answered the question, and so has
+ * a site that stated one address (P0-8).
+ */
 export function hasMappings(draft: WireDraftProfile): boolean {
-  return draft.propertyMappings.equipmentTag !== null;
+  return liftWireMapping(draft.propertyMappings.equipmentTag).chain.length > 0;
 }
 
 /** Screen 4 is answered: at least one segment has been taught. */
@@ -244,18 +307,49 @@ function toPropertyRef(ref: { readonly category: string; readonly name: string }
 }
 
 /**
- * The wizard's single-property mappings as the domain takes them.
+ * One mapped field as the domain takes it: a chain, plus any per-source
+ * override (P0-8).
  *
- * Each field stays one `PropertyRef` on the wire this round: screen 3 picks one
- * property, and `PropertyRef` is a legal `MappedPropertyInput` that every engine
- * entry point lifts to a one-rung chain (P0-8). Editing a chain or a per-source
- * override is a Site Profile Studio job, not a wizard one.
+ * The overrides go across as the ordered pair list `MappedPropertyChainInput`
+ * accepts, not as a `Map`: a profile is JSON, and `migrateMappedProperty` is the
+ * one place the map is built.
+ */
+function toMappedProperty(mapping: WireMappedProperty): MappedPropertyChainInput {
+  const chain = mapping.chain.map(toPropertyRef);
+  // A blank override list is an absent key rather than an empty array, for the
+  // reason every optional section here is: `{bySource: []}` would claim the site
+  // stated per-source addresses and then named none.
+  const overrides = mapping.bySource.filter((override) => override.chain.length > 0);
+  if (overrides.length === 0) {
+    return { chain };
+  }
+  return {
+    chain,
+    bySource: overrides.map((override) => ({
+      sourceId: override.sourceId,
+      chain: override.chain.map(toPropertyRef),
+    })),
+  };
+}
+
+/**
+ * The wizard's mappings as the domain takes them (P0-8, hard gate 5).
+ *
+ * Every field is an ordered fallback chain with optional per-source overrides.
+ * A field whose chain is empty is dropped rather than sent as an empty chain:
+ * `PropertyMappings` means absent when a site did not map a field, and an empty
+ * chain would be a second spelling of the same fact.
+ *
+ * Walked from `MAPPED_PROPERTY_FIELDS` rather than field by field, so a mapping
+ * added to the wire cannot be forgotten here and silently dropped on the way
+ * into the engine.
  *
  * @throws DraftIncompleteError when no equipment tag property has been chosen —
  * the one mapping with no default (PRODUCT.md §6.5).
  */
 export function toPropertyMappings(wire: WirePropertyMappings): PropertyMappingsInput {
-  if (wire.equipmentTag === null) {
+  const lifted = liftWireMappings(wire);
+  if (lifted.equipmentTag.chain.length === 0) {
     throw new DraftIncompleteError(
       'Pick the property that holds the equipment tag before previewing assets.',
     );
@@ -264,45 +358,14 @@ export function toPropertyMappings(wire: WirePropertyMappings): PropertyMappings
   // Built key by key rather than spread: under `exactOptionalPropertyTypes` an
   // explicit `description: undefined` is not the same as an absent key, and
   // `PropertyMappings` means absent.
-  const mappings: {
-    equipmentTag: PropertyRef;
-    description?: PropertyRef;
-    equipmentType?: PropertyRef;
-    building?: PropertyRef;
-    nativeDiscipline?: PropertyRef;
-    wbs?: PropertyRef;
-    itemMaster?: PropertyRef;
-    equipmentClassification?: PropertyRef;
-  } = { equipmentTag: toPropertyRef(wire.equipmentTag) };
-
-  if (wire.description !== null) {
-    mappings.description = toPropertyRef(wire.description);
+  const mappings: { -readonly [Field in WireMappedPropertyField]?: MappedPropertyInput } = {};
+  for (const field of MAPPED_PROPERTY_FIELDS) {
+    const mapping = lifted[field];
+    if (mapping.chain.length > 0) {
+      mappings[field] = toMappedProperty(mapping);
+    }
   }
-  if (wire.equipmentType !== null) {
-    mappings.equipmentType = toPropertyRef(wire.equipmentType);
-  }
-  if (wire.building !== null) {
-    mappings.building = toPropertyRef(wire.building);
-  }
-  if (wire.nativeDiscipline !== null) {
-    mappings.nativeDiscipline = toPropertyRef(wire.nativeDiscipline);
-  }
-  // `?? null` rather than `!== null`: a draft written by an older build carries
-  // no key for these three at all, and an absent key means the same thing a null
-  // does — nobody has mapped it.
-  const wbs = wire.wbs ?? null;
-  if (wbs !== null) {
-    mappings.wbs = toPropertyRef(wbs);
-  }
-  const itemMaster = wire.itemMaster ?? null;
-  if (itemMaster !== null) {
-    mappings.itemMaster = toPropertyRef(itemMaster);
-  }
-  const equipmentClassification = wire.equipmentClassification ?? null;
-  if (equipmentClassification !== null) {
-    mappings.equipmentClassification = toPropertyRef(equipmentClassification);
-  }
-  return mappings;
+  return { ...mappings, equipmentTag: toMappedProperty(lifted.equipmentTag) };
 }
 
 /** Empty lists become absent keys: "no restriction", not "restrict to nothing". */
@@ -419,15 +482,26 @@ function toAssignments(wire: WireSourceAssignmentRule['assign']): SourceAssignme
   return assignments;
 }
 
-/** The profile-level assignment rules (P0-8). */
+/**
+ * The profile-level assignment rules (P0-8).
+ *
+ * A rule whose `match` is still blank is dropped rather than published. The
+ * editor writes every keystroke so the match preview can be live, which means a
+ * rule exists from the moment somebody presses Add and before they have said
+ * what it matches — and a rule that matches nothing is inert, while a rule the
+ * engine read as matching everything would quietly assign a building to a whole
+ * site. Absent is the truth about a rule nobody has finished writing.
+ */
 export function toSourceAssignments(
   draft: WireDraftProfile,
 ): ReadonlyArray<SourceAssignmentRuleInput> {
-  return draft.sourceAssignments.map((rule) => ({
-    scope: rule.scope,
-    match: rule.match,
-    assign: toAssignments(rule.assign),
-  }));
+  return draft.sourceAssignments
+    .filter((rule) => rule.match.trim() !== '')
+    .map((rule) => ({
+      scope: rule.scope,
+      match: rule.match,
+      assign: toAssignments(rule.assign),
+    }));
 }
 
 /**
@@ -604,19 +678,29 @@ export function toSiteProfile(draft: WireDraftProfile): SiteProfileV2 {
 const SEGMENT_ORDER: readonly SegmentName[] = ['role', 'system', 'unit', 'instance'];
 
 /**
- * One stored mapping as the wizard's single-property picker can show it.
+ * One stored mapping as the chain editor shows it.
  *
- * A profile written before P0-8 is one `PropertyRef` and passes through. A
- * profile carrying a chain narrows to its first rung, because that is the rung
- * the site preferred and the picker has room for exactly one — the remaining
- * rungs and any per-source overrides stay in the published profile, which is
- * where they were configured. The wizard is a view of a draft, not the profile.
+ * A profile written before P0-8 is one `PropertyRef`; `migrateMappedProperty`
+ * lifts it to a one-rung chain, which is what it always meant. The per-source
+ * map comes back as the ordered pair list the wire carries, sorted by source id
+ * so a stored profile and a re-read one produce the same rows.
+ *
+ * Nothing is narrowed any more: the whole chain and every override reach the
+ * editor, which is what makes screen 3 a view of the profile rather than of its
+ * first rung.
  */
-function firstRungOf(mapping: MappedPropertyInput | undefined): PropertyRef | null {
+function toWireMapping(mapping: MappedPropertyInput | undefined): WireMappedProperty {
   if (mapping === undefined) {
-    return null;
+    return { chain: [], bySource: [] };
   }
-  return migrateMappedProperty(mapping).chain[0] ?? null;
+  const migrated = migrateMappedProperty(mapping);
+  const bySource = [...(migrated.bySource ?? new Map())]
+    .map(([sourceId, chain]: readonly [string, readonly PropertyRef[]]) => ({
+      sourceId,
+      chain: chain.map((ref) => ({ ...ref })),
+    }))
+    .sort((left, right) => left.sourceId.localeCompare(right.sourceId));
+  return { chain: migrated.chain.map((ref) => ({ ...ref })), bySource };
 }
 
 /** Rehydrates a draft from a stored revision, so reopening resumes the wizard. */
@@ -630,14 +714,14 @@ export function fromSiteProfile(profile: SiteProfileV2): WireDraftProfile {
     name: profile.name,
     version: profile.version,
     propertyMappings: {
-      equipmentTag: firstRungOf(profile.propertyMappings.equipmentTag),
-      description: firstRungOf(profile.propertyMappings.description),
-      equipmentType: firstRungOf(profile.propertyMappings.equipmentType),
-      building: firstRungOf(profile.propertyMappings.building),
-      nativeDiscipline: firstRungOf(profile.propertyMappings.nativeDiscipline),
-      wbs: firstRungOf(profile.propertyMappings.wbs),
-      itemMaster: firstRungOf(profile.propertyMappings.itemMaster),
-      equipmentClassification: firstRungOf(profile.propertyMappings.equipmentClassification),
+      equipmentTag: toWireMapping(profile.propertyMappings.equipmentTag),
+      description: toWireMapping(profile.propertyMappings.description),
+      equipmentType: toWireMapping(profile.propertyMappings.equipmentType),
+      building: toWireMapping(profile.propertyMappings.building),
+      nativeDiscipline: toWireMapping(profile.propertyMappings.nativeDiscipline),
+      wbs: toWireMapping(profile.propertyMappings.wbs),
+      itemMaster: toWireMapping(profile.propertyMappings.itemMaster),
+      equipmentClassification: toWireMapping(profile.propertyMappings.equipmentClassification),
     },
     sourceAssignments: profile.sourceAssignments.map((rule) => ({
       scope: rule.scope,

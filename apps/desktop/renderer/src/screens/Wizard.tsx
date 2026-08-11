@@ -15,6 +15,7 @@ import type {
 import { call, messageOf } from '../api';
 import { Workspace } from '../workspace/Workspace';
 
+import { QuickSetup } from './QuickSetup';
 import { Screen1Sources } from './Screen1Sources';
 import { Screen2Model } from './Screen2Model';
 import { Screen3Assets } from './Screen3Assets';
@@ -47,7 +48,7 @@ export const WIZARD_SCREENS: readonly WizardScreen[] = [
   { number: 3, title: 'Asset definition', subtitle: 'What counts as equipment' },
   { number: 4, title: 'Tag anatomy', subtitle: 'How your tags decompose' },
   { number: 5, title: 'System Resolver', subtitle: 'Where systems come from' },
-  { number: 6, title: 'Hierarchy Composer', subtitle: 'Levels and boundaries' },
+  { number: 6, title: 'Hierarchy Composer', subtitle: 'Levels, fields and rules' },
   { number: 7, title: 'Relationship rules', subtitle: 'What may parent what' },
   { number: 8, title: 'Preview and QA', subtitle: 'Compile and check' },
   { number: 9, title: 'Publish Site Profile', subtitle: 'Save and reuse' },
@@ -87,14 +88,31 @@ export interface WizardContext {
   refreshModel: () => Promise<void>;
 }
 
+/**
+ * Which way into a project a person chose.
+ *
+ * `choose` is the fork a brand-new project opens on; a project that already has
+ * a saved revision skips it, because the question "how do you want to set this
+ * up?" has an answer already. `quick` and `advanced` write to the SAME draft —
+ * the fork is about which surface is in front of you, not about which document
+ * you are editing.
+ */
+type SetupPath = 'choose' | 'quick' | 'advanced';
+
 export function Wizard({
   project,
+  justCreated,
   onClosed,
 }: {
   readonly project: WireProjectSummary;
+  /** True when this project was created a moment ago, so the fork is offered. */
+  readonly justCreated: boolean;
   readonly onClosed: () => void;
 }): JSX.Element {
   const [screen, setScreen] = useState<number>(1);
+  const [setupPath, setSetupPath] = useState<SetupPath>(
+    justCreated && project.savedRevision === null ? 'choose' : 'advanced',
+  );
   const [inWorkspace, setInWorkspace] = useState<boolean>(false);
   const [draft, setDraft] = useState<WireDraftProfile | null>(null);
   const [config, setConfig] = useState<WireProjectConfig | null>(null);
@@ -291,16 +309,38 @@ export function Wizard({
           <span className="wizard__project-path">{project.path}</span>
         </div>
 
+        <button
+          type="button"
+          className={`step step--quick${setupPath === 'quick' && !inWorkspace ? ' step--current' : ''}`}
+          data-testid="step-quick-setup"
+          aria-current={setupPath === 'quick' && !inWorkspace ? 'step' : undefined}
+          onClick={(): void => {
+            setInWorkspace(false);
+            setSetupPath('quick');
+          }}
+        >
+          <span className="step__number">★</span>
+          <span className="step__text">
+            <span className="step__title">Quick Setup</span>
+            <span className="step__subtitle">Suggestions, one decision at a time</span>
+          </span>
+        </button>
+
         <ol className="step-list">
           {WIZARD_SCREENS.map((entry: WizardScreen): JSX.Element => (
             <li key={entry.number}>
               <button
                 type="button"
-                className={`step${screen === entry.number && !inWorkspace ? ' step--current' : ''}`}
+                className={`step${screen === entry.number && setupPath !== 'quick' && !inWorkspace ? ' step--current' : ''}`}
                 data-testid={`step-${String(entry.number)}`}
-                aria-current={screen === entry.number && !inWorkspace ? 'step' : undefined}
+                aria-current={
+                  screen === entry.number && setupPath !== 'quick' && !inWorkspace
+                    ? 'step'
+                    : undefined
+                }
                 onClick={(): void => {
                   setInWorkspace(false);
+                  setSetupPath('advanced');
                   setScreen(entry.number);
                 }}
               >
@@ -400,6 +440,28 @@ export function Wizard({
             status={compileStatus}
             onStatusChange={setCompileStatus}
           />
+        ) : setupPath === 'choose' ? (
+          <SetupFork
+            onQuick={(): void => {
+              setSetupPath('quick');
+            }}
+            onAdvanced={(): void => {
+              setSetupPath('advanced');
+              setScreen(1);
+            }}
+          />
+        ) : setupPath === 'quick' ? (
+          <QuickSetup
+            context={context}
+            onFinished={(target): void => {
+              setSetupPath('advanced');
+              setScreen(target);
+            }}
+            onSwitchToAdvanced={(): void => {
+              setSetupPath('advanced');
+              setScreen(1);
+            }}
+          />
         ) : (
           <ScreenBody
             screen={screen}
@@ -422,6 +484,84 @@ export function Wizard({
           />
         )}
       </main>
+    </div>
+  );
+}
+
+/**
+ * The fork a brand-new project opens on.
+ *
+ * Two doors onto one draft, and the card says so, because the fear a
+ * coordinator has about a "quick" path is that it is a lesser one that has to
+ * be redone. It is not: Quick Setup writes the same sections screens 1-9 edit,
+ * and the numbered screens stay one click away throughout.
+ */
+function SetupFork({
+  onQuick,
+  onAdvanced,
+}: {
+  readonly onQuick: () => void;
+  readonly onAdvanced: () => void;
+}): JSX.Element {
+  return (
+    <div className="screen" data-testid="setup-fork">
+      <header className="screen__header">
+        <h1 className="screen__title">How do you want to set this up?</h1>
+        <p className="screen__lede">
+          Both paths build the same Site Profile. You can move between them at any point, and
+          nothing you have decided is lost when you do.
+        </p>
+      </header>
+
+      <div className="fork-grid">
+        <section className="fork-card">
+          <h2 className="fork-card__title">Quick Setup</h2>
+          <p className="fork-card__body">
+            One decision per screen, each with a proposal Matchline read out of your model, the
+            evidence behind it, and what accepting it does to the numbers. Around an hour on a
+            typical site. Nothing is written until you press Accept.
+          </p>
+          <ul className="fork-card__list">
+            <li>Suggested tag, description, building, discipline and type properties</li>
+            <li>A tag shape inferred by trying candidates against your real tags</li>
+            <li>Six standard System Resolver arrangements, each previewed first</li>
+            <li>Class include/exclude judged by which classes carry tags</li>
+            <li>The standard level stack, with the boundary consequence stated</li>
+          </ul>
+          <button
+            className="button button--primary"
+            type="button"
+            data-testid="choose-quick"
+            onClick={onQuick}
+          >
+            Start Quick Setup
+          </button>
+        </section>
+
+        <section className="fork-card">
+          <h2 className="fork-card__title">Full setup</h2>
+          <p className="fork-card__body">
+            The nine numbered screens. Every property in the catalogue with its coverage, fallback
+            chains and per-source overrides, the tag anatomy taught by hand, your own derived
+            fields and source-assignment rules. Use this when the site does not look like anything
+            standard — or come here after Quick Setup to refine what it proposed.
+          </p>
+          <ul className="fork-card__list">
+            <li>Ordered fallback chains, with per-file overrides</li>
+            <li>Fields this site defines for itself</li>
+            <li>What a whole model file asserts</li>
+            <li>Role and relationship rules</li>
+          </ul>
+          <button
+            className="button"
+            type="button"
+            data-testid="choose-advanced"
+            onClick={onAdvanced}
+          >
+            Go to screen 1
+          </button>
+        </section>
+      </div>
     </div>
   );
 }

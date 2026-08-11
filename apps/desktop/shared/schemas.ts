@@ -60,29 +60,129 @@ export type WirePropertyRef = z.infer<typeof propertyRefSchema>;
 /* ------------------------------------------------------------ profile pieces */
 
 /**
- * Mirrors `PropertyMappings`, with "not chosen yet" spelled `null`.
+ * Mirrors `PropertyChain`: an ordered fallback list of addresses (P0-8).
+ *
+ * The rungs are tried in order and the first one stating a non-blank value
+ * wins. An empty chain is legal and means "this site did not map the field" —
+ * the same thing a `null` mapping meant before chains reached the wire.
+ */
+export const propertyChainSchema = z.array(propertyRefSchema);
+export type WirePropertyChain = z.infer<typeof propertyChainSchema>;
+
+/** Mirrors `SourcePropertyChain`: one source's replacement for a field's chain. */
+export const sourcePropertyChainSchema = z.object({
+  /** The project's `sourceId`. Never a file name (P0-1). */
+  sourceId: z.string().min(1),
+  chain: propertyChainSchema,
+});
+export type WireSourcePropertyChain = z.infer<typeof sourcePropertyChainSchema>;
+
+/**
+ * Lifts a mapping written in any older spelling onto the chain shape.
+ *
+ * Three spellings reach this, and all three have to keep working forever:
+ *
+ * - **absent / `null`** — every build before chains reached the wire wrote
+ *   `null` for "nobody mapped this", and a draft rehydrated from one still
+ *   does. It becomes the empty chain, which means exactly the same thing.
+ * - **one `PropertyRef`** — the single-property mapping screens 3 wrote until
+ *   this round, and the spelling a hand-edited profile package may carry. It
+ *   becomes a one-rung chain, which is what `migrateMappedProperty` in
+ *   `@matchline/domain` already does for the engine.
+ * - **the chain shape itself** — returned untouched.
+ *
+ * Exported rather than inlined into the preprocess because `applyPatch` runs
+ * the same lift on writes that never crossed IPC (a test, a service caller),
+ * and two spellings of one rule is how they drift apart.
+ */
+export function liftMappedProperty(value: unknown): unknown {
+  if (value === undefined || value === null) {
+    return { chain: [], bySource: [] };
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  if (record['chain'] !== undefined) {
+    return record['bySource'] === undefined ? { ...record, bySource: [] } : record;
+  }
+  if (typeof record['name'] === 'string') {
+    return { chain: [{ category: record['category'] ?? '', name: record['name'] }], bySource: [] };
+  }
+  return value;
+}
+
+/**
+ * Mirrors `MappedProperty` (P0-8, hard gate 5).
+ *
+ * `chain` is what every source reads the field through unless it names its own;
+ * `bySource` REPLACES the chain for the sources it names rather than extending
+ * it, exactly as the engine's `chainFor` decides it. A list of pairs rather
+ * than a record, for the reason every ordered section on this wire is one: the
+ * order an author wrote survives the round-trip and two sources cannot collide
+ * onto one JSON key.
+ */
+export const mappedPropertySchema = z.preprocess(
+  liftMappedProperty,
+  z.object({
+    chain: propertyChainSchema,
+    bySource: z.array(sourcePropertyChainSchema),
+  }),
+);
+export type WireMappedProperty = z.infer<typeof mappedPropertySchema>;
+
+/** The empty mapping: no rungs, no per-source overrides. Nobody mapped it. */
+export const UNMAPPED_PROPERTY: WireMappedProperty = { chain: [], bySource: [] };
+
+/**
+ * Mirrors `PropertyMappings`, with "not chosen yet" spelled as an empty chain.
+ *
+ * Every field is an ordered fallback chain with optional per-source overrides
+ * (P0-8). {@link liftMappedProperty} is what keeps a draft, a stored revision
+ * or a profile package written before chains reached the wire readable — an
+ * absent key and a bare `PropertyRef` both mean something, and neither is a
+ * malformed file.
  *
  * The last three are register fields the model may already state. Mapped and
- * non-blank, they outrank the learned tables for that field; left `null`, the
+ * non-blank, they outrank the learned tables for that field; left empty, the
  * learned tables answer, exactly as they did before these existed.
- *
- * They carry `.default(null)` because a draft or a profile package written by a
- * build that predates them has no key at all, and an absent key means precisely
- * what a `null` does — nobody mapped it. Without the default an older package
- * would be refused as malformed, which would be a lie about a file that is
- * perfectly good.
  */
 export const propertyMappingsSchema = z.object({
-  equipmentTag: propertyRefSchema.nullable(),
-  description: propertyRefSchema.nullable(),
-  equipmentType: propertyRefSchema.nullable(),
-  building: propertyRefSchema.nullable(),
-  nativeDiscipline: propertyRefSchema.nullable(),
-  wbs: propertyRefSchema.nullable().default(null),
-  itemMaster: propertyRefSchema.nullable().default(null),
-  equipmentClassification: propertyRefSchema.nullable().default(null),
+  equipmentTag: mappedPropertySchema.default(UNMAPPED_PROPERTY),
+  description: mappedPropertySchema.default(UNMAPPED_PROPERTY),
+  equipmentType: mappedPropertySchema.default(UNMAPPED_PROPERTY),
+  building: mappedPropertySchema.default(UNMAPPED_PROPERTY),
+  nativeDiscipline: mappedPropertySchema.default(UNMAPPED_PROPERTY),
+  wbs: mappedPropertySchema.default(UNMAPPED_PROPERTY),
+  itemMaster: mappedPropertySchema.default(UNMAPPED_PROPERTY),
+  equipmentClassification: mappedPropertySchema.default(UNMAPPED_PROPERTY),
 });
 export type WirePropertyMappings = z.infer<typeof propertyMappingsSchema>;
+
+/** Every mapped role, in the order screen 3 walks them. */
+export const MAPPED_PROPERTY_FIELDS = [
+  'equipmentTag',
+  'description',
+  'equipmentType',
+  'building',
+  'nativeDiscipline',
+  'wbs',
+  'itemMaster',
+  'equipmentClassification',
+] as const;
+
+/** One of {@link MAPPED_PROPERTY_FIELDS}. */
+export type WireMappedPropertyField = (typeof MAPPED_PROPERTY_FIELDS)[number];
+
+/**
+ * Compile-time completeness guard. A field added to the schema above without
+ * being listed resolves this to `false` and stops this file compiling.
+ */
+type EveryMappedFieldListed =
+  Exclude<keyof WirePropertyMappings, WireMappedPropertyField> extends never ? true : false;
+
+const MAPPED_FIELDS_ARE_COMPLETE: EveryMappedFieldListed = true;
+void MAPPED_FIELDS_ARE_COMPLETE;
 
 /** Mirrors `AssetFilterConfig`, with absent lists spelled `[]`. */
 export const assetFiltersSchema = z.object({
@@ -853,17 +953,6 @@ export type WireExtoTemplate = z.infer<typeof extoTemplateSchema>;
 /* ============================================ derived attributes (P0-7) */
 
 /**
- * Mirrors `PropertyChain`: an ordered fallback list of addresses (P0-8).
- *
- * A list, never a single ref, wherever a chain is what the engine takes. Screen
- * 3's own mappings stay single-ref on the wire — a `PropertyRef` is a legal
- * mapping input and the engine lifts it to one rung — but a derived attribute's
- * `model-property` rung IS a chain, so the wire spells it as one.
- */
-export const propertyChainSchema = z.array(propertyRefSchema);
-export type WirePropertyChain = z.infer<typeof propertyChainSchema>;
-
-/**
  * Mirrors `AttributeResolver` (P0-7).
  *
  * `manual` carries a list of `{assetId, value}` pairs rather than the engine's
@@ -922,10 +1011,18 @@ export type WireSourceAssignmentScope = z.infer<typeof sourceAssignmentScopeSche
  * `attributeResolverSchema`'s `manual` is. `''` is a legal assigned value on
  * the wire and the engine drops it as blank, so a half-typed row cannot assign
  * an empty building to a whole file.
+ *
+ * `match` is deliberately NOT `.min(1)`, unlike the domain's. This wire carries
+ * drafts, and a rule a person has just added has an empty match by definition —
+ * they have not typed it yet. Refusing that would mean the editor could not add
+ * a row at all without inventing a placeholder pattern, which is how a rule that
+ * matches `*` gets published by accident. `toSourceAssignments` in
+ * `draft-profile.ts` drops a blank-match rule on the way to the engine, so an
+ * unfinished rule is visible, previewable and inert.
  */
 export const sourceAssignmentRuleSchema = z.object({
   scope: sourceAssignmentScopeSchema,
-  match: z.string().min(1),
+  match: z.string(),
   assign: z.object({
     building: z.string(),
     nativeDiscipline: z.string(),
@@ -933,6 +1030,238 @@ export const sourceAssignmentRuleSchema = z.object({
   }),
 });
 export type WireSourceAssignmentRule = z.infer<typeof sourceAssignmentRuleSchema>;
+
+/* ------------------------------------------------- the two editors' previews */
+
+/** How much of the universe one rung of a derived attribute actually answered. */
+export const derivedRungUsageSchema = z.object({
+  rungIndex: z.number().int().nonnegative(),
+  kind: z.string().min(1),
+  /** The rung named the way the editor names it, e.g. `Tag segment "unit"`. */
+  label: z.string().min(1),
+  /** Assets whose value came from this rung — the first one that answered. */
+  wonCount: z.number().int().nonnegative(),
+  /** Assets where this rung had something to say, winning or not. */
+  claimCount: z.number().int().nonnegative(),
+});
+export type WireDerivedRungUsage = z.infer<typeof derivedRungUsageSchema>;
+
+/** One asset the derived attribute resolved, as the preview table prints it. */
+export const derivedSampleSchema = z.object({
+  assetId: z.string().min(1),
+  canonicalTag: z.string(),
+  value: z.string(),
+  /** Which rung supplied it, in words. */
+  from: z.string().min(1),
+});
+export type WireDerivedSample = z.infer<typeof derivedSampleSchema>;
+
+/**
+ * What one `DerivedAttributeDefinition` does to the assets this project has
+ * (P0-7).
+ *
+ * Coverage first, because "missing stays missing" is the rule that makes a
+ * derived attribute safe to put on a boundary level: a definition that answers
+ * for a third of the site is a decision, not a bug, and the number is what says
+ * so before anybody publishes it.
+ */
+export const derivedPreviewSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('blocked'), reason: z.string().min(1) }),
+  z.object({
+    state: z.literal('ready'),
+    assetCount: z.number().int().nonnegative(),
+    resolvedCount: z.number().int().nonnegative(),
+    coverage: z.number(),
+    distinctValueCount: z.number().int().nonnegative(),
+    rungUsage: z.array(derivedRungUsageSchema),
+    samples: z.array(derivedSampleSchema),
+    /** Tags the whole chain said nothing about. Up to eight. */
+    unresolvedExamples: z.array(z.string()),
+  }),
+]);
+export type WireDerivedPreview = z.infer<typeof derivedPreviewSchema>;
+
+/** One document a source-assignment rule matched, and what it holds. */
+export const assignmentMatchSchema = z.object({
+  sourceId: z.string().min(1),
+  /** The short per-source label, so a row reads in project vocabulary. */
+  label: z.string().min(1),
+  /** The source model file the rule matched, or `''` for a whole-source match. */
+  sourceModelFile: z.string(),
+  objectCount: z.number().int().nonnegative(),
+  /** What `$1` expanded to under a filename pattern; `''` for the other scopes. */
+  capture: z.string(),
+});
+export type WireAssignmentMatch = z.infer<typeof assignmentMatchSchema>;
+
+/** One field the rule assigns, with its capture already expanded. */
+export const assignmentValueSchema = z.object({
+  field: z.string().min(1),
+  value: z.string(),
+});
+export type WireAssignmentValue = z.infer<typeof assignmentValueSchema>;
+
+/**
+ * What one assignment rule would speak for (P0-8).
+ *
+ * A rule that matches nothing is the ordinary typo, and it is `ready` with a
+ * zero count rather than `blocked`: the editor has to be able to say "this
+ * pattern hits no file in this project" while the person is still typing it.
+ * `problem` is only for a rule the engine would refuse outright — a
+ * filename pattern without exactly one `*`.
+ */
+export const assignmentPreviewSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('blocked'), reason: z.string().min(1) }),
+  z.object({
+    state: z.literal('ready'),
+    matches: z.array(assignmentMatchSchema),
+    matchedObjectCount: z.number().int().nonnegative(),
+    universeObjectCount: z.number().int().nonnegative(),
+    /** The fields this rule states, `$1` expanded against the first match. */
+    assigned: z.array(assignmentValueSchema),
+    /** `''` when the rule is one the engine will run. */
+    problem: z.string(),
+    /** Every document the rule could have matched, for the "nothing hit" case. */
+    candidates: z.array(z.string()),
+  }),
+]);
+export type WireAssignmentPreview = z.infer<typeof assignmentPreviewSchema>;
+
+/* ==================================================== quick setup (one-hour) */
+
+/**
+ * Where an accepted suggestion lands in the draft.
+ *
+ * A mapped field, one of the two single-property sections, or a derived
+ * attribute the site does not have a standard slot for. The last one is what
+ * makes Area, Level, Manufacturer, Model Number and Functional Location
+ * suggestible at all: the profile has no `area` mapping and inventing one would
+ * be a domain change, while a `DerivedAttributeDefinition` with a single
+ * `model-property` rung is exactly what those fields are (P0-7).
+ */
+export const suggestionTargetSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('mapped-field'), field: z.enum(MAPPED_PROPERTY_FIELDS) }),
+  z.object({ kind: z.literal('parent-tag') }),
+  z.object({ kind: z.literal('stable-id') }),
+  z.object({
+    kind: z.literal('derived-attribute'),
+    attributeId: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  }),
+]);
+export type WireSuggestionTarget = z.infer<typeof suggestionTargetSchema>;
+
+/**
+ * One candidate property for one field, with the evidence behind the ranking.
+ *
+ * `reasons` is the evidence in the site's own numbers — "named Tag", "45% of
+ * objects carry it", "every value distinct", "values look like tags". Shown
+ * rather than summarised into a score, because a coordinator accepting a
+ * suggestion is entitled to know what it was made of (PRODUCT.md §6.5: the user
+ * may map any property regardless of what Matchline suggested).
+ */
+export const propertySuggestionSchema = z.object({
+  property: propertyRefSchema,
+  /** 0..1. Comparable within one field only; never across fields. */
+  score: z.number(),
+  coverage: z.number(),
+  distinctValueCount: z.number().int().nonnegative(),
+  objectCount: z.number().int().nonnegative(),
+  examples: z.array(z.string()),
+  reasons: z.array(z.string().min(1)),
+});
+export type WirePropertySuggestion = z.infer<typeof propertySuggestionSchema>;
+
+/**
+ * How sure Matchline is, and therefore whether the row starts ticked.
+ *
+ * `strong` is a clear winner: the top candidate scores well on its own AND is
+ * clearly ahead of the runner-up. `possible` is everything else that scored at
+ * all — offered, never pre-ticked, because a coin-flip that pre-ticks itself is
+ * a decision Matchline made on a site's behalf.
+ */
+export const suggestionConfidenceSchema = z.enum(['strong', 'possible']);
+export type WireSuggestionConfidence = z.infer<typeof suggestionConfidenceSchema>;
+
+/** One decision Quick Setup offers: a field, and the properties that could fill it. */
+export const fieldSuggestionSchema = z.object({
+  target: suggestionTargetSchema,
+  label: z.string().min(1),
+  /** One sentence about what the field does. Same contract as `Field`'s `what`. */
+  what: z.string().min(1),
+  /** One concrete value or outcome. Same contract as `Field`'s `example`. */
+  example: z.string().min(1),
+  confidence: suggestionConfidenceSchema,
+  candidates: z.array(propertySuggestionSchema),
+});
+export type WireFieldSuggestion = z.infer<typeof fieldSuggestionSchema>;
+
+/** One inferred anatomy, with what it actually does to this project's tags. */
+export const anatomySuggestionSchema = z.object({
+  /** Why this shape was proposed, in one sentence. */
+  rationale: z.string().min(1),
+  anatomy: tagAnatomySchema,
+  /** Tags the anatomy split completely, over tags tried. */
+  coverage: z.number(),
+  matchedCount: z.number().int().nonnegative(),
+  totalCount: z.number().int().nonnegative(),
+  segmentStats: z.array(
+    z.object({ segment: segmentNameSchema, distinctValueCount: z.number().int().nonnegative() }),
+  ),
+  examples: z.array(anatomyExampleSchema),
+});
+export type WireAnatomySuggestion = z.infer<typeof anatomySuggestionSchema>;
+
+/** One System Resolver starter template (RELEASE-1.0-PLAN "One-hour UX"). */
+export const resolverTemplateSchema = z.object({
+  templateId: z.string().min(1),
+  label: z.string().min(1),
+  what: z.string().min(1),
+  example: z.string().min(1),
+  /** True when this project has the evidence the template reads. */
+  available: z.boolean(),
+  /** Why it is unavailable, or `''`. */
+  unavailableReason: z.string(),
+  resolver: systemResolverSchema,
+});
+export type WireResolverTemplate = z.infer<typeof resolverTemplateSchema>;
+
+/** One Navisworks class, and how much of it carries an equipment tag. */
+export const classSuggestionSchema = z.object({
+  className: z.string().min(1),
+  objectCount: z.number().int().nonnegative(),
+  taggedCount: z.number().int().nonnegative(),
+  /** `taggedCount / objectCount`, 0..1. */
+  tagCoverage: z.number(),
+  /** `include`, `exclude` or `leave` — what Quick Setup proposes for this class. */
+  proposal: z.enum(['include', 'exclude', 'leave']),
+  why: z.string().min(1),
+});
+export type WireClassSuggestion = z.infer<typeof classSuggestionSchema>;
+
+/**
+ * Everything Quick Setup proposes, computed once against the real universe.
+ *
+ * Nothing here is applied. Every screen of the Quick Setup path renders one of
+ * these sections, shows its preview and its impact counts, and writes to the
+ * draft only when a person presses Accept — which is the whole of
+ * RELEASE-1.0-PLAN's "never silently published; one-click accept with preview +
+ * impact counts".
+ */
+export const quickSetupSuggestionsSchema = z.object({
+  /** `false` when no model source is readable, which blocks every section. */
+  ready: z.boolean(),
+  /** Why nothing could be suggested, or `''`. */
+  blockedReason: z.string(),
+  objectCount: z.number().int().nonnegative(),
+  sourceCount: z.number().int().nonnegative(),
+  fields: z.array(fieldSuggestionSchema),
+  anatomy: anatomySuggestionSchema.nullable(),
+  resolverTemplates: z.array(resolverTemplateSchema),
+  classes: z.array(classSuggestionSchema),
+  /** The P0-5 preset, sent from main so the renderer never restates it. */
+  hierarchy: hierarchyConfigSchema,
+});
+export type WireQuickSetupSuggestions = z.infer<typeof quickSetupSuggestionsSchema>;
 
 /* ================================================= identity + carried notes */
 

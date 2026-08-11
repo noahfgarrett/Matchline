@@ -43,16 +43,20 @@ import { applyAnatomy } from '@matchline/tag-anatomy';
 import type {
   WireAddSourceResult,
   WireAnatomyPreview,
+  WireAssignmentPreview,
   WireExtractionJob,
   WireAssetPreview,
   WireAttributeChoice,
   WireClassCount,
+  WireClassSuggestion,
   WireCompileHistoryEntry,
   WireCompileIssueKind,
   WireCompileIssueRow,
   WireCompileStatus,
   WireConfigPatch,
   WireDecisionValue,
+  WireDerivedAttribute,
+  WireDerivedPreview,
   WireDraftPatch,
   WireDraftProfile,
   WireExportResult,
@@ -69,15 +73,18 @@ import type {
   WireProjectOpenResult,
   WirePropertyCatalogRow,
   WireProjectSummary,
+  WireQuickSetupSuggestions,
   WireRecentProject,
   WireReparentPreview,
   WireResolverPreview,
   WireReviewPage,
   WireReviewRow,
   WireSheetSummary,
+  WireSourceAssignmentRule,
   WireSourceModelSummary,
   WireSourceStatus,
   WireSourceSummary,
+  WireSystemResolver,
   WireTemplateAnalysis,
   WireTemplateBinding,
   WireTreeNode,
@@ -105,13 +112,21 @@ import {
   resolveExtractorLauncher,
   type ExtractorLauncher,
 } from './extractor-launcher.js';
+import { buildAssignmentPreview, type AssignmentDocument } from './assignment-preview.js';
+import {
+  buildDerivedPreview,
+  derivedSubjectsFor,
+  indexMelByTag,
+} from './derived-preview.js';
 import {
   applyPatch,
+  DEFAULT_HIERARCHY_LEVELS,
   emptyDraft,
   fromSiteProfile,
   hasAnatomy,
   hasMappings,
   hasResolver,
+  liftWireMappings,
   toAssetFilters,
   toPropertyMappings,
   toSiteProfile,
@@ -137,7 +152,13 @@ import {
   trainNestingFrom,
   trainWbsFrom,
 } from './learning.js';
-import { buildAnatomyPreview, buildAssetPreview, buildResolverPreview } from './previews.js';
+import {
+  buildAnatomyPreview,
+  buildAssetPreview,
+  buildResolverPreview,
+  catalogTags,
+  resolveSystemMap,
+} from './previews.js';
 import {
   applyConfigPatch,
   attributeChoices,
@@ -155,6 +176,13 @@ import {
   writePackage,
 } from './profile-package.js';
 import { catalogPage, type PropertyPageRequest } from './property-page.js';
+import {
+  inferAnatomy,
+  resolverTemplates,
+  suggestClasses,
+  suggestFields,
+  type ClassTagCount,
+} from './suggestions.js';
 import {
   identifySource,
   melSheetDescriptor,
@@ -319,6 +347,25 @@ export interface ProjectService {
   assetPreview(): WireAssetPreview;
   anatomyPreview(): WireAnatomyPreview;
   resolverPreview(): WireResolverPreview;
+
+  /**
+   * What one derived attribute would resolve to (P0-7).
+   *
+   * The definition is passed in rather than read off the draft: screen 6's
+   * manager previews the definition being edited, which is not in the draft
+   * until somebody saves it.
+   */
+  derivedPreview(definition: WireDerivedAttribute): WireDerivedPreview;
+
+  /** Which documents one source-assignment rule speaks for (P0-8). */
+  assignmentPreview(rule: WireSourceAssignmentRule): WireAssignmentPreview;
+
+  /* ---------------------------------------------------------- quick setup */
+
+  /** Every data-driven proposal the Quick Setup path offers. Applies nothing. */
+  quickSetupSuggestions(): WireQuickSetupSuggestions;
+  /** One starter template run over the real assets, before it is accepted. */
+  resolverTemplatePreview(resolver: WireSystemResolver): WireResolverPreview;
 
   /* ------------------------------------------------------- screens 6 and 7 */
 
@@ -1338,6 +1385,94 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     );
     active.propertyCatalog = { universeKey, entries };
     return entries;
+  }
+
+  /**
+   * Every document a source-assignment rule could speak for (P0-8).
+   *
+   * One row per SOURCE MODEL rather than per source, because a federated cache
+   * holds several models and a `source-model` or `filename-pattern` rule speaks
+   * for one of them. A source model the cache attributes no file name to still
+   * gets a row — a `logical-source` rule can name it — with an empty file name,
+   * which is what says the two file-name scopes cannot reach it.
+   */
+  function assignmentDocuments(active: Session): readonly AssignmentDocument[] {
+    const labels = modelLabels(active);
+    const documents: AssignmentDocument[] = [];
+    for (const model of orderedModels(active)) {
+      for (const sourceModel of model.sourceModels) {
+        documents.push({
+          sourceId: model.sourceId,
+          label: labels.get(model.sourceId) ?? model.sourceId,
+          sourceModelFile: sourceModel.sourceModelId === null ? '' : sourceModel.fileName,
+          objectCount: sourceModel.objectCount,
+        });
+      }
+    }
+    return documents;
+  }
+
+  /** Every non-blank canonical tag the current draft produces, for inference. */
+  function catalogTagsOf(active: Session): readonly string[] {
+    return catalogTags(requireDerived(active).catalog);
+  }
+
+  /**
+   * Objects per Navisworks class, and how many of them carry an equipment tag.
+   *
+   * Read straight off the caches rather than off the asset catalog, and that is
+   * deliberate: the catalog has already applied this project's class filters, so
+   * counting through it would tell a person that the classes they excluded carry
+   * no tags — which is true, circular, and useless. A suggestion has to be a
+   * fact about the model, not about the settings it is proposing to change.
+   *
+   * One pass over each cache's properties and one over its objects. Run when the
+   * Quick Setup class screen is opened, not on every keystroke.
+   */
+  function classSuggestions(active: Session): readonly WireClassSuggestion[] {
+    const mappings = liftWireMappings(active.draft.propertyMappings);
+    const objectCounts = new Map<string, number>();
+    const taggedCounts = new Map<string, number>();
+
+    for (const model of orderedModels(active)) {
+      const override = mappings.equipmentTag.bySource.find(
+        (entry) => entry.sourceId === model.sourceId && entry.chain.length > 0,
+      );
+      const chain = override?.chain ?? mappings.equipmentTag.chain;
+      const addresses = new Set(chain.map((ref) => `${ref.category} ${ref.name}`));
+
+      const tagged = new Set<number>();
+      if (addresses.size > 0) {
+        for (const row of model.cache.allProperties()) {
+          if (row.valueText === null || row.valueText.trim() === '') {
+            continue;
+          }
+          if (addresses.has(`${row.category} ${row.name}`)) {
+            tagged.add(row.objectId);
+          }
+        }
+      }
+
+      for (const object of model.cache.allObjects()) {
+        const className = object.className;
+        if (className === null || className === '') {
+          continue;
+        }
+        objectCounts.set(className, (objectCounts.get(className) ?? 0) + 1);
+        if (tagged.has(object.id)) {
+          taggedCounts.set(className, (taggedCounts.get(className) ?? 0) + 1);
+        }
+      }
+    }
+
+    const counts: ClassTagCount[] = [...objectCounts.entries()].map(
+      ([className, objectCount]) => ({
+        className,
+        objectCount,
+        taggedCount: taggedCounts.get(className) ?? 0,
+      }),
+    );
+    return suggestClasses(counts);
   }
 
   /** Re-reads every MEL source. Screen 5's `mel-lookup` rungs join against these. */
@@ -2447,7 +2582,129 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       }
       const derived = requireDerived(active);
       return buildResolverPreview(
-        active.draft,
+        active.draft.systemResolver,
+        active.draft.tagAnatomy,
+        derived.subjects,
+        derived.catalog,
+        active.melRows,
+      );
+    },
+
+    derivedPreview(definition: WireDerivedAttribute): WireDerivedPreview {
+      const active = requireSession();
+      if (active.models.size === 0 || !hasMappings(active.draft)) {
+        return {
+          state: 'blocked',
+          reason:
+            'Finish screen 3 first — a derived attribute is resolved for the assets it defines.',
+        };
+      }
+      const derived = requireDerived(active);
+      // The System Resolver's answers, because a `system-field` rung reads them
+      // (P0-7). Computed here rather than cached: the definition being edited
+      // changes on every keystroke and the resolution does not, but a project
+      // whose resolver is unconfigured resolves nothing at all and the map is
+      // empty either way.
+      const systems = resolveSystemMap(
+        active.draft.systemResolver,
+        active.draft.tagAnatomy,
+        derived.subjects,
+        active.melRows,
+      );
+      const contexts = derivedSubjectsFor(
+        derived.catalog,
+        derived.subjects,
+        toTagAnatomy(active.draft.tagAnatomy),
+        systems,
+      );
+      return buildDerivedPreview(definition, contexts, indexMelByTag(active.melRows));
+    },
+
+    assignmentPreview(rule: WireSourceAssignmentRule): WireAssignmentPreview {
+      const active = requireSession();
+      return buildAssignmentPreview(
+        rule,
+        assignmentDocuments(active),
+        [...active.models.values()].reduce((total, model) => total + model.objectCount, 0),
+      );
+    },
+
+    /* ---------------------------------------------------------- quick setup */
+
+    quickSetupSuggestions(): WireQuickSetupSuggestions {
+      const active = requireSession();
+      const hierarchy = { levels: [...DEFAULT_HIERARCHY_LEVELS] };
+
+      if (active.models.size === 0) {
+        return {
+          ready: false,
+          blockedReason:
+            'Add a model on screen 1 first. Every suggestion below is read out of the model ' +
+            'you loaded, so there is nothing to propose until there is one.',
+          objectCount: 0,
+          sourceCount: 0,
+          fields: [],
+          anatomy: null,
+          resolverTemplates: [],
+          classes: [],
+          hierarchy,
+        };
+      }
+
+      const catalog = universeCatalog(active);
+      const fields = suggestFields(catalog);
+
+      // The anatomy and the class proposals both need real tags, which need a
+      // tag mapping. Before one is accepted they are honestly absent rather
+      // than guessed from a property nobody chose.
+      const tags = hasMappings(active.draft) ? catalogTagsOf(active) : [];
+      const anatomy = inferAnatomy(tags);
+
+      const systemProperty =
+        fields
+          .find(
+            (field) =>
+              field.target.kind === 'derived-attribute' &&
+              field.target.attributeId === 'system-upn',
+          )
+          ?.candidates[0]?.property ?? null;
+
+      return {
+        ready: true,
+        blockedReason: '',
+        objectCount: [...active.models.values()].reduce(
+          (total, model) => total + model.objectCount,
+          0,
+        ),
+        sourceCount: active.models.size,
+        fields: [...fields],
+        anatomy,
+        resolverTemplates: [
+          ...resolverTemplates({
+            hasSystemSegment:
+              anatomy !== null ||
+              active.draft.tagAnatomy.segments.some((row) => row.segment === 'system'),
+            hasMel: active.melRows.length > 0,
+            systemProperty,
+          }),
+        ],
+        classes: [...classSuggestions(active)],
+        hierarchy,
+      };
+    },
+
+    resolverTemplatePreview(resolver: WireSystemResolver): WireResolverPreview {
+      const active = requireSession();
+      if (active.models.size === 0 || !hasMappings(active.draft)) {
+        return {
+          state: 'blocked',
+          reason: 'Choose the equipment tag property first — systems resolve for assets.',
+        };
+      }
+      const derived = requireDerived(active);
+      return buildResolverPreview(
+        resolver,
+        active.draft.tagAnatomy,
         derived.subjects,
         derived.catalog,
         active.melRows,

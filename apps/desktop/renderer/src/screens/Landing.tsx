@@ -64,7 +64,11 @@ export function Landing({
    * gone the instant the project opens — a migration message rendered on it
    * would be mounted and unmounted in the same tick.
    */
-  readonly onOpened: (project: WireProjectSummary, notice: string | null) => void;
+  readonly onOpened: (
+    project: WireProjectSummary,
+    notice: string | null,
+    justCreated: boolean,
+  ) => void;
 }): JSX.Element {
   const [name, setName] = useState<string>('');
   const [recents, setRecents] = useState<readonly WireRecentProject[]>([]);
@@ -112,7 +116,7 @@ export function Landing({
       const created = await call(
         window.matchline.project.create({ path: chosen.path, name: trimmed }),
       );
-      onOpened(created.project, null);
+      onOpened(created.project, null, true);
     } catch (caught: unknown) {
       setError(messageOf(caught));
     } finally {
@@ -166,7 +170,7 @@ export function Landing({
         }
 
         setPendingUpgrade(null);
-        onOpened(opened.project, describeNotice(opened.notice));
+        onOpened(opened.project, describeNotice(opened.notice), false);
       } catch (caught: unknown) {
         setError(messageOf(caught));
       } finally {

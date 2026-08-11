@@ -28,6 +28,12 @@ type Shell =
        * was already fixed, and saying so twice would read as it happening again.
        */
       readonly notice: string | null;
+      /**
+       * True when this project was created in this session, which is the one
+       * case where "how do you want to set this up?" is a live question. A
+       * reopened project has answered it already, by having decisions in it.
+       */
+      readonly justCreated: boolean;
     };
 
 export function App(): JSX.Element {
@@ -56,7 +62,7 @@ export function App(): JSX.Element {
         setShell(
           data.project === null
             ? { status: 'landing' }
-            : { status: 'open', project: data.project, notice: null },
+            : { status: 'open', project: data.project, notice: null, justCreated: false },
         );
       },
       (): void => {
@@ -72,8 +78,8 @@ export function App(): JSX.Element {
   }, []);
 
   const onOpened = useCallback(
-    (project: WireProjectSummary, notice: string | null): void => {
-      setShell({ status: 'open', project, notice });
+    (project: WireProjectSummary, notice: string | null, justCreated: boolean): void => {
+      setShell({ status: 'open', project, notice, justCreated });
     },
     [],
   );
@@ -101,7 +107,11 @@ export function App(): JSX.Element {
                 {shell.notice}
               </p>
             )}
-            <Wizard project={shell.project} onClosed={onClosed} />
+            <Wizard
+              project={shell.project}
+              justCreated={shell.justCreated}
+              onClosed={onClosed}
+            />
           </>
         ) : null}
       </main>
