@@ -1,0 +1,236 @@
+# The self-hosted half of the CI matrix: everything that needs a real Autodesk
+# Navisworks install and a real model. Nothing here runs on GitHub's runners and
+# nothing here runs automatically — it is dispatched by hand, against a model
+# that already sits on the runner's own disk.
+#
+# HONEST SCAFFOLDING NOTICE. Milestone 6 (real Windows proof) owns the scripts
+# under scripts/windows-proof/. Most of them do not exist yet. Every step that
+# calls one checks for it first and FAILS if it is absent — there is deliberately
+# no `continue-on-error` anywhere in this file, because a proof job that goes
+# green without proving anything is worse than no job at all. Until M6 lands,
+# dispatching this workflow is expected to fail at the preflight step, and the
+# failure message says exactly which scripts are missing.
+#
+# CONFIDENTIALITY. The model is named by a path that already exists on the
+# runner; it is never uploaded, never checked in, and never leaves the machine.
+# The only artifact this workflow uploads is the anonymized summary described
+# below (counts and timings). See docs/RELEASE-RUNBOOK.md, "Self-hosted
+# Navisworks runner".
+name: Navisworks proof (self-hosted)
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_path:
+        description: 'Path to an NWD/NWC/NWF that ALREADY EXISTS on the runner. Never uploaded.'
+        required: true
+        type: string
+      navisworks_install_dir:
+        description: 'Navisworks install folder the 2025 adapter compiles against.'
+        required: false
+        default: 'C:\Program Files\Autodesk\Navisworks Manage 2025'
+        type: string
+      configuration:
+        description: 'MSBuild configuration for the native build.'
+        required: false
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - Debug
+
+permissions:
+  contents: read
+
+# One proof run at a time. The runner drives a real Navisworks instance; two
+# concurrent runs would fight over it. Queued rather than cancelled, because a
+# half-cancelled Navisworks is exactly the state the cancellation test is trying
+# to characterise deliberately.
+concurrency:
+  group: navisworks-proof
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    name: Navisworks 2025 proof
+    # Label-gated. `navisworks-2025` is the label the owner puts on the runner
+    # that actually has Navisworks Manage/Simulate 2025 installed; without such a
+    # runner registered, a dispatch queues and never starts, which is the honest
+    # outcome — see the runbook. Later adapters get their own labelled runners
+    # (navisworks-2024, navisworks-2026) and their own copy of this job.
+    runs-on: [self-hosted, windows, navisworks-2025]
+
+    # Inputs are handed to the steps as environment variables rather than
+    # interpolated into the shell scripts below. Interpolating a dispatch input
+    # straight into a `run:` body is a script-injection hole; this way the value
+    # is data, not code.
+    env:
+      MATCHLINE_PROOF_MODEL: ${{ inputs.model_path }}
+      MATCHLINE_PROOF_OUT: artifacts/windows-proof
+      MATCHLINE_NAVISWORKS_INSTALL_DIR: ${{ inputs.navisworks_install_dir }}
+      MATCHLINE_CONFIGURATION: ${{ inputs.configuration }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # Fail before doing ten minutes of work if the model the operator named is
+      # not on this machine. It is a runner-local path on purpose.
+      - name: Check the model is present on the runner
+        shell: bash
+        run: |
+          set -eo pipefail
+          if [ ! -f "$MATCHLINE_PROOF_MODEL" ]; then
+            echo "MISSING: no file at the dispatched model_path on this runner." >&2
+            echo "The proof runs against a model that already lives on the runner's disk. Nothing is uploaded." >&2
+            exit 1
+          fi
+          echo "model present, $(wc -c < "$MATCHLINE_PROOF_MODEL") bytes"
+
+      - name: Install
+        run: npm ci
+
+      - name: Post-install setup
+        run: npm run postsetup
+
+      # The TypeScript cache reader (@matchline/model-schema) has to be built
+      # before the cache-validation step can point it at a C#-written file.
+      - name: Build workspaces
+        run: npm run build
+
+      # THE REAL COMPILE. No stubs, no escape hatch: this resolves
+      # Autodesk.Navisworks.Api out of the install directory, and
+      # MatchlineCheckNavisworksReference in the adapter csproj fails the build
+      # with a readable message if that assembly is not there. This is the step
+      # that turns "the stub build is green" into "the plugin compiles against
+      # the real API surface".
+      - name: Compile the plugin and launcher against the real Navisworks API
+        shell: bash
+        run: |
+          set -eo pipefail
+          dotnet build native/Matchline.Extraction.sln \
+            -c "$MATCHLINE_CONFIGURATION" \
+            -p:NavisworksInstallDir="$MATCHLINE_NAVISWORKS_INSTALL_DIR"
+
+      # One place that says which of M6's scripts are missing, all at once,
+      # instead of discovering them one failed dispatch at a time. Each step
+      # below still guards its own script: this list is diagnostics, the guards
+      # are the contract.
+      #
+      # Contract for M6: each script is `node scripts/windows-proof/<name>.mjs`
+      # with no arguments, reading MATCHLINE_PROOF_MODEL (input model),
+      # MATCHLINE_PROOF_OUT (output directory) and
+      # MATCHLINE_NAVISWORKS_INSTALL_DIR from the environment, exiting non-zero
+      # on any failed assertion. Full contract in docs/RELEASE-RUNBOOK.md.
+      - name: Preflight — required M6 proof scripts
+        shell: bash
+        run: |
+          set -eo pipefail
+          required=(
+            scripts/windows-proof/extract.mjs
+            scripts/windows-proof/validate-cache.mjs
+            scripts/windows-proof/cache-hit.mjs
+            scripts/windows-proof/cancellation.mjs
+            scripts/windows-proof/selection-sets.mjs
+            scripts/windows-proof/search-sets.mjs
+            scripts/windows-proof/error-classification.mjs
+          )
+          missing=0
+          for script in "${required[@]}"; do
+            if [ -f "$script" ]; then
+              echo "ok      $script"
+            else
+              echo "MISSING $script" >&2
+              missing=$((missing + 1))
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "" >&2
+            echo "$missing proof script(s) absent. M6 (real Windows proof) provides these scripts." >&2
+            echo "This workflow is scaffolding until they land, and it fails rather than reporting a proof that did not happen." >&2
+            exit 1
+          fi
+
+      - name: Extract the model (real launcher, real Navisworks)
+        shell: bash
+        run: |
+          set -eo pipefail
+          script=scripts/windows-proof/extract.mjs
+          [ -f "$script" ] || { echo "MISSING $script — M6 provides this script." >&2; exit 1; }
+          node "$script"
+
+      # Reads the cache the C# writer just produced with the same TypeScript
+      # reader the app ships, so the two halves cannot drift into agreeing only
+      # with themselves (the argument in native/README.md, "Verifying without
+      # Windows", applied to a real model instead of a synthetic stream).
+      - name: Validate the cache with the TypeScript reader
+        shell: bash
+        run: |
+          set -eo pipefail
+          script=scripts/windows-proof/validate-cache.mjs
+          [ -f "$script" ] || { echo "MISSING $script — M6 provides this script." >&2; exit 1; }
+          node "$script"
+
+      - name: Re-run is a cache hit and never starts Navisworks
+        shell: bash
+        run: |
+          set -eo pipefail
+          script=scripts/windows-proof/cache-hit.mjs
+          [ -f "$script" ] || { echo "MISSING $script — M6 provides this script." >&2; exit 1; }
+          node "$script"
+
+      - name: Cancellation mid-run leaves no cache behind
+        shell: bash
+        run: |
+          set -eo pipefail
+          script=scripts/windows-proof/cancellation.mjs
+          [ -f "$script" ] || { echo "MISSING $script — M6 provides this script." >&2; exit 1; }
+          node "$script"
+
+      - name: Selection Set behaviour
+        shell: bash
+        run: |
+          set -eo pipefail
+          script=scripts/windows-proof/selection-sets.mjs
+          [ -f "$script" ] || { echo "MISSING $script — M6 provides this script." >&2; exit 1; }
+          node "$script"
+
+      # Hard gate 16: Search Sets are either fully resolved or honestly blocked.
+      # The script's job is to decide which, and to fail if the answer is
+      # "returned empty and called it an answer".
+      - name: Search Set behaviour (resolved, or honestly gated)
+        shell: bash
+        run: |
+          set -eo pipefail
+          script=scripts/windows-proof/search-sets.mjs
+          [ -f "$script" ] || { echo "MISSING $script — M6 provides this script." >&2; exit 1; }
+          node "$script"
+
+      - name: Error classification vocabulary
+        shell: bash
+        run: |
+          set -eo pipefail
+          script=scripts/windows-proof/error-classification.mjs
+          [ -f "$script" ] || { echo "MISSING $script — M6 provides this script." >&2; exit 1; }
+          node "$script"
+
+      # Counts and timings only. The scripts above are responsible for writing
+      # nothing model-derived into this directory — no tags, no file names, no
+      # property values (RELEASE-1.0-PLAN.md P0-3: "No client data committed —
+      # anonymized counts/timings only"). Caches and models must not be written
+      # here at all. `if-no-files-found: error` because a proof that produced no
+      # summary did not produce a result.
+      - name: Upload the anonymized proof summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: navisworks-proof-summary
+          path: artifacts/windows-proof/**
+          if-no-files-found: error
+          retention-days: 30

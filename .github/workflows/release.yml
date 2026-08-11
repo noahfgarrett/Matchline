@@ -1,0 +1,312 @@
+# Tag-driven release. Push `v1.0.0` and this is what runs.
+#
+# The shape is fixed by RELEASE-1.0-PLAN.md, "Updater / signing / release":
+# no hardcoded credentials, Actions and electron-builder consume secrets, and the
+# release-tag workflow FAILS LOUDLY without production signing rather than
+# silently publishing an unsigned 1.0.0. Two consequences you can read straight
+# off this file: the signing gate is the first step of the build job, before any
+# work happens, and the publish job refuses to report success for a push it did
+# not perform.
+#
+# SECRETS ARE NAMED HERE, NEVER VALUED. WINDOWS_SIGNING_CERT_B64,
+# WINDOWS_SIGNING_CERT_PASSWORD and UPDATE_FEED_TOKEN are repository secrets the
+# owner sets; see docs/RELEASE-RUNBOOK.md for what each one is and where it goes.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # The full hosted matrix, by reference rather than by copy: same file that
+  # guards every branch push, so a release cannot pass a weaker CI than a pull
+  # request does. ubuntu/macos/windows tests, the native smoke on Linux and
+  # Windows, and the unsigned Windows packaging smoke all have to be green
+  # before anything below starts.
+  hosted-matrix:
+    name: Hosted matrix
+    uses: ./.github/workflows/ci.yml
+
+  windows-release:
+    name: Windows release build (signed)
+    needs: hosted-matrix
+    runs-on: windows-latest
+
+    env:
+      # Public RFC 3161 timestamp service. Not a credential — a timestamp is what
+      # keeps already-issued signatures valid after the certificate expires.
+      MATCHLINE_TIMESTAMP_URL: http://timestamp.digicert.com
+
+    steps:
+      # FIRST. Not after checkout, not after the build — a release build that
+      # cannot be signed must cost nothing and fail unmistakably.
+      - name: Require production signing credentials
+        shell: bash
+        env:
+          WINDOWS_SIGNING_CERT_B64: ${{ secrets.WINDOWS_SIGNING_CERT_B64 }}
+          WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+        run: |
+          set -eo pipefail
+          missing=""
+          [ -n "$WINDOWS_SIGNING_CERT_B64" ] || missing="$missing WINDOWS_SIGNING_CERT_B64"
+          [ -n "$WINDOWS_SIGNING_CERT_PASSWORD" ] || missing="$missing WINDOWS_SIGNING_CERT_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "Production signing credentials are missing:$missing" >&2
+            echo "" >&2
+            echo "RELEASE-1.0-PLAN.md: the release-tag workflow must fail clearly if production" >&2
+            echo "signing credentials are missing - it must not silently publish an unsigned 1.0.0." >&2
+            echo "" >&2
+            echo "Set the missing repository secrets (docs/RELEASE-RUNBOOK.md, 'Secrets') and re-run," >&2
+            echo "or delete the tag. There is no unsigned release path here on purpose; unsigned" >&2
+            echo "builds come from the CI packaging smoke and are labelled as such." >&2
+            exit 1
+          fi
+          echo "signing credentials present (values never printed)"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install
+        run: npm ci
+
+      - name: Post-install setup
+        run: npm run postsetup
+
+      - name: Build workspaces
+        run: npm run build
+
+      - name: Build desktop bundles
+        run: npm run build:desktop
+
+      - name: Package Windows
+        run: npm run package:win
+
+      # The certificate lands on disk under RUNNER_TEMP, never in the workspace,
+      # and is deleted in the cleanup step below whatever happens. The base64 is
+      # decoded through a pipe so the secret is never an argv entry.
+      - name: Materialise the signing certificate
+        shell: bash
+        env:
+          WINDOWS_SIGNING_CERT_B64: ${{ secrets.WINDOWS_SIGNING_CERT_B64 }}
+        run: |
+          set -eo pipefail
+          printf '%s' "$WINDOWS_SIGNING_CERT_B64" | base64 --decode > "$RUNNER_TEMP/matchline-signing.pfx"
+          if [ ! -s "$RUNNER_TEMP/matchline-signing.pfx" ]; then
+            echo "WINDOWS_SIGNING_CERT_B64 did not decode to a non-empty file. Re-encode the .pfx with base64 and update the secret." >&2
+            exit 1
+          fi
+          echo "certificate materialised"
+
+      # ---------------------------------------------------------------------
+      # UNEXERCISED. The two `signtool sign` invocations below have never run:
+      # there is no certificate yet, and nothing about them can be validated
+      # without one. The first real release run is what validates them — treat a
+      # failure here as expected first-run friction, not as a regression.
+      #
+      # KNOWN GAP, and it is a real one. apps/desktop/electron-builder.yml
+      # currently disables signing outright (`signExecutable: false`,
+      # `signtoolOptions: null`, `forceCodeSigning: false`), so electron-builder
+      # packages an unsigned Matchline.exe and this job signs the artifacts
+      # afterwards. That signs the installer and the unpacked executable, but the
+      # copy of Matchline.exe *inside* the portable zip stays unsigned. Closing
+      # it means letting electron-builder do the signing during packaging, which
+      # is an app-side change to electron-builder.yml, not a workflow change.
+      # Tracked in docs/RELEASE-RUNBOOK.md, "Open items before 1.0.0".
+      #
+      # /p puts the password on a command line, where other processes on the box
+      # can read it. Acceptable on an ephemeral GitHub-hosted runner; if this
+      # ever moves to a self-hosted machine, import the .pfx into the certificate
+      # store and sign by thumbprint (/sha1) instead.
+      # ---------------------------------------------------------------------
+      - name: Sign the application executable and the installer
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' -ErrorAction SilentlyContinue |
+            Sort-Object FullName |
+            Select-Object -Last 1
+          if (-not $signtool) {
+            throw 'signtool.exe was not found under the Windows 10 SDK. The runner image changed; find the SDK path and update this step.'
+          }
+          Write-Host "signtool: $($signtool.FullName)"
+
+          $pfx = Join-Path $env:RUNNER_TEMP 'matchline-signing.pfx'
+          $release = 'apps/desktop/release'
+
+          $targets = @()
+          $targets += Get-ChildItem (Join-Path $release 'win-unpacked/Matchline.exe') -ErrorAction SilentlyContinue
+          $targets += Get-ChildItem (Join-Path $release '*-Setup-*.exe') -ErrorAction SilentlyContinue
+          if ($targets.Count -eq 0) {
+            throw "Nothing to sign under $release. Packaging produced no executable."
+          }
+
+          foreach ($target in $targets) {
+            Write-Host "signing $($target.FullName)"
+            & $signtool.FullName sign `
+              /f $pfx `
+              /p $env:WINDOWS_SIGNING_CERT_PASSWORD `
+              /fd sha256 `
+              /tr $env:MATCHLINE_TIMESTAMP_URL `
+              /td sha256 `
+              $target.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signtool sign failed for $($target.FullName)" }
+          }
+
+      # Not ceremony: this is what turns "we ran a signing command" into "the
+      # artifact is signed and chains to a trusted root". If signing silently did
+      # nothing, this fails.
+      - name: Verify the signatures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' -ErrorAction SilentlyContinue |
+            Sort-Object FullName |
+            Select-Object -Last 1
+          if (-not $signtool) { throw 'signtool.exe was not found under the Windows 10 SDK.' }
+
+          $release = 'apps/desktop/release'
+          $targets = @()
+          $targets += Get-ChildItem (Join-Path $release 'win-unpacked/Matchline.exe') -ErrorAction SilentlyContinue
+          $targets += Get-ChildItem (Join-Path $release '*-Setup-*.exe') -ErrorAction SilentlyContinue
+
+          foreach ($target in $targets) {
+            & $signtool.FullName verify /pa /v $target.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signature verification failed for $($target.FullName)" }
+          }
+
+      - name: Remove the certificate from the runner
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/matchline-signing.pfx"
+
+      - name: Assert the release artifacts exist and are non-empty
+        shell: bash
+        run: |
+          set -eo pipefail
+          shopt -s nullglob
+
+          status=0
+          installers=(apps/desktop/release/*-Setup-*.exe)
+          archives=(apps/desktop/release/*-win-*.zip)
+
+          if [ ${#installers[@]} -eq 0 ]; then
+            echo "MISSING: apps/desktop/release/*-Setup-*.exe" >&2
+            status=1
+          fi
+          if [ ${#archives[@]} -eq 0 ]; then
+            echo "MISSING: apps/desktop/release/*-win-*.zip" >&2
+            status=1
+          fi
+
+          for artifact in "${installers[@]}" "${archives[@]}"; do
+            if [ -s "$artifact" ]; then
+              echo "ok    $artifact  $(wc -c < "$artifact") bytes"
+            else
+              echo "EMPTY: $artifact" >&2
+              status=1
+            fi
+          done
+
+          exit $status
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: matchline-windows-release
+          path: |
+            apps/desktop/release/*-Setup-*.exe
+            apps/desktop/release/*-win-*.zip
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  publish:
+    name: Publish to the update feed
+    needs: windows-release
+    runs-on: ubuntu-latest
+
+    steps:
+      # Gated exactly like the build job, and for the same reason: whatever
+      # eventually pushes to the feed must never be reachable on a run that could
+      # not sign. UPDATE_FEED_TOKEN joins the check because a publish without it
+      # cannot succeed either.
+      - name: Require production signing and feed credentials
+        shell: bash
+        env:
+          WINDOWS_SIGNING_CERT_B64: ${{ secrets.WINDOWS_SIGNING_CERT_B64 }}
+          UPDATE_FEED_TOKEN: ${{ secrets.UPDATE_FEED_TOKEN }}
+        run: |
+          set -eo pipefail
+          missing=""
+          [ -n "$WINDOWS_SIGNING_CERT_B64" ] || missing="$missing WINDOWS_SIGNING_CERT_B64"
+          [ -n "$UPDATE_FEED_TOKEN" ] || missing="$missing UPDATE_FEED_TOKEN"
+          if [ -n "$missing" ]; then
+            echo "Publish credentials are missing:$missing" >&2
+            echo "" >&2
+            echo "RELEASE-1.0-PLAN.md: the release-tag workflow must fail clearly if production" >&2
+            echo "signing credentials are missing - it must not silently publish an unsigned 1.0.0." >&2
+            exit 1
+          fi
+          echo "publish credentials present (values never printed)"
+
+      # ---------------------------------------------------------------------
+      # PLACEHOLDER, and it fails on purpose.
+      #
+      # Two things do not exist yet, and neither is a workflow decision:
+      #
+      #   1. The feed target. RELEASE-1.0-PLAN.md offers "artifact repo
+      #      (Matchline-Releases) or signed static feed" and leaves the choice to
+      #      the owner. Until Noah picks one, there is no URL to push to and no
+      #      manifest shape to write.
+      #   2. The certificate. Publishing is the step that would put a binary in
+      #      front of users, so it stays behind the same gate as signing.
+      #
+      # There is deliberately no `gh release create` here. Adding one now would
+      # mean this job inventing the distribution channel rather than implementing
+      # the owner's decision, and it would need `permissions: contents: write`,
+      # which this workflow does not ask for.
+      #
+      # Note also that this job cannot yet fetch what windows-release uploaded:
+      # actions/download-artifact is not in the approved action set for this
+      # repository. Approving it is part of implementing this job, not a
+      # prerequisite for the decision above.
+      #
+      # It ends in `exit 1` rather than a green echo. A release run that reports
+      # success while shipping nothing to users is precisely the silent failure
+      # the plan forbids.
+      # ---------------------------------------------------------------------
+      - name: Push to the update feed (not implemented)
+        env:
+          # Via the environment, not spliced into the script body: a tag name is
+          # attacker-controlled text as far as a shell is concerned.
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          echo "Would publish tag $RELEASE_TAG:"
+          echo "  - download matchline-windows-release (installer + portable zip)"
+          echo "  - upload both to the update feed named by the owner's channel decision"
+          echo "  - write/refresh the update manifest (version, artifact URLs, sha256, release notes)"
+          echo "  - authenticate with UPDATE_FEED_TOKEN"
+          echo ""
+          echo "NOT IMPLEMENTED. The distribution channel is an open owner decision:" >&2
+          echo "a Matchline-Releases artifact repository, or a signed static feed" >&2
+          echo "(RELEASE-1.0-PLAN.md, 'Updater / signing / release'). Until that is settled" >&2
+          echo "there is no correct target, and this job fails rather than reporting a" >&2
+          echo "publish that did not happen. The signed artifacts from windows-release are" >&2
+          echo "already uploaded to this run and can be distributed by hand meanwhile" >&2
+          echo "(docs/RELEASE-RUNBOOK.md, 'Manual offline installer path')." >&2
+          exit 1

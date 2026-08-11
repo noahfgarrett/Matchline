@@ -4,6 +4,13 @@ on:
   push:
     branches: ['**']
   pull_request:
+  # release.yml calls this workflow, so a tag build physically cannot skip the
+  # hosted matrix. Tag pushes do not match the `branches` filter above, so
+  # tagging runs the matrix exactly once — as part of the release, not beside it.
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -12,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +31,15 @@ jobs:
 
       - name: Install
         run: npm ci
+
+      # `postsetup` is not an npm lifecycle hook of `ci` — there is no `setup`
+      # script for it to hang off — so nothing runs it implicitly and it has to
+      # be invoked by name. It rebuilds esbuild and puts the Electron binary in
+      # place for the runner's own platform, which is exactly the step that
+      # differs between a Mac dev box and a Windows runner. Every OS in the
+      # matrix runs it so all three test against the same installed tree.
+      - name: Post-install setup
+        run: npm run postsetup
 
       - name: Build
         run: npm run build
@@ -50,6 +66,149 @@ jobs:
       # editing the frozen donor tree (13 tests: data-output, edge-contract, corpus).
       # Wall-clock performance budgets are also excluded: shared runners are not a
       # perf environment (observed 12.3s vs an 8s budget); they run on real hardware.
+      # `shell: bash` is not decoration: the runner default on windows-latest is
+      # pwsh, which would glob `tests/*.test.mjs` and quote the skip pattern by
+      # different rules. Naming bash pins all three runners to one command.
       - name: Test legacy parity suite
+        shell: bash
         working-directory: packages/legacy-parity
         run: node --test --test-skip-pattern "frozen SSM Builder|preserves a frozen edge contract|budget" tests/*.test.mjs
+
+  # The C# half that needs no Autodesk install: the protocol/DTO assembly, the
+  # launcher, the real smoke harness, and a type-check of every version adapter
+  # against native/navisworks-stubs. Runs on Linux and Windows — the launcher is
+  # net48 and compiles on both (native/README.md, "Building"), and proving that
+  # on Linux is what keeps the Mac-side build honest.
+  native-smoke:
+    name: native smoke on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build Matchline.Extraction.Common (netstandard2.0)
+        run: dotnet build native/navisworks-common/Matchline.Extraction.Common.csproj -c Release
+
+      # net48 on a Linux runner: csc reads the pinned
+      # Microsoft.NETFramework.ReferenceAssemblies metadata, never an installed
+      # framework. Only the build is portable; the exe it produces is Windows-only.
+      - name: Build Matchline.Extractor (net48 launcher)
+        run: dotnet build native/extractor/Matchline.Extractor.csproj -c Release
+
+      # Synthetic records -> NdjsonWriter -> file -> NdjsonReader -> CacheWriter
+      # -> SQLite -> CacheInspector, for real. No argument, so the harness picks
+      # its own temp directory (native/smoke/Program.cs) and no path has to
+      # survive a shell translation on Windows. Exit 0 means every check passed.
+      - name: Run the Autodesk-free extraction smoke harness
+        run: dotnet run --project native/smoke/Matchline.Extraction.Smoke.csproj -c Release
+
+      # The 2024 and 2026 adapters arrive in M7 as new native/navisworks-<year>/
+      # projects. Discovering them by glob means this job compiles them the day
+      # they land, with nobody having to remember to edit CI. The four-digit
+      # shape is what keeps navisworks-common/ and navisworks-stubs/ out of the
+      # list. Finding none is a failure, not a pass: it means the layout moved.
+      - name: Stub-compile every Navisworks adapter present
+        shell: bash
+        run: |
+          set -eo pipefail
+          shopt -s nullglob
+          projects=(native/navisworks-[0-9][0-9][0-9][0-9]/*.csproj)
+          if [ ${#projects[@]} -eq 0 ]; then
+            echo "No native/navisworks-<year>/*.csproj found. The adapters moved or the glob is wrong; either way that is a failure, not a pass." >&2
+            exit 1
+          fi
+          for project in "${projects[@]}"; do
+            echo "--- stub compile: $project"
+            dotnet build "$project" -c Release -p:UseNavisworksStubs=true
+          done
+          echo "stub-compiled ${#projects[@]} adapter project(s)"
+
+  # Proves the Windows installer can still be produced from a clean checkout.
+  # Deliberately unsigned: apps/desktop/electron-builder.yml switches every
+  # signing path off explicitly, and this job consumes no signing secrets at all,
+  # so it runs on pull requests from anywhere without a certificate existing.
+  # Signing is release.yml's job and it fails loudly without credentials.
+  package-smoke:
+    name: windows packaging smoke (unsigned)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install
+        run: npm ci
+
+      - name: Post-install setup
+        run: npm run postsetup
+
+      - name: Build workspaces
+        run: npm run build
+
+      - name: Build desktop bundles
+        run: npm run build:desktop
+
+      - name: Package Windows (unsigned)
+        run: npm run package:win
+
+      # Names come from apps/desktop/electron-builder.yml:
+      #   nsis.artifactName  ${productName}-${version}-Setup-${arch}.${ext}
+      #   artifactName       ${productName}-${version}-${os}-${arch}.${ext}
+      # Matched by glob rather than by version so a version bump does not break
+      # CI. Present-but-zero-bytes is the failure mode this guards against — a
+      # truncated installer is worse than no installer, because it looks like one.
+      - name: Assert the installer and the zip exist and are non-empty
+        shell: bash
+        run: |
+          set -eo pipefail
+          shopt -s nullglob
+
+          status=0
+          installers=(apps/desktop/release/*-Setup-*.exe)
+          archives=(apps/desktop/release/*-win-*.zip)
+
+          if [ ${#installers[@]} -eq 0 ]; then
+            echo "MISSING: apps/desktop/release/*-Setup-*.exe — electron-builder produced no NSIS installer" >&2
+            status=1
+          fi
+          if [ ${#archives[@]} -eq 0 ]; then
+            echo "MISSING: apps/desktop/release/*-win-*.zip — electron-builder produced no portable zip" >&2
+            status=1
+          fi
+
+          for artifact in "${installers[@]}" "${archives[@]}"; do
+            if [ -s "$artifact" ]; then
+              echo "ok    $artifact  $(wc -c < "$artifact") bytes"
+            else
+              echo "EMPTY: $artifact" >&2
+              status=1
+            fi
+          done
+
+          exit $status
+
+      # Short retention on purpose: these are ~230 MB per run and they are a
+      # smoke result, not a release. Signed release artifacts come from
+      # release.yml and are kept longer. compression-level 0 because both
+      # artifacts are already compressed.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-package-smoke
+          path: |
+            apps/desktop/release/*-Setup-*.exe
+            apps/desktop/release/*-win-*.zip
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
