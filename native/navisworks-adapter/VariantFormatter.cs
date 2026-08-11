@@ -2,7 +2,7 @@ using System;
 using System.Globalization;
 using Autodesk.Navisworks.Api;
 
-namespace Matchline.Extraction.Navisworks2025
+namespace Matchline.Extraction.NavisworksAdapter
 {
     /// <summary>
     /// Turns a Navisworks <see cref="VariantData"/> into the pair the cache
@@ -10,7 +10,9 @@ namespace Matchline.Extraction.Navisworks2025
     /// <para>
     /// Dispatch is on <c>DataType.ToString()</c> rather than on enum members, so
     /// a VariantDataType that this build has never heard of falls through to the
-    /// default arm instead of failing to compile or throwing.
+    /// default arm instead of failing to compile or throwing. That is also what
+    /// lets one file serve 2024, 2025 and 2026: a year that adds a variant type
+    /// degrades to its ToString() instead of needing a new adapter.
     /// </para>
     /// <para>
     /// VERIFY-ON-WINDOWS. Two halves, with very different standing:

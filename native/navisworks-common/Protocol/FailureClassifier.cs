@@ -64,6 +64,22 @@ namespace Matchline.Extraction.Protocol
             return fallback;
         }
 
+        /// <summary>
+        /// The one spelling of "what went wrong" used everywhere in the native
+        /// half: type name and message, no stack trace. A stack trace would be
+        /// the only thing here that could carry a local path into a cache or a
+        /// protocol line.
+        /// </summary>
+        public static string Describe(Exception exception)
+        {
+            if (exception == null)
+            {
+                return "unknown failure";
+            }
+
+            return exception.GetType().Name + ": " + exception.Message;
+        }
+
         public static string ClassifyException(Exception exception, string fallback)
         {
             if (exception == null)

@@ -1,15 +1,19 @@
 // =============================== NOT SHIPPED ===============================
 // Compile-only stand-in for Autodesk.Navisworks.Api.
 //
-// Purpose: let `dotnet build -p:UseNavisworksStubs=true` type-check
-// native/navisworks-2025 on a machine with no Navisworks. Nothing here runs;
-// every member throws. The one exception is the attribute types in
+// Purpose: let `dotnet build -p:UseNavisworksStubs=true` type-check the version
+// adapters (native/navisworks-2024, -2025, -2026, all compiled from the shared
+// source in native/navisworks-adapter) on a machine with no Navisworks. Nothing
+// here runs; every member throws. The one exception is the attribute types in
 // NavisworksPluginStubs.cs, whose values are baked into metadata by the
 // compiler, so their setters are never executed at all.
 //
-// Scope rule: a member appears here ONLY because native/navisworks-2025 names
-// it. Do not "complete" the API surface -- an unused stub is an unverifiable
-// guess with no compile check behind it. Members the plugin reaches
+// Scope rule: a member appears here ONLY because native/navisworks-adapter
+// names it. Do not "complete" the API surface -- an unused stub is an
+// unverifiable guess with no compile check behind it. The adapter source is
+// shared verbatim across years, so one stub set serves all three; a member that
+// exists for only one year would need that year's file split out first.
+// Members the plugin reaches
 // reflectively (Model.SourceGuid/Guid/ModelGuid, Application.Version) are
 // deliberately shaped as reflection targets and stay unpinned; see
 // docs/WINDOWS-RUNBOOK.md.

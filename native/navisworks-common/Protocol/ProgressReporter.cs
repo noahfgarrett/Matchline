@@ -38,6 +38,16 @@ namespace Matchline.Extraction.Protocol
 
         public void Progress(string stage, long done, long total)
         {
+            Progress(stage, done, total, null);
+        }
+
+        /// <summary>
+        /// A progress line with a human-readable <c>detail</c> string. The field
+        /// is omitted entirely when <paramref name="detail"/> is null, so the
+        /// stages that have nothing to say emit exactly the line they always did.
+        /// </summary>
+        public void Progress(string stage, long done, long total, string detail)
+        {
             lock (_gate)
             {
                 if (_disposed)
@@ -50,6 +60,12 @@ namespace Matchline.Extraction.Protocol
                     .AddString("stage", stage)
                     .AddInt("done", done)
                     .AddInt("total", total);
+
+                if (detail != null)
+                {
+                    _builder.AddString("detail", detail);
+                }
+
                 Emit();
             }
         }

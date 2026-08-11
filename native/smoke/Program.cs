@@ -59,6 +59,11 @@ namespace Matchline.Extraction.Smoke
             try
             {
                 CheckSchemaIsVerbatim();
+                CheckSupportedAdapterTable();
+                CheckWarningCollector();
+                CheckExtractionSession(outputDirectory);
+                CheckAdapterSelection();
+                CheckVersionArgument();
 
                 List<StreamItem> expected = BuildSyntheticStream();
                 WriteStream(streamPath, expected);
@@ -97,6 +102,322 @@ namespace Matchline.Extraction.Smoke
             Console.Out.WriteLine("CACHE_PATH=" + cachePath);
             Console.Out.WriteLine("STREAM_PATH=" + streamPath);
             return 0;
+        }
+
+        // --------------------------------------------------- shared adapter core
+
+        /// <summary>
+        /// The version-adapter machinery that used to live inside the
+        /// (uncompilable, unrunnable) Navisworks project and now lives in
+        /// navisworks-common. It runs inside the Autodesk process for every
+        /// supported year, so it is worth exercising here where it can actually
+        /// be run.
+        /// </summary>
+        private static void CheckSupportedAdapterTable()
+        {
+            AdapterSupport[] adapters = SupportedAdapters.All();
+            Check("at least one Navisworks year has an adapter", adapters.Length > 0);
+
+            bool newestFirst = true;
+            bool spellingHolds = true;
+            bool lookupAgrees = true;
+            HashSet<string> versions = new HashSet<string>(StringComparer.Ordinal);
+
+            for (int i = 0; i < adapters.Length; i++)
+            {
+                if (i > 0 && adapters[i - 1].Year <= adapters[i].Year)
+                {
+                    newestFirst = false;
+                }
+
+                string expectedVersion = "navisworks-" + adapters[i].Year.ToString(CultureInfo.InvariantCulture);
+                if (!string.Equals(adapters[i].AdapterVersion, expectedVersion, StringComparison.Ordinal))
+                {
+                    spellingHolds = false;
+                }
+
+                if (SupportedAdapters.ForYear(adapters[i].Year) == null ||
+                    !SupportedAdapters.IsSupported(adapters[i].Year))
+                {
+                    lookupAgrees = false;
+                }
+
+                versions.Add(adapters[i].AdapterVersion);
+            }
+
+            // Selection walks this table in order and takes the first match, so
+            // the ordering is behaviour, not presentation.
+            Check("supported adapters are listed newest year first", newestFirst);
+            Check("adapter_version reads navisworks-<year>", spellingHolds);
+            Check("every listed year resolves through ForYear/IsSupported", lookupAgrees);
+            Check("no two years share an adapter_version", versions.Count == adapters.Length);
+            Check("a year with no adapter resolves to nothing", SupportedAdapters.ForYear(1999) == null);
+            Check(
+                "the supported year list names every adapter",
+                SupportedAdapters.YearList().Split(',').Length == adapters.Length,
+                SupportedAdapters.YearList());
+        }
+
+        /// <summary>
+        /// The two rules in WarningCollector: the count matches the number of
+        /// lines written, and a deferred warning does not reach the stream until
+        /// it is flushed (which the walkers do straight after the object row it
+        /// names).
+        /// </summary>
+        private static void CheckWarningCollector()
+        {
+            StringWriter sink = new StringWriter(CultureInfo.InvariantCulture);
+            long countBeforeFlush;
+
+            using (NdjsonWriter writer = new NdjsonWriter(sink, false))
+            {
+                WarningCollector warnings = new WarningCollector(writer);
+
+                warnings.Defer(WarningSeverity.Info, WarningCodes.BoundingBoxReadFailed, "deferred", 42);
+                warnings.Warn(WarningSeverity.Warning, WarningCodes.PropertyReadFailed, "immediate", null);
+                countBeforeFlush = warnings.Count;
+
+                warnings.FlushDeferred();
+                Check("warning count matches lines emitted", warnings.Count == 2, warnings.Count.ToString());
+
+                // A second flush must not re-emit anything.
+                warnings.FlushDeferred();
+                Check("flushing twice does not duplicate warnings", warnings.Count == 2);
+            }
+
+            Check("a deferred warning is not counted before it is written", countBeforeFlush == 1);
+
+            string[] lines = sink.ToString().Split(new char[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            Check("both warnings reached the stream", lines.Length == 2, lines.Length.ToString());
+            Check(
+                "the deferred warning is written after the immediate one",
+                lines.Length == 2 && lines[0].Contains("immediate") && lines[1].Contains("deferred"));
+        }
+
+        /// <summary>
+        /// ExtractionSession is what every version adapter's Execute() delegates
+        /// to: exactly one terminator per run, a failure reported in-stream
+        /// rather than through a return value, and no output path meaning no
+        /// stream at all. ExtractionHeader rides along because the file-name-only
+        /// rule is a confidentiality requirement, not a nicety.
+        /// </summary>
+        private static void CheckExtractionSession(string outputDirectory)
+        {
+            string inputPath = Path.Combine(outputDirectory, "SYNTHETIC-PLANT.nwd");
+            string okPath = Path.Combine(outputDirectory, "session-ok.ndjson");
+            string failPath = Path.Combine(outputDirectory, "session-failed.ndjson");
+            Delete(okPath);
+            Delete(failPath);
+
+            int okExit = ExtractionSession.Run(okPath, new SyntheticWorkload(inputPath, false));
+            Check("a completed session exits 0", okExit == ExtractionSession.ExitOk, okExit.ToString());
+
+            List<StreamItem> okStream = ReadStream(okPath);
+            Check("the completed session wrote a terminator", CountKind(okStream, ItemKind.End) == 1);
+
+            EndRecord okEnd = LastEnd(okStream);
+            Check("the terminator says ok", okEnd != null && okEnd.Ok);
+            Check("the terminator carries the workload's counts",
+                okEnd != null && okEnd.ObjectCount == 5 && okEnd.WarningCount == 2);
+
+            Dictionary<string, string> meta = MetaOf(okStream);
+            Check(
+                "the header stamps adapter_version",
+                meta.ContainsKey(CacheMetaKeys.AdapterVersion) &&
+                meta[CacheMetaKeys.AdapterVersion] == "navisworks-2025");
+            Check(
+                "an unknown product version is spelled, not left blank",
+                meta.ContainsKey(CacheMetaKeys.NavisworksVersion) &&
+                meta[CacheMetaKeys.NavisworksVersion] == ExtractionHeader.UnknownProductVersion);
+            Check(
+                "the header records a file name, never a directory",
+                meta.ContainsKey(CacheMetaKeys.InputFileName) &&
+                meta[CacheMetaKeys.InputFileName] == "SYNTHETIC-PLANT.nwd",
+                meta.ContainsKey(CacheMetaKeys.InputFileName) ? meta[CacheMetaKeys.InputFileName] : "absent");
+
+            int failExit = ExtractionSession.Run(failPath, new SyntheticWorkload(inputPath, true));
+            Check("a failed session exits non-zero", failExit == ExtractionSession.ExitFailed, failExit.ToString());
+
+            EndRecord failEnd = LastEnd(ReadStream(failPath));
+            Check("a failure is reported in the stream, not just in the exit code", failEnd != null && !failEnd.Ok);
+            Check(
+                "an unrecognised failure falls back to EXTRACT_FAILED",
+                failEnd != null && failEnd.Code == ExtractionErrorCodes.ExtractFailed,
+                failEnd == null ? "no end record" : failEnd.Code);
+            Check(
+                "the failure names the exception type and message",
+                failEnd != null && failEnd.Message == "InvalidOperationException: synthetic walk failure",
+                failEnd == null ? "no end record" : failEnd.Message);
+
+            int noPathExit = ExtractionSession.Run(null, new SyntheticWorkload(inputPath, false));
+            Check(
+                "no output path means no stream and a distinct exit code",
+                noPathExit == ExtractionSession.ExitBadParameters,
+                noPathExit.ToString());
+        }
+
+        /// <summary>
+        /// Adapter selection: newest installed year that Matchline actually has
+        /// an adapter for, Manage ahead of Simulate at the same year, and a
+        /// newer Navisworks with no adapter skipped rather than used.
+        /// <para>
+        /// The installs are invented; only the choosing is under test. The real
+        /// probe is exercised too, to the extent it can be off Windows: it must
+        /// return an empty list rather than null or an exception.
+        /// </para>
+        /// </summary>
+        private static void CheckAdapterSelection()
+        {
+            List<NavisworksInstall> probed = NavisworksLocator.FindAll();
+            Check("probing for installs never returns null", probed != null);
+
+            List<NavisworksInstall> installs = new List<NavisworksInstall>();
+            installs.Add(Install("Manage", 2029));
+            installs.Add(Install("Manage", 2026));
+            installs.Add(Install("Simulate", 2026));
+            installs.Add(Install("Manage", 2025));
+            installs.Add(Install("Manage", 2023));
+
+            NavisworksInstall newest = NavisworksLocator.SelectNewestSupported(installs);
+            Check("selection skips a release with no adapter", newest != null && newest.Year == 2026,
+                newest == null ? "nothing selected" : newest.Describe());
+            Check("Manage wins over Simulate at the same year",
+                newest != null && newest.Product == "Manage");
+
+            NavisworksInstall requested = NavisworksLocator.SelectYear(installs, 2025);
+            Check("an explicit year selects that install", requested != null && requested.Year == 2025);
+            Check("an explicit year that is not installed selects nothing",
+                NavisworksLocator.SelectYear(installs, 2024) == null);
+
+            List<NavisworksInstall> unsupportedOnly = new List<NavisworksInstall>();
+            unsupportedOnly.Add(Install("Manage", 2023));
+            Check("an install with no adapter is not selectable",
+                NavisworksLocator.SelectNewestSupported(unsupportedOnly) == null);
+            Check("nothing installed selects nothing",
+                NavisworksLocator.SelectNewestSupported(new List<NavisworksInstall>()) == null);
+
+            // The "installed, but no adapter for it" error is only actionable if
+            // it says what was found.
+            string described = NavisworksLocator.DescribeAll(unsupportedOnly);
+            Check("the error text names what was found", described.Contains("2023") && described.Contains("Manage"),
+                described);
+            Check("nothing found describes as empty",
+                NavisworksLocator.DescribeAll(new List<NavisworksInstall>()).Length == 0);
+
+            Check("an unknown year describes without pretending to know one",
+                Install("Unknown", NavisworksLocator.UnknownYear).Describe().Contains("unknown year"));
+        }
+
+        private static NavisworksInstall Install(string product, int year)
+        {
+            string directory = Path.Combine(
+                "C:", "Program Files", "Autodesk",
+                "Navisworks " + product + " " + year.ToString(CultureInfo.InvariantCulture));
+
+            return new NavisworksInstall(
+                directory, Path.Combine(directory, NavisworksLocator.ExecutableName), product, year);
+        }
+
+        /// <summary>
+        /// --navisworks-version. Asking for a year Matchline has no adapter for
+        /// is a wrong command line, not a runtime surprise, so it is refused at
+        /// parse time and the message says which years exist.
+        /// </summary>
+        private static void CheckVersionArgument()
+        {
+            ExtractorArguments parsed;
+            string error;
+
+            Check("a supported year parses",
+                ExtractorArguments.TryParse(
+                    new string[] { "--input", "model.nwd", "--navisworks-version", "2025" },
+                    out parsed, out error) && parsed.NavisworksYear == 2025,
+                error);
+
+            Check("no flag means newest installed",
+                ExtractorArguments.TryParse(new string[] { "--input", "model.nwd" }, out parsed, out error) &&
+                !parsed.NavisworksYear.HasValue,
+                error);
+
+            bool refusedUnsupported = !ExtractorArguments.TryParse(
+                new string[] { "--input", "model.nwd", "--navisworks-version", "2023" },
+                out parsed, out error);
+            Check("a year with no adapter is refused", refusedUnsupported);
+            Check("and the refusal lists the years that do have one",
+                error != null && error.Contains(SupportedAdapters.YearList()),
+                error);
+
+            Check("a non-numeric version is refused",
+                !ExtractorArguments.TryParse(
+                    new string[] { "--input", "model.nwd", "--navisworks-version", "twenty-five" },
+                    out parsed, out error));
+
+            Check("a version flag with no value is refused",
+                !ExtractorArguments.TryParse(
+                    new string[] { "--input", "model.nwd", "--navisworks-version" },
+                    out parsed, out error));
+
+            Check("pinning both a folder and a year is refused rather than silently resolved",
+                !ExtractorArguments.TryParse(
+                    new string[]
+                    {
+                        "--input", "model.nwd",
+                        "--navisworks-dir", "C:\\Navisworks",
+                        "--navisworks-version", "2025"
+                    },
+                    out parsed, out error));
+        }
+
+        /// <summary>Stands in for a version adapter's walk: header, then records or a failure.</summary>
+        private sealed class SyntheticWorkload : IExtractionWorkload
+        {
+            private readonly string _inputPath;
+            private readonly bool _fail;
+
+            internal SyntheticWorkload(string inputPath, bool fail)
+            {
+                _inputPath = inputPath;
+                _fail = fail;
+            }
+
+            public ExtractionCounts Run(NdjsonWriter writer)
+            {
+                ExtractionHeader.Write(writer, "navisworks-2025", null, _inputPath, null);
+
+                if (_fail)
+                {
+                    throw new InvalidOperationException("synthetic walk failure");
+                }
+
+                return new ExtractionCounts(5, 2);
+            }
+        }
+
+        private static EndRecord LastEnd(List<StreamItem> items)
+        {
+            for (int i = items.Count - 1; i >= 0; i--)
+            {
+                if (items[i].Kind == ItemKind.End)
+                {
+                    return items[i].End;
+                }
+            }
+
+            return null;
+        }
+
+        private static Dictionary<string, string> MetaOf(List<StreamItem> items)
+        {
+            Dictionary<string, string> meta = new Dictionary<string, string>(StringComparer.Ordinal);
+            for (int i = 0; i < items.Count; i++)
+            {
+                if (items[i].Kind == ItemKind.Meta)
+                {
+                    meta[items[i].Meta.Key] = items[i].Meta.Value;
+                }
+            }
+
+            return meta;
         }
 
         // ---------------------------------------------------------------- data

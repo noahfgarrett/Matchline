@@ -44,6 +44,12 @@
     <Compile Include="..\extractor\CacheSchema.cs" Link="from-extractor\CacheSchema.cs" />
     <Compile Include="..\extractor\CacheWriter.cs" Link="from-extractor\CacheWriter.cs" />
     <Compile Include="..\extractor\CacheInspector.cs" Link="from-extractor\CacheInspector.cs" />
+    <!-- Adapter selection and the command line that steers it. Both are pure
+         decision code with no Autodesk and no SQLite in them, and the launcher
+         itself is net48 and cannot be executed here, so this is the only place
+         they can be run at all. -->
+    <Compile Include="..\extractor\NavisworksLocator.cs" Link="from-extractor\NavisworksLocator.cs" />
+    <Compile Include="..\extractor\ExtractorArguments.cs" Link="from-extractor\ExtractorArguments.cs" />
   </ItemGroup>
 
   <ItemGroup>

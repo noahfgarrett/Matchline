@@ -10,17 +10,49 @@ architecture and the reasoning behind it live in
 
 | Path                              | Target         | What it is                                                                    |
 | --------------------------------- | -------------- | ----------------------------------------------------------------------------- |
-| `navisworks-common/`              | netstandard2.0 | DTOs, the NDJSON protocol (writer + reader), the stdout protocol. No dependencies at all. |
-| `navisworks-2025/`                | net48          | The `AddInPlugin` for Navisworks 2025. Only this project touches the Autodesk API. |
-| `extractor/`                      | net48 exe      | The launcher: hashing, cache lookup, process control, SQLite writing.          |
-| `Matchline.Extraction.sln`        |                | The three above, and only those.                                               |
+| `navisworks-common/`              | netstandard2.0 | DTOs, the NDJSON protocol (writer + reader), the stdout protocol, the stream session, the warning policy, the supported-adapter table. No dependencies at all, and never a line of Autodesk. |
+| `navisworks-adapter/`             | (not a project)| The one copy of the Autodesk-touching source, plus the shared `.props` every year's project imports. |
+| `navisworks-2024/`                | net48          | Navisworks 2024 adapter: a year, and nothing else.                             |
+| `navisworks-2025/`                | net48          | Navisworks 2025 adapter: a year, and nothing else.                             |
+| `navisworks-2026/`                | net48          | Navisworks 2026 adapter: a year, and nothing else.                             |
+| `extractor/`                      | net48 exe      | The launcher: hashing, cache lookup, adapter selection, process control, SQLite writing. |
+| `Matchline.Extraction.sln`        |                | Common, the 2025 adapter, and the launcher. See below for why not all three years. |
 | `Directory.Build.props`           |                | Shared settings, including `LangVersion 7.3`.                                  |
-| `navisworks-stubs/`               | net48          | **Not shipped.** Implementation-free stand-in for `Autodesk.Navisworks.Api`, so the plugin type-checks without a Navisworks install. |
+| `navisworks-stubs/`               | net48          | **Not shipped.** Implementation-free stand-in for `Autodesk.Navisworks.Api`, so the adapters type-check without a Navisworks install. |
 | `smoke/`                          | net8.0 exe     | **Not shipped.** Runs the Autodesk-free half of the pipeline for real on any OS. |
 
-Later version adapters (`navisworks-2024`, `navisworks-2026`) are new projects
-alongside `navisworks-2025`, each referencing its own product install. Nothing
-in `navisworks-common` may ever reference Autodesk.
+## One adapter source, three assemblies
+
+`navisworks-2024/`, `navisworks-2025/` and `navisworks-2026/` contain two files
+each: a `.csproj` that sets `MatchlineNavisworksYear` and imports
+`navisworks-adapter/Matchline.Navisworks.Adapter.props`, and an
+`AdapterIdentity.cs` holding that year as a constant. Everything else — the
+`AddInPlugin`, the document walk, the variant formatter — is compiled from
+`navisworks-adapter/`, once per year, into `Matchline.Extraction.Navisworks<year>`.
+
+The year drives the assembly name, the default install path
+(`C:\Program Files\Autodesk\Navisworks Manage <year>`) and
+`meta.adapter_version`. The plugin id does not vary (`MatchlineExtract.MTCH`):
+one adapter is deployed into one install, so two ids never meet. Two adapters
+dropped into the same `Plugins` folder would collide — deploy the folder whose
+name matches the assembly for that year.
+
+Three copies of the walk would be three chances to fix a bug twice, and the
+Autodesk surface it touches has been stable across these releases. If a future
+year genuinely needs a different call, split **that one file** into the year's
+own directory and drop it from the compile list in the `.props`; do not fork the
+directory.
+
+Only the 2025 adapter is in `Matchline.Extraction.sln`, because a solution build
+must not fail on a machine that has one Navisworks installed — an adapter
+project errors out when its own year's install is missing. Build the others by
+path, on a machine that has them:
+
+```
+msbuild native\navisworks-2026\Matchline.Extraction.Navisworks2026.csproj /p:Configuration=Release
+```
+
+Nothing in `navisworks-common` may ever reference Autodesk.
 
 Neither `navisworks-stubs/` nor `smoke/` is in the solution, deliberately: a
 solution build cannot pull in a fake Autodesk assembly, and the Windows box
@@ -93,18 +125,27 @@ be installed. Only the *build* is portable; the resulting exe is Windows-only.
 Two opt-in targets, neither in the solution. Both are build/test scaffolding and
 neither ever ships.
 
-**Type-check the plugin without Navisworks.** `navisworks-stubs/` declares only
-the Autodesk types and members the plugin actually names, all throwing
+**Type-check the adapters without Navisworks.** `navisworks-stubs/` declares only
+the Autodesk types and members the adapter source actually names, all throwing
 `NotImplementedException`. The property swaps the Autodesk `Reference` for a
 `ProjectReference` and redirects output to `bin/stub-verify/`:
 
 ```
+dotnet build native/navisworks-2024/Matchline.Extraction.Navisworks2024.csproj -p:UseNavisworksStubs=true
 dotnet build native/navisworks-2025/Matchline.Extraction.Navisworks2025.csproj -p:UseNavisworksStubs=true
+dotnet build native/navisworks-2026/Matchline.Extraction.Navisworks2026.csproj -p:UseNavisworksStubs=true
 ```
 
-A green build means the plugin's C# is valid and internally consistent with the
+All three compile the same source, so all three pass or all three fail together;
+building each one still proves its project file is wired up and produces the
+assembly name that year's plugin folder must be called.
+
+A green build means the adapter's C# is valid and internally consistent with the
 signatures the stub declares. It does **not** mean those signatures are right —
-they were written from the plugin, not from Autodesk.
+they were written from the adapter, not from Autodesk. What each year may
+honestly claim is recorded in `SupportedAdapters` (`navisworks-common`) and
+restated in [`docs/EXTRACTION.md`](../docs/EXTRACTION.md); today no year is
+verified, and the launcher warns `ADAPTER_UNVERIFIED` on every run because of it.
 
 **Run the Autodesk-free half for real.** `smoke/` compiles the launcher's own
 `CacheSchema.cs`, `CacheWriter.cs` and `CacheInspector.cs` (by path, not by

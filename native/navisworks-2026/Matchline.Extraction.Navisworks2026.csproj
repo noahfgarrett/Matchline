@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Navisworks 2026 version adapter.
+
+    Everything about it except the year comes from
+    native/navisworks-adapter/Matchline.Navisworks.Adapter.props, which also
+    holds the one copy of the Autodesk touching source. The year drives the
+    assembly name (Matchline.Extraction.Navisworks2026), the default install
+    path (C:\Program Files\Autodesk\Navisworks Manage 2026) and, through
+    AdapterIdentity.cs, meta.adapter_version = "navisworks-2026".
+
+    Support status: stub compiled, never run against a real Navisworks 2026.
+    SupportedAdapters in native/navisworks-common is the source of truth and the
+    launcher says so out loud; see docs/EXTRACTION.md.
+  -->
+  <PropertyGroup>
+    <MatchlineNavisworksYear>2026</MatchlineNavisworksYear>
+  </PropertyGroup>
+
+  <Import Project="..\navisworks-adapter\Matchline.Navisworks.Adapter.props" />
+
+</Project>

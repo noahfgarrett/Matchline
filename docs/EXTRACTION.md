@@ -37,11 +37,15 @@ Design calls, and why:
 ## Protocol (launcher stdout, JSON lines)
 
 ```
-{"type":"progress","stage":"hash|open|walk|convert|finalize","done":123,"total":4096}
+{"type":"progress","stage":"hash|detect|open|walk|convert|finalize","done":123,"total":4096}
+{"type":"progress","stage":"detect","done":1,"total":1,"detail":"Navisworks Manage 2025 (C:\\...) will open this file; expecting adapter navisworks-2025."}
 {"type":"warning","code":"...","message":"...","objectId":123}
 {"type":"result","status":"ok|cache-hit","cachePath":"...","objects":131000,"warnings":2}
 {"type":"error","code":"NW_VERSION_TOO_NEW|NW_NOT_INSTALLED|OPEN_FAILED|CANCELLED|...","message":"..."}
 ```
+
+`detail` is optional and carries a human-readable sentence; only the `detect` stage emits one
+today, and a reader must not require it on any stage.
 
 Cancellation: a single `cancel\n` line on launcher stdin → launcher kills the Navisworks
 process, deletes partials, exits with `{"type":"error","code":"CANCELLED"}`.
@@ -68,12 +72,40 @@ TypeScript package, zero npm dependencies (`node:sqlite`). Responsibilities:
 - Deterministic synthetic fixture: the "Dragon" site generator builds a small cache at test
   time (never a committed binary, never real project data).
 
-## Multi-version adapters (Phase 7 preview)
+## Multi-version adapters
 
-`native/navisworks-common` holds everything Autodesk-independent (DTOs, NDJSON protocol,
-cache conversion, ordering). Version adapters (`navisworks-2025`, later 2024/2026) contain
-only API-touching walk code, each referencing its product's install path. Adapter selection
-policy: newest installed Navisworks wins (see DECISIONS.md — no forward compatibility).
+`native/navisworks-common` holds everything Autodesk-independent: DTOs, the NDJSON protocol,
+cache conversion, ordering, the stream session (header meta, terminator, failure
+classification) and the warning policy. `native/navisworks-adapter` holds the single physical
+copy of the Autodesk-touching code — document walk, property and variant reads, selection-set
+traversal. Each supported year is a project that compiles that shared source into its own
+assembly (`Matchline.Extraction.Navisworks2024`, `…2025`, `…2026`) against its own install
+path. The only per-year source file is the release year itself, which is what stamps
+`meta.adapter_version` (`navisworks-2024` / `navisworks-2025` / `navisworks-2026`). The plugin
+id stays `MatchlineExtract.MTCH` for every year: one adapter is deployed per install, so two
+ids never meet.
+
+Selection policy: the launcher probes the default install locations, then picks the **newest
+installed year that Matchline has an adapter for**, preferring Manage over Simulate at the same
+year (DECISIONS.md — an NWD has no forward compatibility). It emits a `detect` progress line
+naming the product, year and install folder that will open the file, so a run is never
+ambiguous about which version produced the cache. `--navisworks-version <year>` pins a year;
+`--navisworks-dir <dir>` pins a folder. "No Navisworks installed" and "Navisworks installed,
+but no release Matchline has an adapter for" are different errors, and the second one lists
+what it found.
+
+**Verified support.** `SupportedAdapters` in `navisworks-common` is the single source of truth
+and the launcher reads it, so what the code claims and what this table says cannot drift:
+
+| Year       | Status                     | What that means                                                                                        |
+| ---------- | -------------------------- | ------------------------------------------------------------------------------------------------------ |
+| 2025       | `pending-real-proof`       | Compiles. The Windows proof run (WINDOWS-RUNBOOK.md) has not happened, so nothing has been extracted yet. |
+| 2024, 2026 | `stub-compiled-unverified` | Type-checks against `navisworks-stubs` only. Never built against, or run on, a real install of that year. |
+
+No year is `verified`. Until one is, the launcher emits an `ADAPTER_UNVERIFIED` warning naming
+the status on every run, and Matchline must not advertise that year as supported
+(RELEASE-1.0-PLAN.md). Flipping a year to `verified` is one edit in `SupportedAdapters`, taken
+with a recorded proof run in hand.
 
 ## Confidentiality
 

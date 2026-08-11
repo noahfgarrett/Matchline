@@ -25,6 +25,15 @@ namespace Matchline.Extraction.Protocol
     public static class ExtractionStages
     {
         public const string Hash = "hash";
+
+        /// <summary>
+        /// Which installed Navisworks was chosen. Its progress line carries a
+        /// <c>detail</c> string naming the product, year and install folder that
+        /// will open the file, so a run is never ambiguous about which version
+        /// produced the cache.
+        /// </summary>
+        public const string Detect = "detect";
+
         public const string Open = "open";
         public const string Walk = "walk";
         public const string Convert = "convert";

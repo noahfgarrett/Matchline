@@ -98,17 +98,14 @@ namespace Matchline.Extraction.Extractor
                     File.Delete(cachePath);
                 }
 
-                NavisworksInstall install = LocateNavisworks();
+                string locateFailure;
+                NavisworksInstall install = LocateNavisworks(out locateFailure);
                 if (install == null)
                 {
-                    return Fail(
-                        ExtractionErrorCodes.NavisworksNotInstalled,
-                        _arguments.NavisworksDirectory == null
-                            ? "No licensed Navisworks Manage or Simulate install was found. " +
-                              "Extraction requires one on this machine."
-                            : "No " + NavisworksLocator.ExecutableName + " under '" +
-                              _arguments.NavisworksDirectory + "'.");
+                    return Fail(ExtractionErrorCodes.NavisworksNotInstalled, locateFailure);
                 }
+
+                ReportDetected(install);
 
                 ThrowIfCancelled();
                 DeleteIfExists(streamPath);
@@ -200,14 +197,132 @@ namespace Matchline.Extraction.Extractor
             }
         }
 
-        private NavisworksInstall LocateNavisworks()
+        /// <summary>
+        /// Picks the Navisworks that will open this file, or explains why there
+        /// is none.
+        /// <para>
+        /// The three failures are deliberately different sentences: nothing
+        /// installed, something installed but no adapter for it, and the
+        /// specific year that was asked for not being installed. "Install
+        /// Navisworks" and "install a different Navisworks" are different jobs
+        /// for the person reading the message.
+        /// </para>
+        /// </summary>
+        private NavisworksInstall LocateNavisworks(out string failureMessage)
         {
+            failureMessage = null;
+
             if (!string.IsNullOrEmpty(_arguments.NavisworksDirectory))
             {
-                return NavisworksLocator.FromDirectory(_arguments.NavisworksDirectory);
+                // An explicit folder is the escape hatch for a non-default
+                // install, so it is trusted about *where*. It is still checked
+                // about *which*: a year with no adapter cannot open the file
+                // usefully, and the deployed plugin would not be there anyway.
+                NavisworksInstall chosen = NavisworksLocator.FromDirectory(_arguments.NavisworksDirectory);
+                if (chosen == null)
+                {
+                    failureMessage = "No " + NavisworksLocator.ExecutableName + " under '" +
+                        _arguments.NavisworksDirectory + "'.";
+                    return null;
+                }
+
+                if (chosen.Year != NavisworksLocator.UnknownYear && !chosen.IsSupported)
+                {
+                    failureMessage = chosen.Describe() +
+                        " is installed there, but Matchline has no adapter for that release. " +
+                        "Adapters exist for " + SupportedAdapters.YearList() + ".";
+                    return null;
+                }
+
+                return chosen;
             }
 
-            return NavisworksLocator.FindNewest();
+            List<NavisworksInstall> installs = NavisworksLocator.FindAll();
+            if (installs.Count == 0)
+            {
+                failureMessage = "No licensed Navisworks Manage or Simulate install was found. " +
+                    "Extraction requires one on this machine.";
+                return null;
+            }
+
+            if (_arguments.NavisworksYear.HasValue)
+            {
+                // Parsing already guaranteed this is a year with an adapter, so
+                // the only way to get here is that it is not installed.
+                int year = _arguments.NavisworksYear.Value;
+                NavisworksInstall chosen = NavisworksLocator.SelectYear(installs, year);
+                if (chosen == null)
+                {
+                    failureMessage = "Navisworks " + year.ToString(CultureInfo.InvariantCulture) +
+                        " was requested with --navisworks-version but is not installed. Found: " +
+                        NavisworksLocator.DescribeAll(installs) + ".";
+                    return null;
+                }
+
+                return chosen;
+            }
+
+            NavisworksInstall newest = NavisworksLocator.SelectNewestSupported(installs);
+            if (newest == null)
+            {
+                failureMessage = "Navisworks is installed, but not a release Matchline has an adapter for. " +
+                    "Found: " + NavisworksLocator.DescribeAll(installs) + ". " +
+                    "Adapters exist for " + SupportedAdapters.YearList() + ".";
+                return null;
+            }
+
+            return newest;
+        }
+
+        /// <summary>
+        /// Names the install that will open the file, and says plainly how far
+        /// that adapter has actually been proven.
+        /// <para>
+        /// Both halves matter. The detect line makes a run unambiguous about
+        /// which version produced the cache; the warning keeps the launcher from
+        /// implying support it has not earned (docs/RELEASE-1.0-PLAN.md: never
+        /// advertise unverified versions). It goes quiet by itself when
+        /// SupportedAdapters records a year as verified.
+        /// </para>
+        /// </summary>
+        private void ReportDetected(NavisworksInstall install)
+        {
+            AdapterSupport adapter = install.Adapter;
+
+            if (adapter == null)
+            {
+                // Only reachable through --navisworks-dir pointing at a folder
+                // whose name carries no year.
+                _reporter.Progress(
+                    ExtractionStages.Detect,
+                    1,
+                    1,
+                    install.Describe() + " will open this file; its release year could not be read from the " +
+                    "folder name, so the adapter version cannot be confirmed.");
+
+                _reporter.Warning(
+                    "ADAPTER_VERSION_UNKNOWN",
+                    "Matchline cannot tell which Navisworks release '" + install.InstallDirectory +
+                    "' is. The extraction will use whichever Matchline adapter is deployed there.",
+                    null);
+                return;
+            }
+
+            _reporter.Progress(
+                ExtractionStages.Detect,
+                1,
+                1,
+                install.Describe() + " will open this file; expecting adapter " + adapter.AdapterVersion + ".");
+
+            if (!adapter.IsVerified)
+            {
+                _reporter.Warning(
+                    "ADAPTER_UNVERIFIED",
+                    "The " + adapter.AdapterVersion + " adapter is " + adapter.VerificationStatus +
+                    ": it has not been proven against a real Navisworks " +
+                    install.Year.ToString(CultureInfo.InvariantCulture) + " install yet.",
+                    null);
+            }
         }
 
         private Dictionary<string, string> BuildLauncherMeta(FileInfo inputInfo, string sha256)

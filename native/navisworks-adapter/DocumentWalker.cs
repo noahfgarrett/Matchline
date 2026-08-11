@@ -4,9 +4,10 @@ using System.Globalization;
 using System.IO;
 using Autodesk.Navisworks.Api;
 using Matchline.Extraction.Ndjson;
+using Matchline.Extraction.Protocol;
 using Matchline.Extraction.Records;
 
-namespace Matchline.Extraction.Navisworks2025
+namespace Matchline.Extraction.NavisworksAdapter
 {
     /// <summary>
     /// Walks an open Navisworks document and streams it as NDJSON.
@@ -17,14 +18,21 @@ namespace Matchline.Extraction.Navisworks2025
     /// stream every time.
     /// </para>
     /// <para>
-    /// Failure policy: a per-item or per-property read failure becomes a warning
-    /// record and the walk continues. Only a failure that makes the whole walk
-    /// meaningless propagates out.
+    /// Failure policy lives in <see cref="WarningCollector"/>, which is shared
+    /// with every other year: a per-item or per-property read failure becomes a
+    /// warning record and the walk continues. Only a failure that makes the whole
+    /// walk meaningless propagates out.
+    /// </para>
+    /// <para>
+    /// Compiled once per supported year from this one file; nothing in it is
+    /// version-specific. If a future release needs a different call here, split
+    /// only this file per year rather than forking the directory.
     /// </para>
     /// </summary>
     internal sealed class DocumentWalker
     {
         private readonly NdjsonWriter _writer;
+        private readonly WarningCollector _warnings;
 
         /// <summary>
         /// Item -> assigned object id, used to resolve selection set membership
@@ -39,7 +47,6 @@ namespace Matchline.Extraction.Navisworks2025
         private readonly Dictionary<ModelItem, long> _objectIds = new Dictionary<ModelItem, long>();
 
         private long _nextObjectId = 1;
-        private long _warningCount;
 
         internal DocumentWalker(NdjsonWriter writer)
         {
@@ -49,6 +56,7 @@ namespace Matchline.Extraction.Navisworks2025
             }
 
             _writer = writer;
+            _warnings = new WarningCollector(writer);
         }
 
         internal long ObjectCount
@@ -58,7 +66,7 @@ namespace Matchline.Extraction.Navisworks2025
 
         internal long WarningCount
         {
-            get { return _warningCount; }
+            get { return _warnings.Count; }
         }
 
         internal void Walk(Document document)
@@ -90,7 +98,8 @@ namespace Matchline.Extraction.Navisworks2025
                 }
                 catch (Exception ex)
                 {
-                    Warn(WarningSeverity.Warning, WarningCodes.SourceModelReadFailed, Describe(ex), null);
+                    _warnings.WarnException(
+                        WarningSeverity.Warning, WarningCodes.SourceModelReadFailed, ex, null);
                     SourceModelRecord fallback = new SourceModelRecord();
                     fallback.Id = modelId;
                     _writer.WriteSourceModel(fallback);
@@ -105,7 +114,7 @@ namespace Matchline.Extraction.Navisworks2025
                 }
                 catch (Exception ex)
                 {
-                    Warn(WarningSeverity.Error, WarningCodes.SourceModelReadFailed, Describe(ex), null);
+                    _warnings.WarnException(WarningSeverity.Error, WarningCodes.SourceModelReadFailed, ex, null);
                 }
 
                 if (root != null)
@@ -153,46 +162,20 @@ namespace Matchline.Extraction.Navisworks2025
         /// Deliberate: the member name for this varies by release (SourceGuid /
         /// Guid / ModelGuid) and it is descriptive metadata, not control flow.
         /// Reflection keeps a wrong guess from being a compile error on a project
-        /// that cannot be compiled here. VERIFY-ON-WINDOWS (FULLY OPEN): the stub
-        /// build cannot check a reflective lookup, and the stub deliberately
-        /// declares none of these three so as not to fake an answer. Find the real
-        /// member during the proof run and replace this with the direct property.
+        /// that cannot be compiled here, and keeps this file identical across
+        /// years. VERIFY-ON-WINDOWS (FULLY OPEN): the stub build cannot check a
+        /// reflective lookup, and the stub deliberately declares none of these
+        /// three so as not to fake an answer. Find the real member during the
+        /// proof run and replace this with the direct property.
         /// </para>
         /// </summary>
         private static string ReadModelGuid(Model model)
         {
-            string[] candidates = { "SourceGuid", "Guid", "ModelGuid" };
-            for (int i = 0; i < candidates.Length; i++)
-            {
-                try
-                {
-                    System.Reflection.PropertyInfo property = typeof(Model).GetProperty(candidates[i]);
-                    if (property == null)
-                    {
-                        continue;
-                    }
-
-                    object value = property.GetValue(model, null);
-                    if (value == null)
-                    {
-                        continue;
-                    }
-
-                    string text = value.ToString();
-                    if (string.IsNullOrEmpty(text) || text == Guid.Empty.ToString())
-                    {
-                        continue;
-                    }
-
-                    return text;
-                }
-                catch (Exception)
-                {
-                    // Try the next candidate.
-                }
-            }
-
-            return null;
+            return ReflectionProbe.ReadString(
+                typeof(Model),
+                model,
+                new string[] { "SourceGuid", "Guid", "ModelGuid" },
+                Guid.Empty.ToString());
         }
 
         /// <summary>
@@ -230,7 +213,7 @@ namespace Matchline.Extraction.Navisworks2025
                 }
                 catch (Exception ex)
                 {
-                    Warn(WarningSeverity.Warning, WarningCodes.ItemReadFailed, Describe(ex), objectId);
+                    _warnings.WarnException(WarningSeverity.Warning, WarningCodes.ItemReadFailed, ex, objectId);
                     continue;
                 }
 
@@ -245,14 +228,11 @@ namespace Matchline.Extraction.Navisworks2025
         /// <summary>
         /// Writes one object record, then any warnings raised while building it.
         /// <para>
-        /// The order is deliberate. Reading an item's fields or its bounding box
-        /// can fail, and those warnings carry the item's object id; emitting them
-        /// first would put a <c>warnings</c> row referencing an <c>objects</c> row
-        /// that does not exist yet. The cache is written with
-        /// <c>PRAGMA foreign_keys</c> at its default of OFF, so today that is
-        /// only latent, but it makes the stream unreplayable against a cache with
-        /// enforcement on and it is free to avoid. Warnings raised after this
-        /// point (properties, children) are already correctly ordered.
+        /// The order is deliberate, and the reason is in
+        /// <see cref="WarningCollector"/>: a warning carrying this item's object
+        /// id must not reach the stream before the row it names exists.
+        /// Warnings raised after this point (properties, children) are already
+        /// correctly ordered and go out immediately.
         /// </para>
         /// </summary>
         private void EmitObject(Frame frame, long objectId, long sourceModelId)
@@ -263,8 +243,6 @@ namespace Matchline.Extraction.Navisworks2025
             record.ParentId = frame.ParentId;
             record.PathIndex = frame.PathIndex;
             record.Depth = frame.Depth;
-
-            List<WarningRecord> deferred = null;
 
             try
             {
@@ -291,27 +269,20 @@ namespace Matchline.Extraction.Navisworks2025
             }
             catch (Exception ex)
             {
-                Defer(ref deferred, WarningSeverity.Warning, WarningCodes.ItemReadFailed, Describe(ex), objectId);
+                _warnings.DeferException(WarningSeverity.Warning, WarningCodes.ItemReadFailed, ex, objectId);
             }
 
             // authoring_id stays null in Phase 1. Authoring-tool ids (Revit
             // element id and friends) arrive as ordinary properties; promoting
             // one into a column is a mapping decision, and mapping is Phase 2.
             record.AuthoringId = null;
-            record.BoundingBox = ReadBoundingBox(frame.Item, objectId, ref deferred);
+            record.BoundingBox = ReadBoundingBox(frame.Item, objectId);
 
             _writer.WriteObject(record);
-
-            if (deferred != null)
-            {
-                for (int i = 0; i < deferred.Count; i++)
-                {
-                    Emit(deferred[i]);
-                }
-            }
+            _warnings.FlushDeferred();
         }
 
-        private double[] ReadBoundingBox(ModelItem item, long objectId, ref List<WarningRecord> deferred)
+        private double[] ReadBoundingBox(ModelItem item, long objectId)
         {
             try
             {
@@ -337,7 +308,7 @@ namespace Matchline.Extraction.Navisworks2025
             }
             catch (Exception ex)
             {
-                Defer(ref deferred, WarningSeverity.Info, WarningCodes.BoundingBoxReadFailed, Describe(ex), objectId);
+                _warnings.DeferException(WarningSeverity.Info, WarningCodes.BoundingBoxReadFailed, ex, objectId);
                 return null;
             }
         }
@@ -358,7 +329,7 @@ namespace Matchline.Extraction.Navisworks2025
             }
             catch (Exception ex)
             {
-                Warn(WarningSeverity.Warning, WarningCodes.CategoryReadFailed, Describe(ex), objectId);
+                _warnings.WarnException(WarningSeverity.Warning, WarningCodes.CategoryReadFailed, ex, objectId);
             }
         }
 
@@ -376,7 +347,7 @@ namespace Matchline.Extraction.Navisworks2025
             }
             catch (Exception ex)
             {
-                Warn(WarningSeverity.Warning, WarningCodes.CategoryReadFailed, Describe(ex), objectId);
+                _warnings.WarnException(WarningSeverity.Warning, WarningCodes.CategoryReadFailed, ex, objectId);
                 return;
             }
 
@@ -412,13 +383,14 @@ namespace Matchline.Extraction.Navisworks2025
                     {
                         // Per EXTRACTION.md: a property that will not read is a
                         // warning, never an aborted extraction.
-                        Warn(WarningSeverity.Warning, WarningCodes.PropertyReadFailed, Describe(ex), objectId);
+                        _warnings.WarnException(
+                            WarningSeverity.Warning, WarningCodes.PropertyReadFailed, ex, objectId);
                     }
                 }
             }
             catch (Exception ex)
             {
-                Warn(WarningSeverity.Warning, WarningCodes.CategoryReadFailed, Describe(ex), objectId);
+                _warnings.WarnException(WarningSeverity.Warning, WarningCodes.CategoryReadFailed, ex, objectId);
             }
         }
 
@@ -435,7 +407,7 @@ namespace Matchline.Extraction.Navisworks2025
             }
             catch (Exception ex)
             {
-                Warn(WarningSeverity.Warning, WarningCodes.SelectionSetReadFailed, Describe(ex), null);
+                _warnings.WarnException(WarningSeverity.Warning, WarningCodes.SelectionSetReadFailed, ex, null);
                 return;
             }
 
@@ -473,7 +445,7 @@ namespace Matchline.Extraction.Navisworks2025
             }
             catch (Exception ex)
             {
-                Warn(WarningSeverity.Warning, WarningCodes.SelectionSetReadFailed, Describe(ex), null);
+                _warnings.WarnException(WarningSeverity.Warning, WarningCodes.SelectionSetReadFailed, ex, null);
                 return;
             }
 
@@ -514,7 +486,7 @@ namespace Matchline.Extraction.Navisworks2025
                         // whole model, which can cost minutes on a large NWD.
                         // Phase 1 records the set and leaves membership to the
                         // reading side.
-                        Warn(
+                        _warnings.Warn(
                             WarningSeverity.Info,
                             WarningCodes.SearchSetNotResolved,
                             "Search set '" + record.Name + "' recorded without members.",
@@ -523,7 +495,7 @@ namespace Matchline.Extraction.Navisworks2025
                 }
                 catch (Exception ex)
                 {
-                    Warn(WarningSeverity.Warning, WarningCodes.SelectionSetReadFailed, Describe(ex), null);
+                    _warnings.WarnException(WarningSeverity.Warning, WarningCodes.SelectionSetReadFailed, ex, null);
                 }
             }
         }
@@ -543,7 +515,7 @@ namespace Matchline.Extraction.Navisworks2025
             }
             catch (Exception ex)
             {
-                Warn(WarningSeverity.Warning, WarningCodes.SelectionSetReadFailed, Describe(ex), null);
+                _warnings.WarnException(WarningSeverity.Warning, WarningCodes.SelectionSetReadFailed, ex, null);
                 return;
             }
 
@@ -566,7 +538,7 @@ namespace Matchline.Extraction.Navisworks2025
 
             if (unresolved > 0)
             {
-                Warn(
+                _warnings.Warn(
                     WarningSeverity.Warning,
                     WarningCodes.SelectionSetMemberUnresolved,
                     unresolved.ToString(CultureInfo.InvariantCulture) +
@@ -576,57 +548,9 @@ namespace Matchline.Extraction.Navisworks2025
             }
         }
 
-        private void Warn(string severity, string code, string message, long? objectId)
-        {
-            Emit(Build(severity, code, message, objectId));
-        }
-
-        /// <summary>
-        /// Queues a warning that must not be written until the object row it
-        /// references exists. See <see cref="EmitObject"/>.
-        /// </summary>
-        private static void Defer(
-            ref List<WarningRecord> deferred, string severity, string code, string message, long? objectId)
-        {
-            if (deferred == null)
-            {
-                deferred = new List<WarningRecord>();
-            }
-
-            deferred.Add(Build(severity, code, message, objectId));
-        }
-
-        private static WarningRecord Build(string severity, string code, string message, long? objectId)
-        {
-            WarningRecord record = new WarningRecord();
-            record.Severity = severity;
-            record.Code = code;
-            record.Message = message ?? string.Empty;
-            record.ObjectId = objectId;
-            return record;
-        }
-
-        private void Emit(WarningRecord record)
-        {
-            // Counted on emit, not on creation, so the count in the end record
-            // always equals the number of warning lines in the stream.
-            _warningCount++;
-            _writer.WriteWarning(record);
-        }
-
         private static string SafeString(string value)
         {
             return string.IsNullOrEmpty(value) ? null : value;
-        }
-
-        private static string Describe(Exception ex)
-        {
-            if (ex == null)
-            {
-                return "unknown failure";
-            }
-
-            return ex.GetType().Name + ": " + ex.Message;
         }
 
         private sealed class Frame

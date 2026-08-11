@@ -3,9 +3,10 @@
   <!--
     ============================ NOT SHIPPED ============================
     Build-verification scaffolding. This project fakes just enough of
-    Autodesk.Navisworks.Api for the compiler to type-check
-    native/navisworks-2025 on a machine with no Navisworks install. It has no
-    behaviour: every stubbed member throws NotImplementedException.
+    Autodesk.Navisworks.Api for the compiler to type-check the version adapters
+    (native/navisworks-2024, -2025 and -2026, all compiled from the shared source
+    in native/navisworks-adapter) on a machine with no Navisworks install. It has
+    no behaviour: every stubbed member throws NotImplementedException.
 
     It is NOT in native/Matchline.Extraction.sln, on purpose. Building the real
     solution can never pull it in. The only way to use it is to ask for it

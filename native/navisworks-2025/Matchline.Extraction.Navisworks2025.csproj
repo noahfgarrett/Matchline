@@ -1,101 +1,24 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Navisworks 2025 version adapter: the AddInPlugin that walks the open
-    document and streams NDJSON. Everything Autodesk-independent lives in
-    Matchline.Extraction.Common.
+    Navisworks 2025 version adapter: the year the Phase 1 Windows proof run
+    targets (docs/WINDOWS-RUNBOOK.md).
 
-    Build against another install (or another year, once 2024/2026 adapters
-    exist) by overriding NavisworksInstallDir on the command line:
+    Everything about it except the year comes from
+    native/navisworks-adapter/Matchline.Navisworks.Adapter.props, which also
+    holds the one copy of the Autodesk touching source. The year drives the
+    assembly name (Matchline.Extraction.Navisworks2025), the default install
+    path (C:\Program Files\Autodesk\Navisworks Manage 2025) and, through
+    AdapterIdentity.cs, meta.adapter_version = "navisworks-2025".
 
-      msbuild native\Matchline.Extraction.sln /p:Configuration=Release ^
-        /p:NavisworksInstallDir="C:\Program Files\Autodesk\Navisworks Simulate 2025"
+    Support status: compiles, proof run still pending. SupportedAdapters in
+    native/navisworks-common is the source of truth and the launcher says so out
+    loud; see docs/EXTRACTION.md.
   -->
   <PropertyGroup>
-    <TargetFramework>net48</TargetFramework>
-    <AssemblyName>Matchline.Extraction.Navisworks2025</AssemblyName>
-    <RootNamespace>Matchline.Extraction.Navisworks2025</RootNamespace>
-    <OutputType>Library</OutputType>
-    <!-- Navisworks is x64-only; an AnyCPU plugin would still load, but pinning
-         keeps the plugin and the launcher on the same bitness story. -->
-    <PlatformTarget>x64</PlatformTarget>
-    <!-- Flat bin\<Config>\ output: the deployment step in
-         docs/WINDOWS-RUNBOOK.md copies that folder wholesale. -->
-    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <MatchlineNavisworksYear>2025</MatchlineNavisworksYear>
   </PropertyGroup>
 
-  <!--
-    VERIFY-ON-WINDOWS: Navisworks discovers plugins in a Plugins folder, one
-    subfolder per plugin, where the subfolder name must match the assembly name:
-      <Plugins>\Matchline.Extraction.Navisworks2025\Matchline.Extraction.Navisworks2025.dll
-    Matchline.Extraction.Common.dll must sit beside it. Which Plugins root is
-    honoured (install dir vs %APPDATA%) is one of the things the proof run
-    settles; see docs/WINDOWS-RUNBOOK.md.
-  -->
-
-  <PropertyGroup>
-    <NavisworksInstallDir Condition=" '$(NavisworksInstallDir)' == '' ">C:\Program Files\Autodesk\Navisworks Manage 2025</NavisworksInstallDir>
-  </PropertyGroup>
-
-  <!--
-    Compile-verification escape hatch. Off unless asked for by name:
-
-      dotnet build native/navisworks-2025/Matchline.Extraction.Navisworks2025.csproj \
-        -p:UseNavisworksStubs=true
-
-    With it on, the Autodesk reference is swapped for native/navisworks-stubs
-    (a hand-written, implementation-free Autodesk.Navisworks.Api) so this
-    project type-checks on a machine with no Navisworks. That project is NOT in
-    Matchline.Extraction.sln, so a normal solution build cannot reach it.
-
-    Output is redirected to bin\stub-verify\ and obj\stub-verify\ so a stub
-    build can never be confused with the plugin the runbook deploys, and so it
-    cannot leave stale intermediates behind for the real build.
-
-    A green stub build proves the plugin's C# is valid and internally
-    consistent. It does not validate the stubbed signatures themselves; that is
-    still the Windows proof run's job.
-  -->
-  <PropertyGroup Condition=" '$(UseNavisworksStubs)' == 'true' ">
-    <OutputPath>bin\stub-verify\$(Configuration)\</OutputPath>
-    <IntermediateOutputPath>obj\stub-verify\$(Configuration)\</IntermediateOutputPath>
-    <DefineConstants>$(DefineConstants);MATCHLINE_NAVISWORKS_STUBS</DefineConstants>
-  </PropertyGroup>
-
-  <ItemGroup Condition=" '$(UseNavisworksStubs)' != 'true' ">
-    <!-- Private=false: never copy Autodesk assemblies next to our plugin. The
-         host process already has them loaded and a stale local copy is a classic
-         source of "method not found" at runtime. -->
-    <Reference Include="Autodesk.Navisworks.Api">
-      <HintPath>$(NavisworksInstallDir)\Autodesk.Navisworks.Api.dll</HintPath>
-      <Private>false</Private>
-      <SpecificVersion>false</SpecificVersion>
-    </Reference>
-  </ItemGroup>
-
-  <ItemGroup Condition=" '$(UseNavisworksStubs)' == 'true' ">
-    <!-- Private=false for the same reason, and one more: it keeps a DLL named
-         Autodesk.Navisworks.Api.dll with no implementation in it out of any
-         folder anyone might deploy. -->
-    <ProjectReference Include="..\navisworks-stubs\Matchline.Navisworks.ApiStubs.csproj">
-      <Private>false</Private>
-    </ProjectReference>
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\navisworks-common\Matchline.Extraction.Common.csproj" />
-  </ItemGroup>
-
-  <Target Name="MatchlineCheckNavisworksReference"
-          BeforeTargets="ResolveAssemblyReferences"
-          Condition=" '$(UseNavisworksStubs)' != 'true' ">
-    <Error Condition="!Exists('$(NavisworksInstallDir)\Autodesk.Navisworks.Api.dll')"
-           Text="Autodesk.Navisworks.Api.dll was not found under '$(NavisworksInstallDir)'. Install Navisworks Manage/Simulate 2025, or pass /p:NavisworksInstallDir=&quot;...&quot; pointing at the install folder." />
-  </Target>
-
-  <Target Name="MatchlineWarnStubBuild" BeforeTargets="Build" Condition=" '$(UseNavisworksStubs)' == 'true' ">
-    <Warning Text="Building against native/navisworks-stubs. The output in $(OutputPath) is a compile check only and must never be deployed." />
-  </Target>
+  <Import Project="..\navisworks-adapter\Matchline.Navisworks.Adapter.props" />
 
 </Project>

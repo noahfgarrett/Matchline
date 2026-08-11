@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using Matchline.Extraction.Protocol;
 
 namespace Matchline.Extraction.Extractor
 {
@@ -24,20 +25,46 @@ namespace Matchline.Extraction.Extractor
         /// <summary>"Manage" or "Simulate", or "Unknown" for an explicit override.</summary>
         internal string Product { get; private set; }
 
+        /// <summary>Release year, or <see cref="NavisworksLocator.UnknownYear"/>.</summary>
         internal int Year { get; private set; }
+
+        /// <summary>
+        /// What Matchline can honestly claim about this year, or null when there
+        /// is no adapter for it. Single source of truth: SupportedAdapters.
+        /// </summary>
+        internal AdapterSupport Adapter
+        {
+            get { return SupportedAdapters.ForYear(Year); }
+        }
+
+        internal bool IsSupported
+        {
+            get { return Adapter != null; }
+        }
 
         internal string Describe()
         {
-            return Product + " " + Year.ToString(CultureInfo.InvariantCulture) + " (" + InstallDirectory + ")";
+            string year = Year == NavisworksLocator.UnknownYear
+                ? "(unknown year)"
+                : Year.ToString(CultureInfo.InvariantCulture);
+
+            return "Navisworks " + Product + " " + year + " (" + InstallDirectory + ")";
         }
     }
 
     /// <summary>
-    /// Finds an installed Navisworks.
+    /// Finds every installed Navisworks, and picks the one that will open the
+    /// file.
     /// <para>
-    /// Policy (DECISIONS.md): newest installed version wins, and Manage is
-    /// preferred over Simulate at the same year. Freedom is never a candidate --
-    /// it has no API.
+    /// Policy (DECISIONS.md): an NWD has no forward compatibility, so the newest
+    /// installed version wins, and Manage is preferred over Simulate at the same
+    /// year. Freedom is never a candidate -- it has no API.
+    /// </para>
+    /// <para>
+    /// Years outside <see cref="SupportedAdapters"/> are probed too, and
+    /// deliberately so: finding a Navisworks Matchline has no adapter for is a
+    /// different failure from finding none at all, and the error can only say
+    /// which it is if the probe looked.
     /// </para>
     /// <para>
     /// Phase 1 probes the default install locations rather than the registry.
@@ -51,9 +78,19 @@ namespace Matchline.Extraction.Extractor
     {
         internal const string ExecutableName = "Roamer.exe";
 
-        /// <summary>Years this launcher will consider, newest first.</summary>
-        private static readonly int[] SupportedYears = { 2026, 2025, 2024, 2023, 2022, 2021 };
+        /// <summary>Year of an install whose folder name does not carry one.</summary>
+        internal const int UnknownYear = 0;
 
+        /// <summary>
+        /// Probe range, newest first. It reaches past the supported years on both
+        /// sides on purpose: a 2023 or a 2029 install must be reported as "found,
+        /// no adapter", never as "nothing installed".
+        /// </summary>
+        private const int NewestProbedYear = 2029;
+
+        private const int OldestProbedYear = 2021;
+
+        /// <summary>Manage first: same year, richer product, same API surface.</summary>
         private static readonly string[] Products = { "Manage", "Simulate" };
 
         /// <summary>
@@ -81,33 +118,105 @@ namespace Matchline.Extraction.Extractor
             return new NavisworksInstall(directory, executable, product, year);
         }
 
-        /// <summary>Newest installed Navisworks, or null when none is found.</summary>
-        internal static NavisworksInstall FindNewest()
+        /// <summary>
+        /// Every Navisworks found in a default location, best candidate first:
+        /// newest year, and Manage before Simulate within a year. Never null.
+        /// </summary>
+        internal static List<NavisworksInstall> FindAll()
         {
-            foreach (string root in ProgramFilesRoots())
+            List<NavisworksInstall> found = new List<NavisworksInstall>();
+            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            List<string> roots = ProgramFilesRoots();
+
+            // Year is the outermost loop, so the newest install wins regardless
+            // of which Program Files root it happens to live under.
+            for (int year = NewestProbedYear; year >= OldestProbedYear; year--)
             {
-                for (int y = 0; y < SupportedYears.Length; y++)
+                for (int p = 0; p < Products.Length; p++)
                 {
-                    for (int p = 0; p < Products.Length; p++)
+                    for (int r = 0; r < roots.Count; r++)
                     {
                         string directory = Path.Combine(
-                            root,
+                            roots[r],
                             "Autodesk",
-                            "Navisworks " + Products[p] + " " + SupportedYears[y].ToString(CultureInfo.InvariantCulture));
+                            "Navisworks " + Products[p] + " " + year.ToString(CultureInfo.InvariantCulture));
 
                         string executable = Path.Combine(directory, ExecutableName);
-                        if (File.Exists(executable))
+                        if (File.Exists(executable) && seen.Add(directory))
                         {
-                            return new NavisworksInstall(directory, executable, Products[p], SupportedYears[y]);
+                            found.Add(new NavisworksInstall(directory, executable, Products[p], year));
                         }
                     }
+                }
+            }
+
+            return found;
+        }
+
+        /// <summary>
+        /// The install that will open the file: newest year Matchline has an
+        /// adapter for. Null when none of the installs qualifies.
+        /// </summary>
+        internal static NavisworksInstall SelectNewestSupported(IList<NavisworksInstall> installs)
+        {
+            if (installs == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < installs.Count; i++)
+            {
+                if (installs[i].IsSupported)
+                {
+                    return installs[i];
                 }
             }
 
             return null;
         }
 
-        private static IEnumerable<string> ProgramFilesRoots()
+        /// <summary>The best install for one specific year, or null when it is not installed.</summary>
+        internal static NavisworksInstall SelectYear(IList<NavisworksInstall> installs, int year)
+        {
+            if (installs == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < installs.Count; i++)
+            {
+                if (installs[i].Year == year)
+                {
+                    return installs[i];
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>Human-readable list for an error message. "" when nothing was found.</summary>
+        internal static string DescribeAll(IList<NavisworksInstall> installs)
+        {
+            if (installs == null || installs.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            string text = string.Empty;
+            for (int i = 0; i < installs.Count; i++)
+            {
+                if (text.Length > 0)
+                {
+                    text += "; ";
+                }
+
+                text += installs[i].Describe();
+            }
+
+            return text;
+        }
+
+        private static List<string> ProgramFilesRoots()
         {
             List<string> roots = new List<string>(2);
             string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
@@ -140,7 +249,7 @@ namespace Matchline.Extraction.Extractor
                 }
             }
 
-            return 0;
+            return UnknownYear;
         }
     }
 }

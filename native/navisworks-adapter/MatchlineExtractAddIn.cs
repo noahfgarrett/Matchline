@@ -1,13 +1,11 @@
 using System;
-using System.Globalization;
 using System.IO;
 using Autodesk.Navisworks.Api;
 using Autodesk.Navisworks.Api.Plugins;
 using Matchline.Extraction.Ndjson;
 using Matchline.Extraction.Protocol;
-using Matchline.Extraction.Records;
 
-namespace Matchline.Extraction.Navisworks2025
+namespace Matchline.Extraction.NavisworksAdapter
 {
     /// <summary>
     /// Headless extraction plugin. Navisworks is started by the launcher with
@@ -20,14 +18,19 @@ namespace Matchline.Extraction.Navisworks2025
     ///   [1] input NWD path (optional; used only as a fallback open and for meta)
     ///
     /// ---------------------------------------------------------------------
-    /// UNVERIFIED AGAINST THE REAL API. Every Autodesk call in this project was
-    /// written on a machine with no Navisworks. It now compiles, but only
+    /// This file is compiled once per supported Navisworks year, into
+    /// Matchline.Extraction.Navisworks2024/2025/2026. The only per-year source
+    /// is AdapterIdentity.cs, which carries the year and nothing else. See
+    /// native/README.md.
+    ///
+    /// UNVERIFIED AGAINST THE REAL API. Every Autodesk call in this directory
+    /// was written on a machine with no Navisworks. It compiles, but only
     /// against native/navisworks-stubs, a hand-written stand-in whose signatures
     /// were derived from this code rather than from Autodesk. So the compiler
     /// has checked that the plugin is internally consistent, not that it is
     /// right. The first build on Windows is still part of the Phase 1 proof.
-    /// Each // VERIFY-ON-WINDOWS: comment now says whether the stub pins its
-    /// shape or leaves it fully open; docs/WINDOWS-RUNBOOK.md is the checklist.
+    /// Each // VERIFY-ON-WINDOWS: comment says whether the stub pins its shape
+    /// or leaves it fully open; docs/WINDOWS-RUNBOOK.md is the checklist.
     /// ---------------------------------------------------------------------
     /// </summary>
     // VERIFY-ON-WINDOWS (shape pinned by the stub build: PluginAttribute takes
@@ -35,6 +38,11 @@ namespace Matchline.Extraction.Navisworks2025
     // pinned, and it is the part that actually fails silently: that the
     // command-line id Navisworks expects is "name.developerId". Confirm the
     // plugin is discovered at all before debugging anything else.
+    //
+    // The id is deliberately the same for every year: one Matchline adapter is
+    // deployed into one Navisworks install, so the ids never meet. Two adapters
+    // dropped into the same Plugins folder would collide, which is why the
+    // runbook deploys the folder whose name matches the assembly for that year.
     [Plugin(ExtractionPlugin.Name, ExtractionPlugin.DeveloperId,
         DisplayName = "Matchline Extract",
         ToolTip = "Streams model metadata to an NDJSON file")]
@@ -47,54 +55,49 @@ namespace Matchline.Extraction.Navisworks2025
     [AddInPlugin(AddInLocation.AddIn)]
     public sealed class MatchlineExtractAddIn : AddInPlugin
     {
-        /// <summary>Stamped into meta.adapter_version.</summary>
-        public const string AdapterVersion = "navisworks-2025";
-
-        private const int ExitOk = 0;
-        private const int ExitFailed = 1;
-        private const int ExitBadParameters = 2;
+        /// <summary>Stamped into meta.adapter_version, e.g. "navisworks-2025".</summary>
+        internal static string AdapterVersion
+        {
+            get { return SupportedAdapters.AdapterVersionForYear(AdapterIdentity.Year); }
+        }
 
         public override int Execute(params string[] parameters)
         {
             string outputPath = parameters != null && parameters.Length > 0 ? parameters[0] : null;
             string inputPath = parameters != null && parameters.Length > 1 ? parameters[1] : null;
 
-            if (string.IsNullOrEmpty(outputPath))
+            // Stream lifetime, the terminator record and failure classification
+            // are identical for every year and live in the Autodesk-free half.
+            return ExtractionSession.Run(outputPath, new Workload(inputPath));
+        }
+
+        /// <summary>
+        /// The Autodesk-touching part, and the only part: open the document,
+        /// name it in the header, walk it.
+        /// </summary>
+        private sealed class Workload : IExtractionWorkload
+        {
+            private readonly string _inputPath;
+
+            internal Workload(string inputPath)
             {
-                // Nowhere to write, so nowhere to report. The launcher sees an
-                // absent stream file and reports EXTRACT_FAILED.
-                return ExitBadParameters;
+                _inputPath = inputPath;
             }
 
-            NdjsonWriter writer = null;
-            try
+            public ExtractionCounts Run(NdjsonWriter writer)
             {
-                writer = NdjsonWriter.CreateFile(outputPath);
+                Document document = PrepareDocument(_inputPath);
 
-                Document document = PrepareDocument(inputPath);
-                WriteHeaderMeta(writer, document, inputPath);
+                ExtractionHeader.Write(
+                    writer,
+                    AdapterVersion,
+                    ProductVersion(),
+                    _inputPath,
+                    DocumentPath(document));
 
                 DocumentWalker walker = new DocumentWalker(writer);
                 walker.Walk(document);
-
-                EndRecord end = new EndRecord();
-                end.Ok = true;
-                end.ObjectCount = walker.ObjectCount;
-                end.WarningCount = walker.WarningCount;
-                writer.WriteEnd(end);
-                return ExitOk;
-            }
-            catch (Exception ex)
-            {
-                TryWriteFailure(writer, ex);
-                return ExitFailed;
-            }
-            finally
-            {
-                if (writer != null)
-                {
-                    writer.Dispose();
-                }
+                return new ExtractionCounts(walker.ObjectCount, walker.WarningCount);
             }
         }
 
@@ -136,28 +139,22 @@ namespace Matchline.Extraction.Navisworks2025
             return document;
         }
 
-        private static void WriteHeaderMeta(NdjsonWriter writer, Document document, string inputPath)
+        /// <summary>
+        /// Path of the open document, or null. Only ever used to derive a file
+        /// name; ExtractionHeader is what enforces that no directory is recorded.
+        /// </summary>
+        private static string DocumentPath(Document document)
         {
-            writer.WriteMeta(CacheMetaKeys.AdapterVersion, AdapterVersion);
-            writer.WriteMeta(CacheMetaKeys.NavisworksVersion, NavisworksVersionString());
-
-            // File name only, never a directory (EXTRACTION.md, confidentiality).
-            string fileName = null;
-            if (!string.IsNullOrEmpty(inputPath))
-            {
-                fileName = Path.GetFileName(inputPath);
-            }
-            else if (!string.IsNullOrEmpty(document.FileName))
+            try
             {
                 // VERIFY-ON-WINDOWS (shape pinned by the stub build:
                 // Document.FileName is a string property). NOT pinned: that it
                 // holds the path of the currently open file.
-                fileName = Path.GetFileName(document.FileName);
+                return document.FileName;
             }
-
-            if (!string.IsNullOrEmpty(fileName))
+            catch (Exception)
             {
-                writer.WriteMeta(CacheMetaKeys.InputFileName, fileName);
+                return null;
             }
         }
 
@@ -166,73 +163,19 @@ namespace Matchline.Extraction.Navisworks2025
         /// <para>
         /// Deliberate: the shape of Application.Version differs across releases
         /// and this value is descriptive metadata, not control flow. Reflection
-        /// keeps a wrong guess from being a compile error. VERIFY-ON-WINDOWS
-        /// (FULLY OPEN): a reflective lookup is invisible to the compiler, so the
-        /// stub build says nothing here. Check what this actually produces and
+        /// keeps a wrong guess from being a compile error, and keeps this file
+        /// identical for 2024, 2025 and 2026. VERIFY-ON-WINDOWS (FULLY OPEN): a
+        /// reflective lookup is invisible to the compiler, so the stub build says
+        /// nothing here. Check what this actually produces on each year, and
         /// consider replacing it with the direct property once confirmed.
         /// </para>
         /// </summary>
-        private static string NavisworksVersionString()
+        private static string ProductVersion()
         {
-            try
-            {
-                System.Reflection.PropertyInfo property = typeof(Application).GetProperty(
-                    "Version",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-                if (property == null)
-                {
-                    return "unknown";
-                }
+            string version = ReflectionProbe.ReadString(
+                typeof(Application), null, new string[] { "Version" }, null);
 
-                object value = property.GetValue(null, null);
-                if (value == null)
-                {
-                    return "unknown";
-                }
-
-                string text = value.ToString();
-                return string.IsNullOrEmpty(text) ? "unknown" : text;
-            }
-            catch (Exception)
-            {
-                return "unknown";
-            }
-        }
-
-        private static void TryWriteFailure(NdjsonWriter writer, Exception ex)
-        {
-            if (writer == null)
-            {
-                return;
-            }
-
-            try
-            {
-                EndRecord end = new EndRecord();
-                end.Ok = false;
-                end.Code = FailureClassifier.ClassifyException(ex, ExtractionErrorCodes.ExtractFailed);
-                end.Message = Describe(ex);
-                writer.WriteEnd(end);
-            }
-            catch (Exception)
-            {
-                // The stream is already lost; the launcher's "no end record"
-                // path covers this.
-            }
-        }
-
-        private static string Describe(Exception ex)
-        {
-            if (ex == null)
-            {
-                return "unknown failure";
-            }
-
-            return string.Format(
-                CultureInfo.InvariantCulture,
-                "{0}: {1}",
-                ex.GetType().Name,
-                ex.Message);
+            return version ?? ExtractionHeader.UnknownProductVersion;
         }
     }
 }
