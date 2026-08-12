@@ -45,6 +45,14 @@ Windows build. Extraction is exercised for real on Noah's first runbook run.
 
 ## Log
 
+### 2026-08-11 — 1.0.0-rc.1 assembled
+All ten milestones' code work complete; suite 2155/0 at the rc commit; acceptance
+44/44 wired into npm test; a fresh clean-room clone verification is running and its
+result will be recorded here; unsigned rc.1 installers built. Verdict: READY FOR
+1.0.0-RC ONLY — remaining gates are the real Navisworks proof (runbook +
+navisworks-proof workflow), the signing certificate + release secrets, and the
+clean-machine install. See the gate tracker in RELEASE-1.0-PLAN.md.
+
 ### 2026-08-11 — 1.0 hardening campaign, in progress (branch `claude/matchline-1.0.0-hardening-20260810`)
 
 Directive and live gate tracker: **docs/RELEASE-1.0-PLAN.md**. Baseline for the campaign

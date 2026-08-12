@@ -59,7 +59,7 @@ export const PROJECT_SCHEMA_VERSION = 6;
  * repository version so a project written by a test or a script still records
  * something truthful.
  */
-export const DEFAULT_APP_VERSION = '0.8.1';
+export const DEFAULT_APP_VERSION = '1.0.0-rc.1';
 
 /** Meta keys every v1 project file declares. */
 export const REQUIRED_META_KEYS = [

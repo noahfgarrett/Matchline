@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.0.0-rc.1 — 2026-08-11 — release candidate
+
+The 1.0 hardening campaign (docs/RELEASE-1.0-PLAN.md), all nine P0 findings landed:
+
+- Multi-model universe: many NWD/NWC/NWF sources per project, split or federated,
+  duplicate basenames and cross-source duplicate tags handled; equivalent output
+  proven for split vs federated organization. Project schema v4.
+- In-app extraction: drop a raw model on Windows and it extracts — serial queue,
+  streaming SHA-256, live stage progress, cancellation, full plain-language error
+  vocabulary. Tested against a protocol-faithful fake launcher.
+- Stable asset identity: a persisted ledger keyed on model evidence (stable-id
+  property, authoring ids, instance GUIDs, structural keys) so tag corrections keep
+  the asset, decisions survive, and diffs report renames. Schema v5.
+- Manual parents now honor boundaries: strongest candidate, wins the ladder, folds
+  like everything else; cross-boundary manual becomes a dependency with full
+  provenance and a review item.
+- Default hierarchy: Building and System are boundaries, SSM Discipline is visible
+  but nonstructural; level key, display and boundary attributes are separate fields.
+- SiteProfileV2: one versioned document for the whole site rule set — chains with
+  per-source overrides, source-assignment rules, derived attributes (seven resolver
+  kinds), identity, ladder, projection. Profile package format v2; v1 imports
+  migrate. Schema v6.
+- Quick Setup with data-driven suggestions; chain, derived-attribute and
+  assignment-rule editors; pre-publication boundary confirmation.
+- Compile runs in a worker thread with Stop; async project open; scale-proven at
+  280k objects / 40k assets / 1.28M property rows.
+- Search sets resolved in the adapter (cache schema v2) with an honest three-state
+  contract; unresolved sets refuse filtering and block publication.
+- Navisworks 2024/2025/2026 adapters from one shared source; newest-installed
+  selection; support claims limited to what is actually verified (nothing yet).
+- CI: ubuntu/macos/windows matrix, native smoke, packaging smoke, self-hosted
+  proof workflow, release workflow that refuses to ship unsigned.
+- 0.8.1 projects migrate end to end (v3 through v6) with backup and no decision loss.
+- Suite: 2155 tests, 0 failures. UNSIGNED build; the real Navisworks proof, code
+  signing, and the updater are the remaining gates to 1.0.0.
+
 ## 0.8.1 — 2026-08-09 — registry-ready polish
 
 - EXTO template mode: capture your registry workbook layout into the local profile;

@@ -1,8 +1,8 @@
 {
   "name": "@matchline/desktop",
-  "version": "0.8.1",
+  "version": "1.0.0-rc.1",
   "private": true,
-  "description": "Matchline \u2014 model-first commissioning hierarchy and MEL compiler",
+  "description": "Matchline — model-first commissioning hierarchy and MEL compiler",
   "author": "Matchline",
   "type": "module",
   "main": "./dist/electron/main.js",
