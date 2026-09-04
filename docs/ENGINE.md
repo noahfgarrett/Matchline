@@ -43,7 +43,11 @@ MEL workbook ─▶ spreadsheet-import ─▶ system-resolver ─▶ SystemResol
   chain takes the first success for the *resolved* value but KEEPS all claims. Disagreement
   between components = System Conflict review item unless profile precedence explicitly
   covers it. Normalization transforms (`trim`, `uppercase`, `stripPrefix`, `padStart`,
-  `alias`) are explicit profile steps — never silent (leading zeros!). System identifiers
+  `alias`, `unicodeFold`) are explicit profile steps — never silent (leading zeros!).
+  `unicodeFold` is the one shared implementation (`@matchline/domain`): NFKC, zero-width
+  strip, dash-family fold, NBSP, whitespace around hyphens, run identically by identity and
+  by the resolver, because a tag that folds one way in one stage and another way in the
+  other joins in one and not the other. System identifiers
   are strings, always. Also builds the System Catalog from a supplied MEL (systemKey →
   description, aliases, multi-description conflicts as review items).
 - **`@matchline/mel-export`** — canonical generated MEL: the §12.1 field list as typed rows
@@ -102,10 +106,16 @@ observations + identity + anatomy + role graph + learned rules
   locked profiles persist nothing (donor invariant 5).
 - **`@matchline/ssm-compiler`** — resolution + fold + projection:
   1. **Parent ladder** (§11.1, profile-reorderable): manual override → explicit model
-     relationship → profile lookup → flow-anchored family → family+role → accepted learned
-     model → prior SSM example → model-tree suggestion → root of grouping. First tier with
-     exactly one candidate wins; a tier with >1 equal candidates = ambiguous-parent review
-     item and the ladder STOPS (no fall-through guessing — same rule as identity).
+     relationship → MEL System Parent → profile lookup → flow-anchored family → family+role
+     → accepted learned model → prior SSM example → model-tree suggestion → root of
+     grouping. First tier with exactly one candidate wins; a tier with >1 equal candidates =
+     ambiguous-parent review item and the ladder STOPS (no fall-through guessing — same rule
+     as identity). The `mel-parent` rung reads the MEL's own "System Parent" column (the
+     donor's primary structural source): the first tag a row states is the nesting claim,
+     any further tags are dependencies. It is in `LADDER_SOURCE_ORDER` and in a new draft,
+     and deliberately NOT inserted into a profile stored before it existed
+     (`LADDER_SOURCE_ORDER_BEFORE_MEL_PARENT`) — a rung a site never asked for must not start
+     seeding its hierarchy.
   2. **Boundary fold** (§11.3, DECISIONS.md #1 — hard boundaries, NO feed-chain exception;
      RELEASE-1.0-PLAN P0-4 — NO manual exception either):
      for the selected parent, all enabled boundary keys known and equal → structural parent;
@@ -133,7 +143,18 @@ observations + identity + anatomy + role graph + learned rules
      ssm discipline comes from profile projection rules / top-parent inheritance / manual,
      and only acts as a boundary if enabled — the default preset leaves it off (P0-5), so a
      startup family that crosses native disciplines stays one branch.
-  4. **Snapshot**: immutable ResolvedSnapshot — deterministic (same inputs + profile →
+  4. **Completeness** (audit blocker B3): `CompiledProject.completeness` counts how much of
+     the site the compile actually described — assets nested vs rooted, assets no rung
+     proposed a parent for, assets with no system, per-level `assetsWithoutValue` with a
+     flag on the boundary levels that thereby stop every nesting, demotions per (level,
+     rung), unresolved systems grouped by the resolver's own skip reasons, and MEL rows
+     dropped for saying nothing. Read off what the fold and the resolver already decided;
+     nothing is recomputed, so it cannot disagree with the snapshot it describes. The
+     matching review items are counted rather than repeated: one `missing-boundary-level`
+     per level, one `boundary-demotion` per (level, rung), one `unresolved-system` per
+     distinct set of skip reasons. A per-asset `missing-boundary` survives only where a
+     person's own decision was refused.
+  5. **Snapshot**: immutable ResolvedSnapshot — deterministic (same inputs + profile →
      identical snapshot), cycle detection (structural cycles broken to review items, never
      silently), every decision provenance'd, losing claims retained.
 - **`@matchline/asset-identity`** — the asset identity ledger (RELEASE-1.0-PLAN P0-9).
