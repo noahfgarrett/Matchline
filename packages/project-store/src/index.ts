@@ -65,7 +65,7 @@ export { deriveSourceId } from './source-id.js';
 export { deserializeSnapshot, serializeSnapshot } from './snapshot-json.js';
 export type { SerializedSnapshot } from './snapshot-json.js';
 
-export { createProject, openProject } from './store.js';
+export { BUSY_TIMEOUT_MS, createProject, openProject } from './store.js';
 export type {
   Clock,
   CompileInput,

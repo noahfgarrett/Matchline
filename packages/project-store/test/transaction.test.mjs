@@ -1,9 +1,26 @@
 import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
 import test, { after } from 'node:test';
 
-import { createProject, openProject } from '../dist/index.js';
+import {
+  BUSY_TIMEOUT_MS,
+  createProject,
+  openProject,
+  ProjectStoreError,
+} from '../dist/index.js';
 
 import { digest, dragonProfile, dumpTables, steppingClock, tempDirectory } from './support.mjs';
+
+/** The `reason` of a `ProjectStoreError` a call is expected to throw. */
+function reason(fn) {
+  try {
+    fn();
+  } catch (error) {
+    assert.ok(error instanceof ProjectStoreError, `expected ProjectStoreError, got ${error}`);
+    return error.reason;
+  }
+  throw new assert.AssertionError({ message: 'expected a throw, got none' });
+}
 
 /**
  * Durability: a mutator that throws mid-transaction leaves the file exactly as
@@ -125,6 +142,54 @@ test('a rolled-back transaction leaves the modified timestamp alone', () => {
       }),
     );
     assert.equal(store.meta().modifiedAt, before);
+  } finally {
+    store.close();
+  }
+});
+
+/**
+ * A COMMIT that cannot get the lock it needs (the `busy_timeout` path).
+ *
+ * `BEGIN IMMEDIATE` takes a RESERVED lock, which coexists with another
+ * connection's SHARED read lock quite happily -- it is the COMMIT that finally
+ * needs EXCLUSIVE and cannot have it. That is why the failure lands on the
+ * commit rather than on the begin, and why a store whose commit failed used to
+ * be finished for the rest of the session.
+ */
+test('a commit that loses the lock fails clearly and leaves the store usable', () => {
+  const path = temp.file('busy.matchline');
+  const store = seeded('busy.matchline');
+  const blocker = new DatabaseSync(path);
+
+  try {
+    blocker.exec('BEGIN');
+    // The read is what actually takes the SHARED lock; `BEGIN` alone is deferred.
+    blocker.prepare('SELECT COUNT(*) AS n FROM meta').get();
+
+    const started = Date.now();
+    const failure = reason(() => store.setSystemOverride('MAH001-10-01', { systemKey: '001' }));
+    assert.equal(failure.kind, 'locked');
+    assert.equal(failure.path, path);
+    assert.ok(
+      Date.now() - started >= BUSY_TIMEOUT_MS - 250,
+      `it waited the busy timeout out rather than failing at once (${Date.now() - started}ms)`,
+    );
+
+    assert.deepEqual(store.listOverrides(), [], 'the row the failed commit held is not there');
+  } finally {
+    blocker.exec('ROLLBACK');
+    blocker.close();
+  }
+
+  try {
+    // The point of the whole exercise: the store is not wedged. Before the fix
+    // this threw "cannot start a transaction within a transaction" forever.
+    store.setSystemOverride('MAH001-10-01', { systemKey: '002' });
+    assert.deepEqual(
+      store.listOverrides().map((row) => row.assetKey),
+      ['MAH001-10-01'],
+    );
+    assert.equal(store.listOverrides()[0].override.systemKey, '002');
   } finally {
     store.close();
   }

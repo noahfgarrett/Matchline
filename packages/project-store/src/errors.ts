@@ -50,7 +50,31 @@ export type ProjectStoreReason =
   | { readonly kind: 'unknown-profile-revision'; readonly revision: number }
   | { readonly kind: 'unknown-source'; readonly sourceId: string }
   | { readonly kind: 'closed'; readonly path: string }
-  | { readonly kind: 'backup-exists'; readonly path: string };
+  | { readonly kind: 'backup-exists'; readonly path: string }
+  /**
+   * Another program holds a write lock on the file (SQLITE_BUSY / SQLITE_LOCKED).
+   *
+   * Its own reason rather than a `cannot-open`, because the fix is different and
+   * the user can act on it: close the other copy of Matchline, or wait for the
+   * sync client to finish, and try again. Raised after the busy timeout has
+   * already been waited out, so it means "still locked", not "momentarily busy".
+   */
+  | { readonly kind: 'locked'; readonly path: string; readonly detail: string }
+  /**
+   * The file opened, but it cannot be written (SQLITE_READONLY).
+   *
+   * A project file on read-only media, in a locked-down folder, or marked
+   * read-only. Detected when the file is opened rather than at the first save,
+   * so a user does not configure a project for an hour and lose it.
+   */
+  | { readonly kind: 'read-only'; readonly path: string; readonly detail: string }
+  /**
+   * A write reached the disk and failed for any other reason -- a full volume,
+   * an I/O error, a disconnected network share.
+   */
+  | { readonly kind: 'write-failed'; readonly path: string; readonly detail: string }
+  /** The pre-migration backup was written but did not read back as the original. */
+  | { readonly kind: 'backup-unverified'; readonly path: string; readonly detail: string };
 
 /** Thrown by everything in this package. Never a raw driver error. */
 export class ProjectStoreError extends Error {
@@ -110,6 +134,14 @@ export function describeProjectStoreReason(reason: ProjectStoreReason): string {
       return `project file is closed: ${reason.path}`;
     case 'backup-exists':
       return `a backup already exists at ${reason.path}; move it aside before migrating`;
+    case 'locked':
+      return `another program is holding a lock on the project file at ${reason.path}: ${reason.detail}`;
+    case 'read-only':
+      return `the project file at ${reason.path} cannot be written: ${reason.detail}`;
+    case 'write-failed':
+      return `writing the project file at ${reason.path} failed: ${reason.detail}`;
+    case 'backup-unverified':
+      return `the backup written to ${reason.path} did not read back as a copy of the project: ${reason.detail}`;
     default: {
       const exhaustive: never = reason;
       throw new Error(`unhandled ProjectStoreReason: ${JSON.stringify(exhaustive)}`);

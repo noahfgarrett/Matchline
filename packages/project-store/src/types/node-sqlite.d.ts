@@ -32,6 +32,12 @@ declare module 'node:sqlite' {
 
   interface DatabaseSyncOptions {
     readonly readOnly?: boolean;
+    /**
+     * `busy_timeout` in milliseconds: how long a statement waits for another
+     * connection's lock before failing with SQLITE_BUSY. Zero -- the driver's
+     * default -- makes the first instant of contention a hard error.
+     */
+    readonly timeout?: number;
   }
 
   class DatabaseSync {

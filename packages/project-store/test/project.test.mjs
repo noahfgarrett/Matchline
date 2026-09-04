@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { chmodSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import test, { after } from 'node:test';
 
 import {
@@ -181,4 +182,64 @@ test('openProject refuses a project missing a meta key', () => {
   const failure = reason(() => openProject(path));
   assert.equal(failure.kind, 'missing-meta-key');
   assert.equal(failure.key, 'app_version');
+});
+
+/* ------------------------------------------- can this file actually be written */
+
+test('a project file that cannot be written is refused as read-only, at open', () => {
+  const path = temp.file('read-only.matchline');
+  createProject(path, { name: 'Dragon', now: frozenClock('2026-01-15T09:30:00.000Z') }).close();
+  chmodSync(path, 0o444);
+
+  try {
+    const failure = reason(() => openProject(path));
+    assert.equal(failure.kind, 'read-only');
+    assert.equal(failure.path, path);
+    assert.match(
+      failure.detail,
+      /readonly/i,
+      'the driver\'s own words are carried, so a support call has something to go on',
+    );
+  } finally {
+    chmodSync(path, 0o644);
+  }
+
+  // And the mode is the only thing that was wrong with it.
+  openProject(path).close();
+});
+
+test('a project file another program is writing is refused as locked, at open', () => {
+  const path = temp.file('locked.matchline');
+  createProject(path, { name: 'Dragon', now: frozenClock('2026-01-15T09:30:00.000Z') }).close();
+
+  const blocker = new DatabaseSync(path);
+  try {
+    blocker.exec('BEGIN IMMEDIATE');
+    blocker.exec("UPDATE meta SET value = value WHERE key = 'project_name'");
+
+    const failure = reason(() => openProject(path));
+    assert.equal(failure.kind, 'locked');
+    assert.equal(failure.path, path);
+  } finally {
+    blocker.exec('ROLLBACK');
+    blocker.close();
+  }
+
+  openProject(path).close();
+});
+
+test('the writability probe leaves no trace of itself', () => {
+  const path = temp.file('probe-clean.matchline');
+  const store = createProject(path, { name: 'Dragon', now: frozenClock('2026-01-15T09:30:00.000Z') });
+  const modifiedAt = store.meta().modifiedAt;
+  store.close();
+  const before = dumpTables(path);
+
+  const reopened = openProject(path);
+  try {
+    assert.equal(reopened.meta().modifiedAt, modifiedAt, 'opening is not a modification');
+  } finally {
+    reopened.close();
+  }
+  assert.deepEqual(dumpTables(path), before);
 });

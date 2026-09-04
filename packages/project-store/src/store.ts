@@ -405,6 +405,100 @@ function cannotOpen(path: string, cause: unknown): ProjectStoreError {
   });
 }
 
+/**
+ * How long a write waits for another program's lock before giving up.
+ *
+ * Zero -- SQLite's default, and what this package used to run on -- means the
+ * first byte of contention is a hard failure. A project file lives in a user's
+ * documents folder, which on a real machine is also a Dropbox/OneDrive folder
+ * and a backup agent's working set, so a moment's SHARED lock from something
+ * else on the box would fail a compile save outright. Five seconds is long
+ * enough to outlast any of that and short enough that a genuinely stuck file is
+ * reported rather than hung on.
+ */
+export const BUSY_TIMEOUT_MS = 5000;
+
+/** Opens a handle that waits {@link BUSY_TIMEOUT_MS} rather than failing at once. */
+function openDatabase(path: string): DatabaseSync {
+  return new DatabaseSync(path, { timeout: BUSY_TIMEOUT_MS });
+}
+
+/* SQLite result codes this package acts on rather than reports verbatim. */
+const SQLITE_BUSY = 5;
+const SQLITE_LOCKED = 6;
+const SQLITE_READONLY = 8;
+
+/** The SQLite result code on a driver error, or `null` for anything else. */
+function sqliteErrcode(error: unknown): number | null {
+  if (typeof error !== 'object' || error === null) {
+    return null;
+  }
+  const code: unknown = (error as { errcode?: unknown }).errcode;
+  return typeof code === 'number' ? code : null;
+}
+
+/**
+ * A failed write, as one of this package's own reasons.
+ *
+ * The three cases are separated because the fix differs: `locked` is another
+ * program, `read-only` is the file or the folder, and `write-failed` is the
+ * disk. A caller that only wants a sentence still gets one from
+ * `describeProjectStoreReason`.
+ */
+function writeFailure(path: string, cause: unknown): ProjectStoreError {
+  if (cause instanceof ProjectStoreError) {
+    return cause;
+  }
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  const errcode = sqliteErrcode(cause);
+  if (errcode === SQLITE_BUSY || errcode === SQLITE_LOCKED) {
+    return new ProjectStoreError({ kind: 'locked', path, detail });
+  }
+  if (errcode === SQLITE_READONLY) {
+    return new ProjectStoreError({ kind: 'read-only', path, detail });
+  }
+  return new ProjectStoreError({ kind: 'write-failed', path, detail });
+}
+
+/**
+ * Rolls back, and says nothing if there is nothing to roll back.
+ *
+ * SQLite rolls a transaction back by itself on `SQLITE_FULL` and `SQLITE_IOERR`,
+ * and a `ROLLBACK` issued after that throws "cannot rollback - no transaction is
+ * active". So does a `ROLLBACK` after a statement that failed on a read-only
+ * file. The failure that got us here is the one worth reporting; this one would
+ * only mask it.
+ */
+function rollbackQuietly(db: DatabaseSync): void {
+  try {
+    db.exec('ROLLBACK');
+  } catch {
+    // Deliberately silent. See above.
+  }
+}
+
+/**
+ * Proves the file can actually be written, before a handle is handed out.
+ *
+ * `BEGIN IMMEDIATE` alone is not the proof it looks like: SQLite takes a
+ * RESERVED lock without touching a page, so a file on read-only media begins a
+ * transaction happily and only fails at the first real write. So the probe makes
+ * one -- a self-assignment on a row that already exists -- and rolls it back.
+ * Nothing is left behind and `modified_at` is untouched, but the answer is the
+ * true one: a project opened read-only used to look fine right up until the user
+ * had configured it and pressed Save.
+ */
+function probeWritable(db: DatabaseSync, path: string): void {
+  try {
+    db.exec('BEGIN IMMEDIATE');
+    db.exec("UPDATE meta SET value = value WHERE key = 'schema_version'");
+    db.exec('ROLLBACK');
+  } catch (cause) {
+    rollbackQuietly(db);
+    throw writeFailure(path, cause);
+  }
+}
+
 /** SQLite counts come back as number or bigint; the schema keeps them small. */
 function toCount(value: number | bigint): number {
   if (typeof value === 'bigint') {
@@ -572,7 +666,7 @@ function migrateProjectFile(path: string, found: number, clock: Clock): Migratio
 
   let db: DatabaseSync;
   try {
-    db = new DatabaseSync(path);
+    db = openDatabase(path);
   } catch (cause) {
     throw cannotOpen(path, cause);
   }
@@ -604,11 +698,17 @@ function migrateProjectFile(path: string, found: number, clock: Clock): Migratio
   return { fromVersion: found, toVersion: PROJECT_SCHEMA_VERSION, backupPath };
 }
 
-/** Opens a file and validates it, closing the handle on any refusal. */
-function openValidated(path: string): DatabaseSync {
+/**
+ * Opens a file and validates it, closing the handle on any refusal.
+ *
+ * `probe` is off for the handle a migration is about to use: `migrateProjectFile`
+ * writes through its own connection and the caller has already been told
+ * whether the file is writable.
+ */
+function openValidated(path: string, probe = true): DatabaseSync {
   let db: DatabaseSync;
   try {
-    db = new DatabaseSync(path);
+    db = openDatabase(path);
   } catch (cause) {
     throw cannotOpen(path, cause);
   }
@@ -616,6 +716,9 @@ function openValidated(path: string): DatabaseSync {
   try {
     db.exec('PRAGMA foreign_keys = ON');
     validateProject(db);
+    if (probe) {
+      probeWritable(db, path);
+    }
   } catch (error) {
     db.close();
     if (error instanceof ProjectStoreError) {
@@ -649,7 +752,7 @@ export function createProject(path: string, options: CreateProjectOptions): Proj
 
   let db: DatabaseSync;
   try {
-    db = new DatabaseSync(path);
+    db = openDatabase(path);
   } catch (cause) {
     throw cannotOpen(path, cause);
   }
@@ -806,19 +909,40 @@ class SqliteProjectStore implements ProjectStore {
       }
     }
 
-    db.exec('BEGIN IMMEDIATE');
-    this.#depth = 1;
-    let result: T;
     try {
-      result = fn();
-    } catch (error) {
-      this.#depth = 0;
-      db.exec('ROLLBACK');
-      throw error;
+      db.exec('BEGIN IMMEDIATE');
+    } catch (cause) {
+      // Nothing was opened, so there is nothing to roll back and `#depth` is
+      // still 0. A lock held by another program lands here after the busy
+      // timeout has already been waited out.
+      throw writeFailure(this.path, cause);
     }
-    this.#depth = 0;
-    db.exec('COMMIT');
-    return result;
+
+    this.#depth = 1;
+    // `COMMIT` is INSIDE the guard, and this is the whole point of the shape.
+    // It is the statement most likely to fail -- it is where SQLite finally
+    // needs the EXCLUSIVE lock and where the pages actually reach the disk --
+    // and a COMMIT that threw used to leave the transaction open with `#depth`
+    // already zeroed, so every later mutation in the session failed on
+    // "cannot start a transaction within a transaction". One bad moment from a
+    // sync client wedged the store until the app was restarted.
+    let committing = false;
+    try {
+      const result = fn();
+      committing = true;
+      db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      rollbackQuietly(db);
+      // A throw from `fn` is the caller's own error and is rethrown as it is;
+      // only the commit is translated, because only the commit is this
+      // package's own failure to write.
+      throw committing ? writeFailure(this.path, error) : error;
+    } finally {
+      // In `finally`, so the depth is right whichever way the block left --
+      // including the return, where it used to be reset before the commit.
+      this.#depth = 0;
+    }
   }
 
   upsertSourceV4(input: SourceInputV4): void {
