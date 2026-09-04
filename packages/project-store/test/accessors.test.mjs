@@ -8,6 +8,7 @@ import {
   dragonProfile,
   dragonProfileV1,
   dragonSnapshot,
+  rawExec,
   steppingClock,
   tempDirectory,
 } from './support.mjs';
@@ -524,6 +525,117 @@ test('an override that says nothing, or names itself, is refused', () => {
     'relationshipOverride.parentAssetId',
   );
   assert.deepEqual(store.listOverrides(), []);
+});
+
+/**
+ * One row per asset, however the asset used to be spelled.
+ *
+ * Every build before schema v5 filed an override under the bare canonical tag;
+ * `@matchline/asset-catalog` mints `tag:<tag>` for an unduplicated one. A
+ * project that has been through both holds two rows for one piece of equipment,
+ * both of which resolve, and the claims assembly then sees two manual parents
+ * disagreeing about a child — an `ambiguous-parent` about a decision nobody
+ * ever made twice.
+ */
+test('writing one spelling of an asset key retires the other', () => {
+  store.setRelationshipOverride({
+    childAssetId: 'TIT001-10-01',
+    parentAssetId: 'VFD001-10-01',
+    note: 'the pre-v5 spelling',
+  });
+  store.setRelationshipOverride({
+    childAssetId: 'tag:TIT001-10-01',
+    parentAssetId: 'VFD001-10-02',
+    note: 'the same decision, restated',
+  });
+
+  const overrides = store.listOverrides();
+  assert.equal(overrides.length, 1, 'the bare-tag row went with the write that superseded it');
+  assert.equal(overrides[0].assetKey, 'tag:TIT001-10-01');
+  assert.equal(overrides[0].override.parentAssetId, 'VFD001-10-02');
+
+  // And the other way round, because either spelling can be the later one.
+  store.setRelationshipOverride({
+    childAssetId: 'TIT001-10-01',
+    parentAssetId: 'VFD001-10-03',
+  });
+  assert.deepEqual(
+    store.listOverrides().map((entry) => entry.assetKey),
+    ['TIT001-10-01'],
+  );
+
+  // A ledger id is not a spelling of a tag, so it retires nothing.
+  store.setRelationshipOverride({ childAssetId: 'asset:000007', parentAssetId: 'VFD001-10-04' });
+  assert.equal(store.listOverrides().length, 2);
+});
+
+test('rekeying collapses two rows for one asset and leaves unresolvable ones alone', () => {
+  store.setSystemOverride('MAH001-10-01', { systemKey: '001' });
+  store.setRelationshipOverride({
+    childAssetId: 'TIT001-10-01',
+    parentAssetId: 'VFD001-10-01',
+    note: 'the older row',
+  });
+  // Written straight in, because `setRelationshipOverride` would retire the
+  // first one — which is the OTHER half of this fix. What is under test here is
+  // a project that already holds both, from before either half existed.
+  rawExec(
+    store.path,
+    `INSERT INTO overrides (kind, asset_key, payload_json, updated_at) VALUES
+       ('relationship', 'tag:TIT001-10-01',
+        '{"childAssetId":"tag:TIT001-10-01","parentAssetId":"tag:VFD001-10-01","note":"the newer row"}',
+        '2027-01-01T00:00:00.000Z'),
+       ('relationship', 'PMP404-10-01',
+        '{"childAssetId":"PMP404-10-01","parentAssetId":"MCC-D9-01"}',
+        '2026-01-15T09:00:00.000Z')`,
+  );
+  assert.equal(store.listOverrides().length, 4);
+
+  const removed = store.rekeyOverrides(
+    new Map([
+      ['MAH001-10-01', 'asset:000001'],
+      ['TIT001-10-01', 'asset:000002'],
+      ['tag:TIT001-10-01', 'asset:000002'],
+      ['VFD001-10-01', 'asset:000003'],
+      ['tag:VFD001-10-01', 'asset:000003'],
+      // PMP404-10-01 is not in this compile at all, and neither is its parent.
+    ]),
+  );
+  assert.equal(removed, 1, 'the two rows for one asset became one');
+
+  const overrides = store.listOverrides();
+  assert.deepEqual(
+    overrides.map((entry) => [entry.kind, entry.assetKey]),
+    [
+      ['relationship', 'PMP404-10-01'],
+      ['relationship', 'asset:000002'],
+      ['system', 'asset:000001'],
+    ],
+  );
+
+  const collapsed = overrides.find((entry) => entry.assetKey === 'asset:000002');
+  assert.deepEqual(collapsed.override, {
+    childAssetId: 'asset:000002',
+    parentAssetId: 'asset:000003',
+    note: 'the newer row',
+  }, 'the later decision survived, and BOTH its ends were re-addressed');
+  assert.equal(
+    collapsed.updatedAt,
+    '2027-01-01T00:00:00.000Z',
+    'moving a row is not deciding it again',
+  );
+
+  const untouched = overrides.find((entry) => entry.assetKey === 'PMP404-10-01');
+  assert.deepEqual(untouched.override, {
+    childAssetId: 'PMP404-10-01',
+    parentAssetId: 'MCC-D9-01',
+  }, 'a decision this compile cannot place is left exactly as it was found');
+
+  // Idempotent, and free: a second pass over rows that are already right
+  // rewrites nothing.
+  const before = store.meta().modifiedAt;
+  assert.equal(store.rekeyOverrides(new Map()), 0);
+  assert.equal(store.meta().modifiedAt, before, 'and does not even stamp the file');
 });
 
 test('compiles are a history, newest first, and reference a real profile revision', () => {

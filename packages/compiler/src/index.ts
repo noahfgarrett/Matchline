@@ -58,3 +58,20 @@ export { ATTRIBUTE_KEYS, ssmDisciplineOf } from './attributes.js';
 export type { AttributeKey } from './attributes.js';
 
 export { aggregateReviewItems } from './review.js';
+
+/**
+ * How a stored reference is re-addressed onto this compile's assets.
+ *
+ * Exported because the desktop app has to answer the same question outside a
+ * compile: a project file's override rows are keyed by whatever spelling the
+ * build that wrote them used -- a bare tag, a `tag:` id, a ledger id -- and
+ * collapsing two rows that name ONE asset needs exactly this resolution.
+ * Answering it a second way in the app is how two rows survive and a phantom
+ * `ambiguous-parent` appears.
+ */
+export { decisionResolverOf } from './identity-ledger.js';
+export type {
+  DecisionResolution,
+  ResolutionStatus,
+  ResolveDecisionRef,
+} from './identity-ledger.js';

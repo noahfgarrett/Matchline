@@ -320,6 +320,29 @@ export interface ProjectStore {
   setRelationshipOverride(override: ManualRelationshipOverride): void;
   /** Both kinds, ordered by kind then asset key. */
   listOverrides(): readonly StoredOverride[];
+  /**
+   * Rewrites override rows onto the asset ids they resolve to, and collapses
+   * the duplicates that produces.
+   *
+   * `resolved` maps a stored reference -- an `asset_key`, or a
+   * `parentAssetId` inside a relationship payload -- to the ledger asset id it
+   * names in the caller's current compile. A reference the map has no entry for
+   * is left exactly as it was found: a decision whose asset is not in this
+   * compile is still that decision, and rewriting it to a guess would be worse
+   * than leaving a row a later compile can still resolve.
+   *
+   * The collapse is why this exists. Schema v5's asset ids arrived beside years
+   * of rows keyed by bare canonical tag, so one asset could end up with a
+   * `MAH001-10-01` row AND a `tag:MAH001-10-01` row. Both resolve, both are
+   * applied, and the claims assembly sees two manual parents for one child --
+   * an `ambiguous-parent` review item about a disagreement the person never
+   * had. One row per `(kind, asset)` survives: the one already keyed by the
+   * resolved id if there is one, otherwise the most recently updated, with the
+   * greater key breaking a tie so two machines collapse the same way.
+   *
+   * @returns how many rows were removed as duplicates.
+   */
+  rekeyOverrides(resolved: ReadonlyMap<string, string>): number;
   /** Removes one override. Returns whether a row was there to remove. */
   removeOverride(kind: OverrideKind, assetKey: string): boolean;
 
@@ -476,6 +499,90 @@ interface StoredSourceRecord {
   readonly rawByteSize: number;
   readonly derivedCacheSha256: string | null;
   readonly addedAt: string;
+}
+
+/**
+ * The `tag:` prefix `@matchline/asset-catalog` mints an id from an unduplicated
+ * canonical tag with. Known here because the two spellings of one tag are what
+ * `#putOverride` and `rekeyOverrides` collapse.
+ */
+const TAG_ID_PREFIX = 'tag:';
+
+/**
+ * The OTHER spelling of the same asset, or `null` when there is not one.
+ *
+ * `tag:MAH001-10-01` and `MAH001-10-01` name one piece of equipment. Every
+ * build before schema v5 filed overrides under the bare tag; the catalog mints
+ * the prefixed form. A project that has been through both holds two rows for
+ * one asset unless something retires one.
+ *
+ * A ledger id -- `asset:000042` -- has no sibling: it is not derived from a tag
+ * and nothing else spells it.
+ */
+function siblingSpelling(assetKey: string): string | null {
+  if (assetKey.startsWith(TAG_ID_PREFIX)) {
+    const tag = assetKey.slice(TAG_ID_PREFIX.length);
+    return tag === '' ? null : tag;
+  }
+  return assetKey.includes(':') ? null : `${TAG_ID_PREFIX}${assetKey}`;
+}
+
+/** One override row on its way to its resolved key. See `rekeyOverrides`. */
+interface RekeyedOverride {
+  readonly kind: OverrideKind;
+  readonly assetKey: string;
+  readonly payload: unknown;
+  /** Whether the row was already filed under the key it resolves to. */
+  readonly exact: boolean;
+  readonly previousKey: string;
+  readonly updatedAt: string;
+}
+
+/**
+ * Which of two rows for one asset survives.
+ *
+ * A row already keyed by the resolved id first -- it is the one this build
+ * wrote, and the other is a leftover from before the ledger. Then the most
+ * recently updated, because that is the decision the person made last. Then the
+ * greater key, purely so two machines collapsing the same file collapse it the
+ * same way.
+ */
+function beatsHeldOverride(candidate: RekeyedOverride, held: RekeyedOverride): boolean {
+  if (candidate.exact !== held.exact) {
+    return candidate.exact;
+  }
+  if (candidate.updatedAt !== held.updatedAt) {
+    return candidate.updatedAt > held.updatedAt;
+  }
+  return candidate.previousKey > held.previousKey;
+}
+
+/** `overrides` order: kind, then key, matching `listOverrides`. */
+function compareRekeyed(left: RekeyedOverride, right: RekeyedOverride): number {
+  if (left.kind !== right.kind) {
+    return left.kind < right.kind ? -1 : 1;
+  }
+  return left.assetKey < right.assetKey ? -1 : left.assetKey > right.assetKey ? 1 : 0;
+}
+
+/**
+ * A relationship override re-stated on the ids it now names.
+ *
+ * Both ends, because both are stored references. The child is forced to the key
+ * the row is filed under -- they are the same fact, and a payload that
+ * disagreed with its key would be a second answer to "whose parent is this".
+ */
+function rekeyRelationship(
+  override: ManualRelationshipOverride,
+  childAssetId: string,
+  resolved: ReadonlyMap<string, string>,
+): ManualRelationshipOverride {
+  const parent = override.parentAssetId;
+  return {
+    childAssetId,
+    parentAssetId: parent === null ? null : (resolved.get(parent) ?? parent),
+    ...(override.note === undefined ? {} : { note: override.note }),
+  };
 }
 
 function cannotOpen(path: string, cause: unknown): ProjectStoreError {
@@ -1252,15 +1359,25 @@ class SqliteProjectStore implements ProjectStore {
   #putOverride(kind: OverrideKind, assetKey: string, payload: unknown): void {
     const json = canonicalJson(payload, `override.${kind}`);
     this.#mutate((updatedAt) => {
-      this.#open()
-        .prepare(
-          `INSERT INTO overrides (kind, asset_key, payload_json, updated_at)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT (kind, asset_key) DO UPDATE SET
-             payload_json = excluded.payload_json,
-             updated_at = excluded.updated_at`,
-        )
-        .run(kind, assetKey, json, updatedAt);
+      const db = this.#open();
+      db.prepare(
+        `INSERT INTO overrides (kind, asset_key, payload_json, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT (kind, asset_key) DO UPDATE SET
+           payload_json = excluded.payload_json,
+           updated_at = excluded.updated_at`,
+      ).run(kind, assetKey, json, updatedAt);
+      // One row per asset. `tag:MAH001-10-01` and `MAH001-10-01` are two
+      // spellings of one thing -- the second is what every build before schema
+      // v5 wrote, the first is what `@matchline/asset-catalog` mints for an
+      // unduplicated tag -- and a project holding both hands the claims
+      // assembly two manual parents for one child, which surfaces as an
+      // `ambiguous-parent` about a disagreement the person never had. Writing
+      // one spelling retires the other, here, where the decision is made.
+      const sibling = siblingSpelling(assetKey);
+      if (sibling !== null) {
+        db.prepare('DELETE FROM overrides WHERE kind = ? AND asset_key = ?').run(kind, sibling);
+      }
     });
   }
 
@@ -1282,6 +1399,79 @@ class SqliteProjectStore implements ProjectStore {
           requireText(row, 'overrides', 'updated_at'),
         ),
       );
+  }
+
+  rekeyOverrides(resolved: ReadonlyMap<string, string>): number {
+    // `withTransaction` rather than `#mutate`, because the overwhelmingly
+    // common call is the one that finds nothing to do -- a project whose rows
+    // are already ledger ids -- and that call must not stamp `modified_at`. A
+    // file that reports itself modified by every compile is a file a sync
+    // client copies after every compile.
+    return this.withTransaction(() => {
+      const db = this.#open();
+      /** `kind` -> resolved key -> the row that should survive under it. */
+      const winners = new Map<string, RekeyedOverride>();
+      let removed = 0;
+
+      for (const stored of this.listOverrides()) {
+        const target = resolved.get(stored.assetKey) ?? stored.assetKey;
+        const candidate: RekeyedOverride = {
+          kind: stored.kind,
+          assetKey: target,
+          // `payload` is rebuilt rather than carried, because a relationship
+          // override states its own child id and it must not disagree with the
+          // key it is filed under -- and its PARENT is a stored reference too,
+          // re-addressed by the same map for the same reason.
+          payload:
+            stored.kind === 'relationship'
+              ? rekeyRelationship(stored.override, target, resolved)
+              : stored.override,
+          // Whether this row was ALREADY correctly keyed. It wins over a row
+          // that had to be moved: it is the one this build wrote.
+          exact: stored.assetKey === target,
+          previousKey: stored.assetKey,
+          updatedAt: stored.updatedAt,
+        };
+        const slot = `${stored.kind}\u241F${target}`;
+        const held = winners.get(slot);
+        if (held === undefined) {
+          winners.set(slot, candidate);
+          continue;
+        }
+        removed += 1;
+        if (beatsHeldOverride(candidate, held)) {
+          winners.set(slot, candidate);
+        }
+      }
+
+      if (removed === 0 && [...winners.values()].every((row) => row.exact)) {
+        // Nothing to do, and nothing written: the overwhelmingly common case
+        // is a project whose rows are already keyed by ledger id, and it should
+        // not pay a rewrite (or a `modified_at` bump) on every compile.
+        return 0;
+      }
+
+      db.exec('DELETE FROM overrides');
+      const insert = db.prepare(
+        `INSERT INTO overrides (kind, asset_key, payload_json, updated_at)
+         VALUES (?, ?, ?, ?)`,
+      );
+
+      for (const row of [...winners.values()].sort(compareRekeyed)) {
+        insert.run(
+          row.kind,
+          row.assetKey,
+          canonicalJson(row.payload, `override.${row.kind}`),
+          // The row is the same decision, moved. Re-stamping it would claim the
+          // person decided it today, and `updated_at` is what the overrides
+          // screen prints.
+          row.updatedAt,
+        );
+      }
+      // One stamp for the rewrite itself, which IS a change to the file.
+      this.#touch(this.#now());
+      return removed;
+    });
   }
 
   removeOverride(kind: OverrideKind, assetKey: string): boolean {

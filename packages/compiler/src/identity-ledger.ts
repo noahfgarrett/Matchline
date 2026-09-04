@@ -97,9 +97,9 @@ export function applyLedgerMapping(
 }
 
 /** What a stored decision's reference turned out to name. */
-type ResolutionStatus = 'resolved' | 'unknown' | 'ambiguous';
+export type ResolutionStatus = 'resolved' | 'unknown' | 'ambiguous';
 
-interface DecisionResolution {
+export interface DecisionResolution {
   readonly status: ResolutionStatus;
   /** The ledger asset id, when {@link status} is `resolved`. */
   readonly assetId: string;

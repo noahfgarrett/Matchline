@@ -11,6 +11,7 @@ import {
 import type { AssetLedger } from '@matchline/asset-identity';
 import {
   COMPILE_STAGES,
+  decisionResolverOf,
   subjectPropertiesFor,
   type CompiledProject,
   type CompileStage,
@@ -600,6 +601,16 @@ interface Session {
   compile: WireCompileStatus;
   /** The compile in flight, or `null` when none is. */
   running: RunningCompile | null;
+  /**
+   * Whether this session has already collapsed the project's override keys onto
+   * ledger asset ids.
+   *
+   * Once per open, in the first compile save that succeeds. It needs a compile
+   * to do it — the resolution comes from that compile's catalog and ledger —
+   * and doing it on every compile afterwards would rewrite a table that is
+   * already correct.
+   */
+  overridesRekeyed: boolean;
 }
 
 /**
@@ -1112,6 +1123,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       view: null,
       compile: { state: 'never-run' },
       running: null,
+      overridesRekeyed: false,
     };
     return { session: active, mergedLegacyConfig: moved.merged };
   }
@@ -2176,6 +2188,44 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     return blocked;
   }
 
+  /**
+   * Every stored override reference, mapped to the asset this compile says it
+   * names.
+   *
+   * The resolution is the compiler's own (`decisionResolverOf`), on the compile
+   * that has just finished: a reference resolves when it is a ledger asset id,
+   * a canonical tag exactly one asset carries, a `tag:` id for one asset, or a
+   * former spelling the ledger remembers. Anything ambiguous or unknown is
+   * simply absent from the map, and `rekeyOverrides` leaves those rows alone.
+   *
+   * Both ends of a relationship override are included: the parent is a stored
+   * reference too, and a row whose child moved to a ledger id while its parent
+   * stayed a bare tag would be half re-addressed.
+   */
+  function overrideResolutions(
+    active: Session,
+    project: CompiledProject,
+  ): ReadonlyMap<string, string> {
+    const resolve = decisionResolverOf(project.catalog.assets, project.identityLedger);
+    const resolved = new Map<string, string>();
+    const consider = (ref: string): void => {
+      if (ref === '' || resolved.has(ref)) {
+        return;
+      }
+      const found = resolve(ref);
+      if (found.status === 'resolved') {
+        resolved.set(ref, found.assetId);
+      }
+    };
+    for (const stored of active.store.listOverrides()) {
+      consider(stored.assetKey);
+      if (stored.kind === 'relationship' && stored.override.parentAssetId !== null) {
+        consider(stored.override.parentAssetId);
+      }
+    }
+    return resolved;
+  }
+
   function requireView(active: Session): CompileView {
     if (active.view === null) {
       throw new Error('Nothing has been compiled yet. Run Compile on screen 8 first.');
@@ -2514,8 +2564,18 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         active.store.saveSnapshot(id, serializeSnapshot(project.snapshot));
         active.store.saveLedger(id, project.identityLedger);
         active.store.saveCompileAssets(id, view.assets);
+        if (!active.overridesRekeyed) {
+          // Once per open, and inside this transaction so it is part of the
+          // same all-or-nothing fact: the ids this compile minted are on file,
+          // and the decisions recorded against their older spellings are now
+          // filed under them. A project carried through the v5 re-key can hold
+          // both `MAH001-10-01` and `tag:MAH001-10-01` for one asset, and the
+          // pair reads to claims assembly as two manual parents disagreeing.
+          active.store.rekeyOverrides(overrideResolutions(active, project));
+        }
         return id;
       });
+      active.overridesRekeyed = true;
     } catch (error: unknown) {
       // The one durable write of a compile, and it can fail: a read-only file,
       // a full disk, another program holding the lock, a network share that

@@ -350,6 +350,96 @@ test('a decision naming equipment no compile has becomes a review item, not a si
   assert.equal(ghost.parentAssetId, `tag:${PARENT_TAG}`);
 });
 
+/* ------------------------------------- two rows, one asset (the v5 re-key) */
+
+/** Writes a relationship override straight into a closed project file. */
+function writeRelationshipOverride(projectPath, childAssetId, parentAssetId, note) {
+  const db = new DatabaseSync(projectPath);
+  try {
+    db.prepare(
+      `INSERT INTO overrides (kind, asset_key, payload_json, updated_at)
+       VALUES ('relationship', ?, ?, ?)
+       ON CONFLICT (kind, asset_key) DO UPDATE SET payload_json = excluded.payload_json`,
+    ).run(
+      childAssetId,
+      JSON.stringify({ childAssetId, parentAssetId, ...(note === undefined ? {} : { note }) }),
+      '2026-01-15T09:00:00.000Z',
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function overrideKeys(projectPath) {
+  const db = new DatabaseSync(projectPath, { readOnly: true });
+  try {
+    return db
+      .prepare("SELECT asset_key FROM overrides WHERE kind = 'relationship' ORDER BY asset_key")
+      .all()
+      .map((row) => row.asset_key);
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Two override rows for one asset, which schema v5 made possible.
+ *
+ * Every build before it filed a manual parent under the bare canonical tag;
+ * `@matchline/asset-catalog` mints `tag:<tag>`. A project carried across that
+ * line can hold both. BOTH resolve — that is the point of the resolver — so
+ * claims assembly is handed two manual parents for one child and reports an
+ * `ambiguous-parent` about a disagreement nobody ever had. The first compile
+ * after opening collapses them.
+ */
+test('two spellings of one asset collapse to one override, with no phantom ambiguity', async (t) => {
+  const projectPath = join(workDir, 'Rekey.matchline');
+  let service = newService();
+  t.after(() => {
+    service.close();
+  });
+
+  await configure(service, projectPath);
+  summaryOf(await service.compile());
+  service.close();
+
+  // The same decision, written twice, exactly as a project that has lived
+  // through the v5 re-key holds it.
+  writeRelationshipOverride(projectPath, 'MAH001-10-02', 'tag:MAH001-10-01', 'the pre-v5 row');
+  writeRelationshipOverride(
+    projectPath,
+    'tag:MAH001-10-02',
+    'tag:MAH001-10-01',
+    'the post-v5 row',
+  );
+  assert.deepEqual(overrideKeys(projectPath), ['MAH001-10-02', 'tag:MAH001-10-02']);
+
+  service = newService();
+  assert.equal((await service.open(projectPath, false)).outcome, 'opened');
+  const summary = summaryOf(await service.compile());
+
+  assert.deepEqual(
+    overrideKeys(projectPath),
+    ['tag:MAH001-10-02'],
+    'the first compile after opening left one row, keyed by the ledger id',
+  );
+  assert.equal(summary.orphanedDecisionCount, 0, 'and neither row was dropped to get there');
+
+  const phantom = service
+    .reviewPage('ambiguous-parent', 0, 100)
+    .rows.filter((row) => row.summary.includes('MAH001-10-02'));
+  assert.deepEqual(phantom, [], 'no ambiguity about a decision that was only ever stated once');
+  assert.equal(
+    assetRow(service, 'MAH001-10-02').overridden,
+    true,
+    'and the decision itself still applies',
+  );
+
+  // Idempotent: a second compile in the same session has nothing left to do.
+  summaryOf(await service.compile());
+  assert.deepEqual(overrideKeys(projectPath), ['tag:MAH001-10-02']);
+});
+
 /* ------------------------------------------- manual system assignments */
 
 /** Writes a `system` override straight into a closed project file. */
