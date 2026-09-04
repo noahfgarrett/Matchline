@@ -32,7 +32,7 @@
       numeric part only (everything before the first "-"), with a trailing
       ".0" fourth component.
     -->
-    <MatchlineNumericVersion>$(Version.Split('-')[0])</MatchlineNumericVersion>
+    <MatchlineNumericVersion>$([System.Text.RegularExpressions.Regex]::Replace('$(Version)', '-.*$', ''))</MatchlineNumericVersion>
     <FileVersion>$(MatchlineNumericVersion).0</FileVersion>
     <AssemblyVersion>$(MatchlineNumericVersion).0</AssemblyVersion>
     <Copyright>Matchline</Copyright>
