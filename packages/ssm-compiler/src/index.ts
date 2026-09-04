@@ -29,6 +29,7 @@ export { BOUNDARY_DEMOTION_RULE, compileSnapshot, DEFAULT_LADDER, MODEL_TREE_SOU
 
 export {
   boundaryLevels,
+  boundaryValue,
   explicitValue,
   foldBoundaries,
   levelPathOf,

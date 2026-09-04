@@ -306,6 +306,22 @@ export function reviewKey(item: ReviewItem): string {
       return composeKey(item.kind, fieldList(item.assetIds));
     case 'missing-boundary':
       return composeKey(item.kind, field(item.assetId), field(item.levelId));
+    case 'missing-boundary-level':
+      // The level and nothing else. The count and the examples are what this
+      // compile happened to find; the thing a person fixes -- and records a
+      // decision against -- is the level, and a key that moved with the count
+      // would orphan that decision on every re-compile.
+      return composeKey(item.kind, field(item.levelId));
+    case 'boundary-demotion':
+      // The level and the rung, for the same reason: "the flow rung keeps
+      // proposing parents in other buildings" is one thing to settle however
+      // many pairs it was true of this time.
+      return composeKey(item.kind, field(item.levelId), field(item.ladderSource));
+    case 'unresolved-system':
+      // The reasons ARE the group. Two sets of reasons are two different
+      // resolver problems, and how many assets each one caught is a
+      // measurement of it rather than part of its identity.
+      return composeKey(item.kind, fieldList(item.skipReasons));
     case 'manual-boundary-demotion':
       // Both ends and the level: one asset can have a manual parent refused at
       // two different levels only if the config changed, but two children

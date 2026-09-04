@@ -201,8 +201,14 @@ test('two children blocked by the same unstated parent raise one review item', (
     hierarchy: DRAGON_HIERARCHY,
   });
 
+  // One row for the level, counting both children the gap left unplaced.
   assert.deepEqual(snapshot.reviewItems, [
-    { kind: 'missing-boundary', assetId: 'asset-gap', levelId: 'system' },
+    {
+      kind: 'missing-boundary-level',
+      levelId: 'system',
+      assetCount: 2,
+      exampleAssetIds: ['asset-one', 'asset-two'],
+    },
   ]);
   assert.equal(snapshot.stats.unresolvedCount, 2);
 });
@@ -296,7 +302,24 @@ test('the Dragon compile has the counts worked out on paper', () => {
     cycleCount: 0,
     ambiguousCount: 0,
   });
-  assert.deepEqual(snapshot.reviewItems, []);
+  // Both demotions are now visible as counted rows, one per (level, rung),
+  // rather than as a stat with nothing in the queue behind it.
+  assert.deepEqual(snapshot.reviewItems, [
+    {
+      kind: 'boundary-demotion',
+      levelId: 'building',
+      ladderSource: 'flow-family',
+      pairCount: 1,
+      exampleAssetIds: [PANEL],
+    },
+    {
+      kind: 'boundary-demotion',
+      levelId: 'system',
+      ladderSource: 'flow-family',
+      pairCount: 1,
+      exampleAssetIds: [RIO],
+    },
+  ]);
   assert.equal(snapshot.nodes.get('asset-0005-tit').parent.ladderSource, 'model-tree');
   assert.equal(snapshot.nodes.get(PANEL).parent.demotedFrom.boundaryLevelId, 'building');
   assert.equal(snapshot.nodes.get(RIO).parent.demotedFrom.boundaryLevelId, 'system');
@@ -368,7 +391,12 @@ test('review items are deduped and ordered deterministically', () => {
       ladderSource: 'flow-family',
       candidateParentIds: ['asset-a', 'asset-b'],
     },
-    { kind: 'missing-boundary', assetId: 'asset-gap', levelId: 'system' },
+    {
+      kind: 'missing-boundary-level',
+      levelId: 'system',
+      assetCount: 1,
+      exampleAssetIds: ['asset-lonely'],
+    },
   ]);
   assert.deepEqual(shuffled.reviewItems, first.reviewItems);
 });

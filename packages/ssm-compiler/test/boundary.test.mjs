@@ -64,7 +64,17 @@ test('PRODUCT.md §2.5: the panel in 603 becomes a dependency of the RIO in 650'
   assert.equal(snapshot.nodes.get(PANEL).parent.status, 'root');
   assert.equal(snapshot.stats.demotedToDependencyCount, 1);
   assert.equal(snapshot.stats.rootCount, 2);
-  assert.deepEqual(snapshot.reviewItems, []);
+  // The rule-driven demotion is counted rather than silent: one row per (level,
+  // rung), naming the children whose parents the level took away.
+  assert.deepEqual(snapshot.reviewItems, [
+    {
+      kind: 'boundary-demotion',
+      levelId: 'system',
+      ladderSource: 'flow-family',
+      pairCount: 1,
+      exampleAssetIds: [RIO],
+    },
+  ]);
 });
 
 test('the demotion dependency records the fold, and the demoted claim keeps its own provenance', () => {
@@ -225,8 +235,15 @@ test("missingValuePolicy 'review': unknown boundary leaves the child unresolved"
   assert.equal(child.parent.parentAssetId, null);
   // The claim is not kept -- it is retained as evidence, not as a decision.
   assert.equal(child.losingClaims.length, 1);
+  // One row for the level, counting the assets it left unplaced -- not one row
+  // per asset per level, which is the queue nobody can work.
   assert.deepEqual(snapshot.reviewItems, [
-    { kind: 'missing-boundary', assetId: PARENT, levelId: 'building' },
+    {
+      kind: 'missing-boundary-level',
+      levelId: 'building',
+      assetCount: 1,
+      exampleAssetIds: [CHILD],
+    },
   ]);
   assert.equal(snapshot.stats.unresolvedCount, 1);
   // 'review' refuses to bucket the asset, so the level path stays blank.
@@ -240,7 +257,12 @@ test("missingValuePolicy 'provisional-root': the child roots, flagged", () => {
   assert.equal(snapshot.stats.rootCount, 2);
   assert.equal(snapshot.stats.unresolvedCount, 0);
   assert.deepEqual(snapshot.reviewItems, [
-    { kind: 'missing-boundary', assetId: PARENT, levelId: 'building' },
+    {
+      kind: 'missing-boundary-level',
+      levelId: 'building',
+      assetCount: 1,
+      exampleAssetIds: [CHILD],
+    },
   ]);
 });
 
@@ -256,7 +278,12 @@ test("missingValuePolicy 'unassigned-group': the asset is bucketed, the parent i
     { levelId: 'building', value: '(unassigned)' },
   ]);
   assert.deepEqual(snapshot.reviewItems, [
-    { kind: 'missing-boundary', assetId: PARENT, levelId: 'building' },
+    {
+      kind: 'missing-boundary-level',
+      levelId: 'building',
+      assetCount: 1,
+      exampleAssetIds: [CHILD],
+    },
   ]);
 });
 
@@ -268,10 +295,14 @@ test('unknown never equals unknown: two unstated buildings do not nest', () => {
   });
 
   assert.equal(snapshot.nodes.get(CHILD).parent.parentAssetId, null);
-  // Both sides lacked the value, and the review item names both.
+  // One asset went unplaced, whichever side of the pair was missing the value.
   assert.deepEqual(snapshot.reviewItems, [
-    { kind: 'missing-boundary', assetId: CHILD, levelId: 'building' },
-    { kind: 'missing-boundary', assetId: PARENT, levelId: 'building' },
+    {
+      kind: 'missing-boundary-level',
+      levelId: 'building',
+      assetCount: 1,
+      exampleAssetIds: [CHILD],
+    },
   ]);
 });
 
@@ -302,7 +333,10 @@ test('a definite difference outranks an unknown at a different level', () => {
     parentAssetId: PARENT,
     boundaryLevelId: 'building',
   });
-  assert.equal(snapshot.reviewItems.length, 0);
+  assert.deepEqual(
+    snapshot.reviewItems.map((item) => `${item.kind}:${item.levelId}`),
+    ['boundary-demotion:building'],
+  );
 });
 
 test('dependencies are additive, deduped by upstream asset and type, and never fold', () => {
@@ -328,4 +362,131 @@ test('dependencies are additive, deduped by upstream asset and type, and never f
     ['CONTROLS', 'POWERS'],
   );
   assert.equal(snapshot.nodes.get(CHILD).parent.status, 'root');
+});
+
+/* ------------------------------------------------- what a boundary compares */
+
+test('D1 and d1 are one building: case never demotes a parent', () => {
+  const snapshot = compileSnapshot({
+    subjects: [subject(CHILD, { [BUILDING]: 'd1' }), subject(PARENT, { [BUILDING]: 'D1' })],
+    claims: claims({ structural: [claim('flow-family', CHILD, PARENT)] }),
+    hierarchy: buildingOnlyHierarchy('review'),
+  });
+
+  const child = snapshot.nodes.get(CHILD);
+  assert.equal(child.parent.status, 'resolved');
+  assert.equal(child.parent.parentAssetId, PARENT);
+  assert.deepEqual(snapshot.reviewItems, []);
+  // What the source wrote is what the level still groups and labels by: the
+  // fold decides equality, and nothing else (P0-6).
+  assert.equal(child.levelPath[0].value, 'd1');
+  assert.equal(snapshot.nodes.get(PARENT).levelPath[0].value, 'D1');
+});
+
+test('padding, a non-breaking space and an en dash do not demote either', () => {
+  const snapshot = compileSnapshot({
+    subjects: [
+      subject(CHILD, { [BUILDING]: ' D1 – North ' }),
+      subject(PARENT, { [BUILDING]: 'D1 - north' }),
+    ],
+    claims: claims({ structural: [claim('flow-family', CHILD, PARENT)] }),
+    hierarchy: buildingOnlyHierarchy('review'),
+  });
+
+  assert.equal(snapshot.nodes.get(CHILD).parent.parentAssetId, PARENT);
+});
+
+test('a value that is only whitespace is unstated, not a value two assets share', () => {
+  const snapshot = compileSnapshot({
+    subjects: [subject(CHILD, { [BUILDING]: '   ' }), subject(PARENT, { [BUILDING]: '   ' })],
+    claims: claims({ structural: [claim('flow-family', CHILD, PARENT)] }),
+    hierarchy: buildingOnlyHierarchy('review'),
+  });
+
+  assert.equal(snapshot.nodes.get(CHILD).parent.status, 'unresolved');
+});
+
+test('two genuinely different buildings still demote', () => {
+  const snapshot = compileSnapshot({
+    subjects: [subject(CHILD, { [BUILDING]: 'D1' }), subject(PARENT, { [BUILDING]: 'D2' })],
+    claims: claims({ structural: [claim('flow-family', CHILD, PARENT)] }),
+    hierarchy: buildingOnlyHierarchy('review'),
+  });
+
+  assert.equal(snapshot.nodes.get(CHILD).parent.parentAssetId, null);
+  assert.equal(snapshot.nodes.get(CHILD).parent.demotedFrom.boundaryLevelId, 'building');
+});
+
+/* ------------------------------------------------------- counted aggregates */
+
+test('a counted level names at most ten assets and counts every one of them', () => {
+  const subjects = [subject(PARENT, {})];
+  const structural = [];
+  for (let index = 0; index < 25; index += 1) {
+    const id = `asset-${String(index).padStart(2, '0')}`;
+    subjects.push(subject(id, { [BUILDING]: 'D1' }));
+    structural.push(claim('flow-family', id, PARENT, index + 1));
+  }
+
+  const snapshot = compileSnapshot({
+    subjects,
+    claims: claims({ structural }),
+    hierarchy: buildingOnlyHierarchy('unassigned-group'),
+  });
+
+  assert.deepEqual(snapshot.reviewItems, [
+    {
+      kind: 'missing-boundary-level',
+      levelId: 'building',
+      assetCount: 25,
+      exampleAssetIds: [
+        'asset-00',
+        'asset-01',
+        'asset-02',
+        'asset-03',
+        'asset-04',
+        'asset-05',
+        'asset-06',
+        'asset-07',
+        'asset-08',
+        'asset-09',
+      ],
+    },
+  ]);
+});
+
+test('an asset with a manual decision keeps its own row when a boundary is unstated', () => {
+  const snapshot = compileSnapshot({
+    subjects: [subject(CHILD, { [BUILDING]: 'D1' }), subject(PARENT, {})],
+    claims: claims({ structural: [claim('manual', CHILD, PARENT)] }),
+    hierarchy: buildingOnlyHierarchy('review'),
+  });
+
+  // Refusing a person is owed a named explanation; refusing a rule is owed a
+  // number. The row names the end that actually lacked the value.
+  assert.deepEqual(snapshot.reviewItems, [
+    { kind: 'missing-boundary', assetId: PARENT, levelId: 'building' },
+  ]);
+});
+
+test('demotions are counted per rung, so two rungs are two rows', () => {
+  const snapshot = compileSnapshot({
+    subjects: [
+      subject('asset-one', { [BUILDING]: 'D1' }),
+      subject('asset-two', { [BUILDING]: 'D1' }),
+      subject('asset-far', { [BUILDING]: 'D2' }),
+    ],
+    claims: claims({
+      structural: [
+        claim('flow-family', 'asset-one', 'asset-far', 1),
+        claim('profile-lookup', 'asset-two', 'asset-far', 2),
+      ],
+    }),
+    hierarchy: buildingOnlyHierarchy('review'),
+  });
+
+  assert.deepEqual(
+    snapshot.reviewItems.map((item) => `${item.ladderSource}:${item.pairCount}`),
+    ['flow-family:1', 'profile-lookup:1'],
+  );
 });

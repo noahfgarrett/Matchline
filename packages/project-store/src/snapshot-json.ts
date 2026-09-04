@@ -83,7 +83,9 @@ const REVIEW_KINDS = [
   'ambiguous-parent',
   'structural-cycle',
   'missing-boundary',
+  'missing-boundary-level',
   'manual-boundary-demotion',
+  'boundary-demotion',
   'nesting-proposal',
 ] as const satisfies ReadonlyArray<ReviewItem['kind']>;
 
@@ -426,6 +428,34 @@ function readReviewItem(value: unknown, field: string): ReviewItem {
         kind,
         assetId: requireStringAt(record['assetId'], `${field}.assetId`, fail),
         levelId: requireStringAt(record['levelId'], `${field}.levelId`, fail),
+      };
+    case 'missing-boundary-level':
+      return {
+        kind,
+        levelId: requireStringAt(record['levelId'], `${field}.levelId`, fail),
+        assetCount: requireIntegerAt(record['assetCount'], `${field}.assetCount`, fail),
+        exampleAssetIds: requireStringArrayAt(
+          record['exampleAssetIds'],
+          `${field}.exampleAssetIds`,
+          fail,
+        ),
+      };
+    case 'boundary-demotion':
+      return {
+        kind,
+        levelId: requireStringAt(record['levelId'], `${field}.levelId`, fail),
+        ladderSource: requireMemberAt(
+          record['ladderSource'],
+          LADDER_SOURCE_ORDER,
+          `${field}.ladderSource`,
+          fail,
+        ),
+        pairCount: requireIntegerAt(record['pairCount'], `${field}.pairCount`, fail),
+        exampleAssetIds: requireStringArrayAt(
+          record['exampleAssetIds'],
+          `${field}.exampleAssetIds`,
+          fail,
+        ),
       };
     case 'manual-boundary-demotion':
       return {

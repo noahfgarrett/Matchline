@@ -78,6 +78,28 @@ export const MODEL_TREE_SOURCE_FILE = 'extraction-cache';
 /** NUL appears in no asset id or relationship type, so composed keys stay unambiguous. */
 const KEY_SEPARATOR = '\u0000';
 
+/** How many, and enough of them by name to be worth reading. */
+const AGGREGATE_EXAMPLE_LIMIT = 10;
+
+/** One group of a counted review item: the total, and the first ten members. */
+interface Aggregate {
+  count: number;
+  readonly examples: string[];
+}
+
+/** Counts one member into its group, keeping at most ten examples. */
+function record(groups: Map<string, Aggregate>, key: string, assetId: string): void {
+  const existing = groups.get(key);
+  if (existing === undefined) {
+    groups.set(key, { count: 1, examples: [assetId] });
+    return;
+  }
+  existing.count += 1;
+  if (existing.examples.length < AGGREGATE_EXAMPLE_LIMIT) {
+    existing.examples.push(assetId);
+  }
+}
+
 function dependencyKey(parentAssetId: string, relationshipType: string): string {
   return `${parentAssetId}${KEY_SEPARATOR}${relationshipType}`;
 }
@@ -133,12 +155,34 @@ function modelTreeClaim(childAssetId: string, parentAssetId: string): SsmRelatio
   };
 }
 
+/** One (child, parent) pair one rung proposed and one boundary level refused. */
+interface DemotionRecord {
+  readonly levelId: string;
+  readonly ladderSource: LadderSourceKind;
+  readonly childAssetId: string;
+  readonly parentAssetId: string;
+}
+
+/** The level that ended one asset's walk with no decision, and where. */
+interface MissingRecord {
+  readonly levelId: string;
+  readonly assetId: string;
+  /** The assets that lacked the value: the child, the parent, or both. */
+  readonly missingOn: ReadonlyArray<string>;
+  /** Whether this asset carries a person's own parent decision. */
+  readonly manual: boolean;
+}
+
 /** One asset's resolution, before cycles are considered. */
 interface SubjectResolution {
   readonly node: ResolvedAssetNode;
   readonly reviewItems: ReadonlyArray<ReviewItem>;
   /** Parents this asset's walk demoted. Several are possible in one walk. */
   readonly demotionCount: number;
+  /** Every demotion, for the per-(level, rung) aggregate the snapshot raises. */
+  readonly demotions: ReadonlyArray<DemotionRecord>;
+  /** The missing-value stop, when the walk ended in one. */
+  readonly missing: MissingRecord | null;
 }
 
 /** Everything the walk reads that is the same for every subject. */
@@ -150,6 +194,14 @@ interface WalkContext {
   readonly structuralBySubject: ReadonlyMap<string, ReadonlyArray<SsmRelationshipClaim>>;
   readonly dependenciesBySubject: ReadonlyMap<string, ReadonlyArray<SsmRelationshipClaim>>;
   readonly makeRootIds: ReadonlySet<string>;
+  /**
+   * Assets somebody recorded a parent decision about.
+   *
+   * The one thing that decides whether a missing boundary is reported per asset
+   * or counted: refusing a person is owed a named row, and refusing a rule is
+   * owed a number (see `MissingBoundaryLevelReviewItem`).
+   */
+  readonly manualSubjects: ReadonlySet<string>;
 }
 
 /**
@@ -246,6 +298,8 @@ function resolveSubject(subject: CompileSubject, ctx: WalkContext): SubjectResol
    * with the dependency list a reviewer is looking at.
    */
   const demotedParents = new Set<string>();
+  const demotions: DemotionRecord[] = [];
+  let missing: MissingRecord | null = null;
 
   // A manual make-root is not a claim about a pair, it is a person stating there
   // is no pair. It outranks every rung, so nothing below is consulted (§11.5).
@@ -299,6 +353,12 @@ function resolveSubject(subject: CompileSubject, ctx: WalkContext): SubjectResol
 
       if (outcome.kind === 'demote') {
         demotedParents.add(selectedParentId);
+        demotions.push({
+          levelId: outcome.levelId,
+          ladderSource: tier,
+          childAssetId: subject.assetId,
+          parentAssetId: selectedParentId,
+        });
         if (firstDemotion === undefined) {
           // The strongest rung the fold took a parent away from is the one a
           // reviewer asks about ("why is this not under panel 603?"), so that is
@@ -310,10 +370,13 @@ function resolveSubject(subject: CompileSubject, ctx: WalkContext): SubjectResol
           };
         }
 
-        // P0-4's visible item. Only the manual rung raises one: a demoted rule
-        // is the fold doing its job and is counted in the demotion stat, while a
+        // P0-4's visible item. Only the manual rung raises a per-PAIR one: a
         // demoted person is the compiler declining to do what somebody asked
         // for, and that is owed an explanation naming both ends and the level.
+        // A demoted rule is the fold doing its job -- it is counted here and
+        // reported per (level, rung) by `compileSnapshot`, because one item per
+        // refused pair would bury the queue and no item at all was the silence
+        // the audit found.
         if (tier === 'manual') {
           reviewItems.push({
             kind: 'manual-boundary-demotion',
@@ -354,8 +417,22 @@ function resolveSubject(subject: CompileSubject, ctx: WalkContext): SubjectResol
       // fold agreeing that unknown equals unknown. So a manual parent with an
       // unstated boundary value takes the same missing-boundary review item and
       // the same per-level policy as any other rung's would.
-      for (const assetId of outcome.missingOn) {
-        reviewItems.push({ kind: 'missing-boundary', assetId, levelId: outcome.levelId });
+      //
+      // Reported per asset only where somebody recorded a decision about this
+      // one: a person is owed the named row. Everywhere else the stop is
+      // counted per level by `compileSnapshot` -- a site that mapped no
+      // Building property would otherwise raise one item per asset per level,
+      // which is the 40,000-row queue nobody can work.
+      missing = {
+        levelId: outcome.levelId,
+        assetId: subject.assetId,
+        missingOn: outcome.missingOn,
+        manual: ctx.manualSubjects.has(subject.assetId),
+      };
+      if (missing.manual) {
+        for (const assetId of outcome.missingOn) {
+          reviewItems.push({ kind: 'missing-boundary', assetId, levelId: outcome.levelId });
+        }
       }
       status = statusForPolicy(outcome.policy);
       break;
@@ -381,6 +458,8 @@ function resolveSubject(subject: CompileSubject, ctx: WalkContext): SubjectResol
     },
     reviewItems,
     demotionCount: demotedParents.size,
+    demotions,
+    missing,
   };
 }
 
@@ -537,6 +616,17 @@ export function compileSnapshot(input: CompileInput): ResolvedSnapshot {
     }
   }
 
+  // A person's decision about an asset, whichever rung it arrived on. Read off
+  // the claims rather than taken as a second input: the manual rung IS a claim,
+  // and a separate list of "who decided something" would be a second answer to
+  // a question the claims already answer.
+  const manualSubjects = new Set<string>();
+  for (const claim of input.claims.structural) {
+    if (claim.ladderSource === 'manual') {
+      manualSubjects.add(claim.subjectAssetId);
+    }
+  }
+
   const ctx: WalkContext = {
     subjectById,
     ladder,
@@ -547,11 +637,14 @@ export function compileSnapshot(input: CompileInput): ResolvedSnapshot {
     structuralBySubject,
     dependenciesBySubject,
     makeRootIds,
+    manualSubjects,
   };
 
   const nodes = new Map<string, ResolvedAssetNode>();
   const reviewItems: ReviewItem[] = [];
   let demotedToDependencyCount = 0;
+  const missingByLevel = new Map<string, Aggregate>();
+  const demotionsByRung = new Map<string, Aggregate>();
 
   for (const assetId of orderedIds) {
     const subject = subjectById.get(assetId);
@@ -562,6 +655,48 @@ export function compileSnapshot(input: CompileInput): ResolvedSnapshot {
     nodes.set(assetId, resolution.node);
     reviewItems.push(...resolution.reviewItems);
     demotedToDependencyCount += resolution.demotionCount;
+
+    // Subjects are walked in asset-id order, so every aggregate's examples come
+    // out ascending without a sort and the same input always names the same ten.
+    const missing = resolution.missing;
+    if (missing !== null && !missing.manual) {
+      record(missingByLevel, missing.levelId, missing.assetId);
+    }
+    for (const demotion of resolution.demotions) {
+      if (demotion.ladderSource === 'manual') {
+        continue;
+      }
+      record(
+        demotionsByRung,
+        `${demotion.levelId}${KEY_SEPARATOR}${demotion.ladderSource}`,
+        demotion.childAssetId,
+      );
+    }
+  }
+
+  for (const [levelId, aggregate] of missingByLevel) {
+    reviewItems.push({
+      kind: 'missing-boundary-level',
+      levelId,
+      assetCount: aggregate.count,
+      exampleAssetIds: aggregate.examples,
+    });
+  }
+  for (const [key, aggregate] of demotionsByRung) {
+    const [levelId, ladderSource] = key.split(KEY_SEPARATOR);
+    if (levelId === undefined || ladderSource === undefined) {
+      continue;
+    }
+    reviewItems.push({
+      kind: 'boundary-demotion',
+      levelId,
+      // Every key was composed from a `LadderSourceKind` a few lines up, so the
+      // half after the separator is one; the ladder is what a rung came from,
+      // and there is no other vocabulary it could be spelled in.
+      ladderSource: ladderSource as LadderSourceKind,
+      pairCount: aggregate.count,
+      exampleAssetIds: aggregate.examples,
+    });
   }
 
   const cycles = findCycles(nodes, orderedIds);

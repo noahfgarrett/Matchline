@@ -70,6 +70,25 @@ const EVERY_KIND = [
     childRef: 'TIT603-10-01',
     parentRef: 'MAH001-10-99',
   },
+  {
+    kind: 'missing-boundary-level',
+    levelId: 'building',
+    assetCount: 34,
+    exampleAssetIds: ['tag:MAH001-10-01'],
+  },
+  {
+    kind: 'boundary-demotion',
+    levelId: 'building',
+    ladderSource: 'flow-family',
+    pairCount: 4,
+    exampleAssetIds: ['tag:MAH001-10-01'],
+  },
+  {
+    kind: 'unresolved-system',
+    skipReasons: ['keyChain[0] model-field no-value'],
+    assetCount: 8,
+    exampleAssetIds: ['tag:MAH001-10-01'],
+  },
   { kind: 'unresolvable-alias', evidenceTag: 'MAH-1', aliasTarget: 'MAH001-10-99' },
   {
     kind: 'absorbed-tagged-component',
@@ -330,4 +349,35 @@ test('a record written before the universe existed keeps the key it was written 
       sources: [{ sourceId: 'model', objectIds: [17, 42] }],
     }),
   );
+});
+
+test('a counted item is keyed by its group, so the count can change without orphaning', () => {
+  const before = reviewKey({
+    kind: 'missing-boundary-level',
+    levelId: 'building',
+    assetCount: 34,
+    exampleAssetIds: ['tag:A'],
+  });
+  const after = reviewKey({
+    kind: 'missing-boundary-level',
+    levelId: 'building',
+    assetCount: 12,
+    exampleAssetIds: ['tag:B', 'tag:C'],
+  });
+  assert.equal(before, after, 'a decision recorded on the level survives a recompile');
+
+  // Two levels, and two rungs at one level, are still two different decisions.
+  assert.notEqual(
+    before,
+    reviewKey({
+      kind: 'missing-boundary-level',
+      levelId: 'system',
+      assetCount: 34,
+      exampleAssetIds: [],
+    }),
+  );
+  const demotion = (levelId, ladderSource) =>
+    reviewKey({ kind: 'boundary-demotion', levelId, ladderSource, pairCount: 1, exampleAssetIds: [] });
+  assert.notEqual(demotion('building', 'flow-family'), demotion('building', 'family-role'));
+  assert.notEqual(demotion('building', 'flow-family'), demotion('system', 'flow-family'));
 });

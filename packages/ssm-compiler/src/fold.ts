@@ -29,10 +29,18 @@
  * What a boundary compares is the level's boundary attribute, which defaults to
  * its key (P0-6). Never its display attribute: a level that compared the words
  * would demote a parent every time somebody re-typed a description.
+ *
+ * And it compares it FOLDED -- see {@link boundaryValue}. Rule 3 says unknown
+ * never equals unknown; it does not say `D1` differs from `d1`, and treating
+ * them as two buildings demoted every cross-file parent on a site whose model
+ * property and whose assignment rule disagreed only about a capital letter.
+ * The fold decides equality and nothing else: the value a level groups by,
+ * exports and shows is still exactly what the source wrote.
  */
 import {
   boundaryAttributeOf,
   displayAttributeOf,
+  unicodeFold,
   type HierarchyConfig,
   type HierarchyLevelConfig,
   type ResolvedLevelPathEntry,
@@ -90,6 +98,30 @@ export function explicitValue(subject: CompileSubject, attributeKey: string): st
   return value;
 }
 
+/**
+ * The same value as {@link explicitValue}, in the spelling a boundary compares.
+ *
+ * Two assets in building `D1` and building `d1` are in one building. One source
+ * writes the model property, another writes an assignment rule, and a third
+ * pastes a cell with a trailing space; comparing those three raw would demote
+ * every parent between them and say nothing about why. So the comparison folds
+ * -- unicode, then whitespace, then case -- and only the comparison does. What
+ * is stored, grouped by, exported and shown to a person is the value the source
+ * wrote (P0-6: a level's key is its identity, and re-typing it must not move
+ * equipment).
+ *
+ * A value that is only whitespace folds to nothing and is unknown, for the same
+ * reason a blank one is: nobody stated a building by pressing space.
+ */
+export function boundaryValue(subject: CompileSubject, attributeKey: string): string | null {
+  const stated = explicitValue(subject, attributeKey);
+  if (stated === null) {
+    return null;
+  }
+  const folded = unicodeFold(stated).trim().toLowerCase();
+  return folded === '' ? null : folded;
+}
+
 /** The levels a difference is allowed to break a parent over. */
 export function boundaryLevels(
   hierarchy: HierarchyConfig,
@@ -114,8 +146,8 @@ export function foldBoundaries(
 
   for (const level of levels) {
     const attributeKey = boundaryAttributeOf(level);
-    const childValue = explicitValue(child, attributeKey);
-    const parentValue = explicitValue(parent, attributeKey);
+    const childValue = boundaryValue(child, attributeKey);
+    const parentValue = boundaryValue(parent, attributeKey);
     if (childValue !== null && parentValue !== null && childValue !== parentValue) {
       return { kind: 'demote', levelId: level.levelId };
     }
@@ -123,8 +155,8 @@ export function foldBoundaries(
 
   for (const level of levels) {
     const attributeKey = boundaryAttributeOf(level);
-    const childValue = explicitValue(child, attributeKey);
-    const parentValue = explicitValue(parent, attributeKey);
+    const childValue = boundaryValue(child, attributeKey);
+    const parentValue = boundaryValue(parent, attributeKey);
     if (childValue !== null && parentValue !== null) {
       continue;
     }

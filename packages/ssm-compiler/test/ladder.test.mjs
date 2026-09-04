@@ -123,8 +123,15 @@ test('a missing boundary stops the walk: no weaker rung is asked to resolve an u
   const child = snapshot.nodes.get(CHILD);
   assert.equal(child.parent.status, 'unresolved');
   assert.equal(child.parent.parentAssetId, null);
+  // Nobody decided anything about this asset by hand, so the stop is counted at
+  // the level rather than written out per asset.
   assert.deepEqual(snapshot.reviewItems, [
-    { kind: 'missing-boundary', assetId: LEFT, levelId: 'system' },
+    {
+      kind: 'missing-boundary-level',
+      levelId: 'system',
+      assetCount: 1,
+      exampleAssetIds: [CHILD],
+    },
   ]);
 });
 
