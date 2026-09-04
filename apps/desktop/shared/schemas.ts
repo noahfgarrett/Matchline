@@ -1838,6 +1838,29 @@ export const reviewRowSchema = z.object({
 });
 export type WireReviewRow = z.infer<typeof reviewRowSchema>;
 
+/**
+ * A decision this project recorded that the latest compile has no item for.
+ *
+ * The equipment left the model, the evidence behind a conflict changed, a
+ * boundary level was renamed: the review key it was filed under no longer names
+ * anything, so the decision applies to nothing and — until this existed —
+ * disappeared from the queue in silence, leaving the item it used to answer
+ * showing as undecided with no trace of the person who had decided it.
+ *
+ * The key is carried verbatim because the spelling is the evidence, and the
+ * kind is read out of it because it is the only thing left that says what the
+ * decision was about.
+ */
+export const staleDecisionSchema = z.object({
+  reviewKey: z.string().min(1),
+  /** The review-item kind the key was filed under. */
+  kind: z.string().min(1),
+  decision: decisionValueSchema,
+  decidedAt: z.string(),
+  note: z.string(),
+});
+export type WireStaleDecision = z.infer<typeof staleDecisionSchema>;
+
 export const reviewPageSchema = z.object({
   total: z.number().int().nonnegative(),
   rows: z.array(reviewRowSchema),
@@ -1846,6 +1869,12 @@ export const reviewPageSchema = z.object({
     z.object({ kind: z.string().min(1), count: z.number().int().nonnegative() }),
   ),
   undecidedCount: z.number().int().nonnegative(),
+  /**
+   * Decisions with nothing left to apply to, oldest first. Never paged: a
+   * project with a hundred of these has a problem the list itself is the
+   * evidence for.
+   */
+  staleDecisions: z.array(staleDecisionSchema).default([]),
 });
 export type WireReviewPage = z.infer<typeof reviewPageSchema>;
 

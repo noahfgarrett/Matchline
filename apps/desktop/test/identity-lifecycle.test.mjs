@@ -350,6 +350,79 @@ test('a decision naming equipment no compile has becomes a review item, not a si
   assert.equal(ghost.parentAssetId, `tag:${PARENT_TAG}`);
 });
 
+/* ------------------------------------------- manual system assignments */
+
+/** Writes a `system` override straight into a closed project file. */
+function writeSystemOverride(projectPath, assetKey, override) {
+  const db = new DatabaseSync(projectPath);
+  try {
+    db.prepare(
+      `INSERT INTO overrides (kind, asset_key, payload_json, updated_at)
+       VALUES ('system', ?, ?, '2026-01-15T09:00:00.000Z')
+       ON CONFLICT (kind, asset_key) DO UPDATE SET payload_json = excluded.payload_json`,
+    ).run(assetKey, JSON.stringify(override));
+  } finally {
+    db.close();
+  }
+}
+
+/** The generated-MEL asset one compile stored for a tag (schema v7). */
+function storedAsset(projectPath, compileId, canonicalTag) {
+  const db = new DatabaseSync(projectPath, { readOnly: true });
+  try {
+    const row = db
+      .prepare('SELECT assets_json FROM compile_assets WHERE compile_id = ?')
+      .get(compileId);
+    assert.ok(row, `compile ${compileId} stored no assets`);
+    return JSON.parse(row.assets_json).find((asset) => asset.canonicalTag === canonicalTag);
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * `setSystemOverride` has written rows since schema v1 and nothing ever read one.
+ *
+ * PRODUCT.md §4.1 makes a manual system "always the final word", and it was a
+ * word nothing said: the rows were stored, carried forward by every migration,
+ * and never handed to the compiler. This is that plumbing, both halves — the
+ * override that lands, and the one that no longer names anything and is
+ * reported rather than dropped.
+ */
+test('a stored system override reaches the compiler, and a stale one is reported', async (t) => {
+  const projectPath = join(workDir, 'ManualSystem.matchline');
+  const service = newService();
+  t.after(() => {
+    service.close();
+  });
+
+  await configure(service, projectPath);
+  const first = summaryOf(await service.compile());
+  const resolved = storedAsset(projectPath, first.compileId, 'MAH001-10-01');
+  assert.equal(resolved.system.systemKey, '001', 'the model’s own UPN decides it by default');
+  assert.equal(first.orphanedDecisionCount, 0);
+
+  // One that names a live asset by its canonical tag, and one that names
+  // equipment this project has never seen.
+  writeSystemOverride(projectPath, 'MAH001-10-01', {
+    systemKey: '900',
+    systemDescription: 'Reassigned on site',
+  });
+  writeSystemOverride(projectPath, 'GONE-99-99', { systemKey: '901' });
+
+  const second = summaryOf(await service.compile());
+  const overridden = storedAsset(projectPath, second.compileId, 'MAH001-10-01');
+  assert.equal(overridden.system.systemKey, '900', 'the person’s answer is the final word');
+  assert.equal(overridden.system.systemDescription, 'Reassigned on site');
+
+  assert.equal(second.orphanedDecisionCount, 1, 'and the one that names nothing is not silent');
+  const orphan = service
+    .reviewPage('orphaned-decision', 0, 50)
+    .rows.find((row) => row.reviewKey.includes('GONE-99-99'));
+  assert.ok(orphan, 'it arrives in the queue for a person to re-aim or retire');
+  assert.match(orphan.summary, /manual-system/);
+});
+
 /* ---------------------------------------------- the v4 → v5 migration flow */
 
 /**

@@ -40,7 +40,7 @@ export type { FoldOutcome } from './fold.js';
 
 export { hierarchyTree } from './tree.js';
 
-export { compareReviewItems, reviewKey } from './order.js';
+export { compareReviewItems, reviewKey, reviewKeyKind } from './order.js';
 
 export type {
   CompileClaims,

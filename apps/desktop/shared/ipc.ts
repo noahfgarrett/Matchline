@@ -1473,7 +1473,7 @@ export const IPC_CHANNELS = {
     response: reviewPageSchema,
     example: {
       request: { kind: '', offset: 0, limit: 50 },
-      response: { total: 0, rows: [], kinds: [], undecidedCount: 0 },
+      response: { total: 0, rows: [], kinds: [], undecidedCount: 0, staleDecisions: [] },
     },
   },
 

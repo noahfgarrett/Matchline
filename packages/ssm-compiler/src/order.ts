@@ -99,6 +99,24 @@ function composeKey(kind: ReviewItem['kind'], ...fields: readonly string[]): str
   return [kind, ...fields].join(KEY_SEPARATOR);
 }
 
+/**
+ * The review-item kind a stored key was filed under.
+ *
+ * A project file keeps decisions as keys and nothing else, so when a key stops
+ * matching anything this compile produced — the equipment left the model, the
+ * evidence changed, the level was renamed — the kind is all that is left to say
+ * what the decision was ever about. Reading it lives here because the separator
+ * does: a caller splitting the string itself would be a second, drifting copy
+ * of {@link reviewKey}'s format.
+ *
+ * A key with no separator in it is its own kind, which is what a hand-typed or
+ * truncated row looks like; `''` for the empty string, which is not a key.
+ */
+export function reviewKeyKind(key: string): string {
+  const boundary = key.indexOf(KEY_SEPARATOR);
+  return boundary === -1 ? key : key.slice(0, boundary);
+}
+
 /** UTF-16 code-unit order, so ordering never depends on a locale. */
 export function compareText(left: string, right: string): number {
   if (left < right) {

@@ -11,6 +11,7 @@ import type { AssetLedger } from '@matchline/asset-identity';
 import type { ManualRelationshipOverride, SiteProfileV2 } from '@matchline/domain';
 import type { LearnedRuleSet } from '@matchline/learned-rules';
 import { openExtractionCache, type ExtractionCache } from '@matchline/model-schema';
+import type { ManualAssignment, ManualAssignments } from '@matchline/system-resolver';
 
 import { digestFile, mapBounded, DIGEST_CONCURRENCY } from './digest.js';
 
@@ -76,6 +77,25 @@ export interface CompileWorkerRequest {
   readonly learnedRules: LearnedRuleSet | null;
   readonly manualRelationshipOverrides: readonly ManualRelationshipOverride[];
   /**
+   * The project's manual system assignments, as `[assetRef, assignment]` pairs.
+   *
+   * Pairs rather than the `ManualAssignments` map the compiler takes, for the
+   * same reason every other field here is a plain shape: what crosses this
+   * boundary is decided in this file, and a list of tuples is unambiguously
+   * cloneable where a `Map` relies on structured clone doing the right thing
+   * with a type the compiler happens to have chosen.
+   *
+   * `assetRef` is whatever the project recorded — a ledger asset id, a bare
+   * canonical tag, or a `tag:` id from an older build. It is re-addressed
+   * through the ledger in `compile.ts`, and one that resolves to nothing
+   * becomes an `orphaned-decision` review item rather than being dropped.
+   *
+   * These rows existed in every project file and reached the compiler from
+   * nowhere: PRODUCT.md §4.1 makes a manual system "always the final word", and
+   * it was a word nothing said.
+   */
+  readonly manualSystemAssignments: ReadonlyArray<readonly [string, ManualAssignment]>;
+  /**
    * The asset identity ledger the project's last compile wrote, or `null` when
    * it has never been compiled (P0-9).
    *
@@ -132,6 +152,7 @@ function buildCompileInput(
     melWorkbook?: MelWorkbookInput;
     learnedRules?: LearnedRuleSet;
     manualRelationshipOverrides?: ReadonlyArray<ManualRelationshipOverride>;
+    manualSystemAssignments?: ManualAssignments;
     identityLedger?: AssetLedger;
   } = {
     // Every ready model source, not the first one: a project is a universe
@@ -156,6 +177,9 @@ function buildCompileInput(
   }
   if (request.manualRelationshipOverrides.length > 0) {
     input.manualRelationshipOverrides = [...request.manualRelationshipOverrides];
+  }
+  if (request.manualSystemAssignments.length > 0) {
+    input.manualSystemAssignments = new Map(request.manualSystemAssignments);
   }
   if (request.previousLedger !== null) {
     input.identityLedger = request.previousLedger;

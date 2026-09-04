@@ -18,6 +18,8 @@ import {
   type MelWorkbookInput,
 } from '@matchline/compiler';
 import type { ManualRelationshipOverride, SiteProfileV2 } from '@matchline/domain';
+import { reviewKeyKind } from '@matchline/ssm-compiler';
+import type { ManualAssignment } from '@matchline/system-resolver';
 import { validateLearnedRuleSet, type LearnedRuleSet } from '@matchline/learned-rules';
 import type { GeneratedMelAsset } from '@matchline/mel-export';
 import {
@@ -86,6 +88,7 @@ import type {
   WireSourceModelSummary,
   WireSourceStatus,
   WireSourceSummary,
+  WireStaleDecision,
   WireSystemResolver,
   WireTemplateAnalysis,
   WireTemplateBinding,
@@ -2007,6 +2010,28 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       );
   }
 
+  /**
+   * The manual system assignments this project has recorded (PRODUCT.md §4.1).
+   *
+   * Keyed by whatever the row is filed under — a ledger asset id, a bare
+   * canonical tag, or a `tag:` id from an older build — because that is what
+   * the ledger re-addresses in the compiler, and a key rewritten here would be
+   * a second, worse copy of that logic.
+   *
+   * These rows have existed since schema v1 and reached the compiler from
+   * nowhere: `setSystemOverride` wrote them, migration carried them forward,
+   * and no compile ever read one. A person's final word was stored and ignored.
+   */
+  function storedSystemAssignments(
+    active: Session,
+  ): ReadonlyArray<readonly [string, ManualAssignment]> {
+    return active.store
+      .listOverrides()
+      .flatMap((stored): ReadonlyArray<readonly [string, ManualAssignment]> =>
+        stored.kind === 'system' ? [[stored.assetKey, stored.override] as const] : [],
+      );
+  }
+
   function overrideRows(active: Session): readonly WireOverrideRow[] {
     const tagOf = (assetId: string): string => active.view?.tagOf(assetId) ?? '';
     return active.store.listOverrides().flatMap((stored): readonly WireOverrideRow[] => {
@@ -2038,6 +2063,49 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       });
     }
     return latest;
+  }
+
+  /**
+   * The decisions this project recorded that the latest compile has no item for.
+   *
+   * A review key is content-addressed: it carries the asset, the evidence and
+   * the reason, so that a decision cannot silently answer for a DIFFERENT
+   * ambiguity later. The price is that the key moves when the thing it names
+   * moves — equipment leaves the model, a conflict's competing values change, a
+   * level is renamed — and the decision then applies to nothing. Until now it
+   * simply vanished: the item it used to answer came back as undecided, and the
+   * work somebody had already done was neither applied nor mentioned.
+   *
+   * Computed from the store on every read rather than cached on the view, so a
+   * decision recorded a moment ago is not briefly reported as stale.
+   *
+   * Ordered oldest-decision first, which is the order they were made in.
+   */
+  function staleDecisionsOf(
+    active: Session,
+    rows: readonly WireReviewRow[],
+  ): readonly WireStaleDecision[] {
+    const live = new Set(rows.map((row) => row.reviewKey));
+    const stale: WireStaleDecision[] = [];
+    for (const [reviewKey, decision] of decisionsByKey(active)) {
+      if (live.has(reviewKey)) {
+        continue;
+      }
+      stale.push({
+        reviewKey,
+        // All that is left to say what it was about: the rest of the key is the
+        // evidence that stopped matching.
+        kind: reviewKeyKind(reviewKey),
+        decision: decision.decision,
+        decidedAt: decision.decidedAt,
+        note: decision.note,
+      });
+    }
+    return stale.sort((left, right) =>
+      left.decidedAt === right.decidedAt
+        ? left.reviewKey.localeCompare(right.reviewKey)
+        : left.decidedAt.localeCompare(right.decidedAt),
+    );
   }
 
   function undecidedCount(active: Session, view: CompileView): number {
@@ -2377,6 +2445,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           melWorkbook,
           learnedRules: storedNestingRules(active),
           manualRelationshipOverrides: storedRelationshipOverrides(active),
+          manualSystemAssignments: storedSystemAssignments(active),
           previousLedger,
         },
         (stage: CompileStage): void => {
@@ -3286,6 +3355,12 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           .map(([name, count]) => ({ kind: name, count }))
           .sort((left, right) => (left.kind < right.kind ? -1 : 1)),
         undecidedCount: all.filter((row) => row.decision === null).length,
+        // The other half of the queue: not "items nobody has decided" but
+        // "decisions with nothing left to decide". Unfiltered by `kind`,
+        // because a stale decision is not IN the compile and filtering the
+        // queue to one kind must not hide the fact that another kind's
+        // decisions have come loose.
+        staleDecisions: [...staleDecisionsOf(active, all)],
       };
     },
 

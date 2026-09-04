@@ -752,6 +752,46 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     }
   });
 
+  /**
+   * A decision the compile no longer has an item for (P0-9, §10).
+   *
+   * A review key is content-addressed, so it moves when the thing it names
+   * moves. The decision then applies to nothing — and used to disappear from
+   * the queue in silence, taking the record of somebody's work with it.
+   */
+  await t.test('a decision with nothing left to decide is reported, not dropped', async () => {
+    const before = service.reviewPage('', 0, 500);
+    assert.deepEqual(before.staleDecisions, [], 'every decision so far still has its item');
+
+    // A key nothing in this compile carries: the shape a real one takes once
+    // the equipment it named has left the model.
+    const orphan = 'missing-boundary\u241Ftag:GONE-99-99\u241Fbuilding';
+    assert.equal(service.recordDecision(orphan, 'rejected', 'Removed from the package.'), true);
+
+    const after = service.reviewPage('', 0, 500);
+    assert.equal(after.total, before.total, 'it is not an item, so it is not in the queue');
+    assert.equal(after.staleDecisions.length, 1);
+    assert.deepEqual(
+      { ...after.staleDecisions[0], decidedAt: '' },
+      {
+        reviewKey: orphan,
+        kind: 'missing-boundary',
+        decision: 'rejected',
+        decidedAt: '',
+        note: 'Removed from the package.',
+      },
+      'the key verbatim, and the kind read out of it — all that is left to say what it was about',
+    );
+
+    // Filtering the queue must not hide it: a stale decision is not IN the
+    // compile, so it belongs to no filter.
+    assert.equal(service.reviewPage('missing-boundary', 0, 500).staleDecisions.length, 1);
+
+    // And it survives a recompile, because it is stored against the key.
+    assert.equal((await service.compile()).state, 'done');
+    assert.equal(service.reviewPage('', 0, 500).staleDecisions.length, 1);
+  });
+
   await t.test('review decisions are recorded and shown against the item', async () => {
     const before = service.reviewPage('', 0, 100);
     assert.ok(before.total > 0, 'the compile left something to decide');
