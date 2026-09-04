@@ -28,6 +28,9 @@ namespace Matchline.Extraction.Extractor
         /// <summary>Navisworks ran but the plugin never wrote a stream (PLUGIN_NOT_FOUND).</summary>
         internal const int PluginNotFound = 12;
 
+        /// <summary>The document opened with models missing (SOURCE_MODEL_MISSING).</summary>
+        internal const int SourceModelMissing = 13;
+
         internal static int ForErrorCode(string code)
         {
             switch (code)
@@ -50,6 +53,8 @@ namespace Matchline.Extraction.Extractor
                     return PluginNotDeployed;
                 case ExtractionErrorCodes.PluginNotFound:
                     return PluginNotFound;
+                case ExtractionErrorCodes.SourceModelMissing:
+                    return SourceModelMissing;
                 case ExtractionErrorCodes.CacheWriteFailed:
                     return CacheWriteFailed;
                 case ExtractionErrorCodes.Cancelled:

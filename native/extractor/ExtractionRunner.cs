@@ -120,18 +120,38 @@ namespace Matchline.Extraction.Extractor
                 // run fails and deleted whenever it does not.
                 roamerLogPath = Path.Combine(_arguments.CacheDirectory, sha256 + ".roamer.log");
 
-                CacheValidation existing = CacheInspector.Validate(cachePath);
-                if (existing.IsValid)
-                {
-                    _reporter.ResultCacheHit(cachePath, existing.ObjectCount, existing.WarningCount);
-                    return ExitCodes.Ok;
-                }
+                // An NWF is never served from cache without re-opening it. Its
+                // own bytes are a list of references, so they can be byte-identical
+                // while the models behind them have moved, been replaced, or gone
+                // missing -- the content hash addresses the wrong thing. The run
+                // still FILES its cache under that hash, because that is what the
+                // caller asked about; what it will not do is answer from one
+                // without asking Navisworks whether the references still resolve.
+                bool referencesInput = IsReferencingInput(_arguments.InputPath);
 
-                if (File.Exists(cachePath))
+                if (!referencesInput)
                 {
-                    // Present but not trustworthy: say so and re-extract rather
-                    // than silently serving a bad cache.
-                    _reporter.Warning("STALE_CACHE_DISCARDED", existing.Reason, null);
+                    CacheValidation existing = CacheInspector.Validate(cachePath);
+                    if (existing.IsValid)
+                    {
+                        _reporter.ResultCacheHit(cachePath, existing.ObjectCount, existing.WarningCount);
+                        return ExitCodes.Ok;
+                    }
+
+                    if (File.Exists(cachePath))
+                    {
+                        // Present but not trustworthy: say so and re-extract rather
+                        // than silently serving a bad cache.
+                        _reporter.Warning("STALE_CACHE_DISCARDED", existing.Reason, null);
+                        File.Delete(cachePath);
+                    }
+                }
+                else if (File.Exists(cachePath))
+                {
+                    // Deleted rather than kept: Commit() treats an existing final
+                    // file as "a concurrent run got there first" and keeps it,
+                    // which for an NWF would quietly re-serve the very cache this
+                    // run exists to replace.
                     File.Delete(cachePath);
                 }
 
@@ -239,8 +259,6 @@ namespace Matchline.Extraction.Extractor
 
                 if (!outcome.Ok)
                 {
-                    keepStream = true;
-                    keepRoamerLog = true;
                     string code = outcome.ErrorCode;
                     if (code == ExtractionErrorCodes.ExtractFailed)
                     {
@@ -249,6 +267,17 @@ namespace Matchline.Extraction.Extractor
                         code = FailureClassifier.ClassifyMessage(run.CapturedOutput, code);
                     }
 
+                    if (code == ExtractionErrorCodes.SourceModelMissing)
+                    {
+                        // Nothing malfunctioned, so there is nothing to diagnose:
+                        // the stream is a complete, correct record of a document
+                        // that was missing a file, and it can be gigabytes. The
+                        // message already names what was absent.
+                        return Fail(code, outcome.ErrorMessage);
+                    }
+
+                    keepStream = true;
+                    keepRoamerLog = true;
                     return Fail(
                         code,
                         outcome.ErrorMessage + " Stream kept for diagnosis at: " + streamPath + ". " +
@@ -310,6 +339,34 @@ namespace Matchline.Extraction.Extractor
                     DeleteIfExists(roamerLogPath);
                 }
             }
+        }
+
+        /// <summary>
+        /// Whether the input is a file that only REFERENCES its models.
+        /// <para>
+        /// An NWF, today. Decided from the extension because it is the only
+        /// thing the launcher can see: opening the file to find out would need
+        /// the Navisworks it is about to start.
+        /// </para>
+        /// </summary>
+        private static bool IsReferencingInput(string inputPath)
+        {
+            if (string.IsNullOrEmpty(inputPath))
+            {
+                return false;
+            }
+
+            string extension;
+            try
+            {
+                extension = Path.GetExtension(inputPath);
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+
+            return string.Equals(extension, ".nwf", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -482,6 +539,12 @@ namespace Matchline.Extraction.Extractor
             long records = 0;
             long warningRows;
 
+            // Warnings the plugin raised at error severity. There is exactly one
+            // kind today -- a referenced model that did not load -- and the list
+            // holds their messages so the failure can name the files rather than
+            // just their number.
+            List<string> fatalWarnings = new List<string>();
+
             using (CacheWriter writer = CacheWriter.Create(partialCachePath))
             using (NdjsonReader reader = NdjsonReader.OpenFile(streamPath))
             {
@@ -503,7 +566,7 @@ namespace Matchline.Extraction.Extractor
                             break;
                         }
 
-                        Apply(writer, entry, meta);
+                        Apply(writer, entry, meta, fatalWarnings);
 
                         if ((records % ConvertProgressInterval) == 0)
                         {
@@ -535,6 +598,21 @@ namespace Matchline.Extraction.Extractor
                         string.IsNullOrEmpty(end.Message) ? "The extraction plugin reported a failure." : end.Message);
                 }
 
+                // A stream that finished, terminated cleanly, and describes less
+                // than the input does. Nothing above catches it: the walk did not
+                // fail, so end.Ok is true and every integrity check the cache runs
+                // against itself passes -- on a document with a whole discipline
+                // absent. The partial file is discarded by the caller's finally,
+                // so no cache is left claiming to be this input.
+                if (fatalWarnings.Count > 0)
+                {
+                    return ConversionOutcome.Failure(
+                        ExtractionErrorCodes.SourceModelMissing,
+                        "The model opened without everything it references, so the extraction " +
+                        "describes less than the file does and was not kept. " +
+                        DescribeFatalWarnings(fatalWarnings));
+                }
+
                 // Launcher meta is authoritative: it knows the real file, its
                 // hash and its size; the plugin only knows what it was told.
                 foreach (KeyValuePair<string, string> pair in launcherMeta)
@@ -557,7 +635,11 @@ namespace Matchline.Extraction.Extractor
             return ConversionOutcome.Success(end.ObjectCount, warningRows);
         }
 
-        private void Apply(CacheWriter writer, NdjsonEntry entry, IDictionary<string, string> meta)
+        private void Apply(
+            CacheWriter writer,
+            NdjsonEntry entry,
+            IDictionary<string, string> meta,
+            List<string> fatalWarnings)
         {
             if (entry.Meta != null)
             {
@@ -599,9 +681,23 @@ namespace Matchline.Extraction.Extractor
                 return;
             }
 
+            if (entry.SourceReference != null)
+            {
+                // Not a cache row: the cache records what IS in the model, and a
+                // reference that did not load is not in it. Its consequence
+                // reaches the cache as the plugin's error-severity warning, and
+                // reaches the caller as the run's verdict.
+                return;
+            }
+
             if (entry.Warning != null)
             {
                 writer.WriteWarning(entry.Warning);
+                if (string.Equals(entry.Warning.Severity, WarningSeverity.Error, StringComparison.Ordinal))
+                {
+                    fatalWarnings.Add(entry.Warning.Message ?? entry.Warning.Code ?? string.Empty);
+                }
+
                 if (_forwardedWarnings < MaxForwardedWarnings)
                 {
                     _forwardedWarnings++;
@@ -620,6 +716,30 @@ namespace Matchline.Extraction.Extractor
             }
 
             // Unknown record type from a newer adapter: ignored on purpose.
+        }
+
+        /// <summary>
+        /// The first few error-severity warnings, in one sentence.
+        /// <para>
+        /// Capped because a document can reference dozens of models and an error
+        /// message is read by a person: the count is what matters after the first
+        /// few names.
+        /// </para>
+        /// </summary>
+        private static string DescribeFatalWarnings(List<string> messages)
+        {
+            const int MaxNamed = 3;
+            int named = Math.Min(MaxNamed, messages.Count);
+            string text = string.Join(" ", messages.ToArray(), 0, named);
+
+            if (messages.Count > named)
+            {
+                text += " (and " +
+                    (messages.Count - named).ToString(CultureInfo.InvariantCulture) +
+                    " more like it)";
+            }
+
+            return text;
         }
 
         private int Fail(string code, string message)
