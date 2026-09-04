@@ -701,12 +701,15 @@ function isReadableStatus(status: WireSourceStatus): boolean {
 }
 
 /**
- * The two ways opening a project stops that are questions rather than errors.
+ * The ways opening a project stops that are questions rather than errors.
  *
  * `migration-required` is the file asking permission to be upgraded, and
  * `backup-exists` is an earlier upgrade attempt's backup still sitting where
- * the next one would go. Both are returned as results the UI can act on;
- * everything else is `null` and becomes a message.
+ * the next one would go. `read-only` and `locked` are a real project the user
+ * cannot work in yet -- the store proves the file is writable when it opens it,
+ * rather than letting the first save be the thing that finds out. All four are
+ * returned as results the UI can act on; everything else is `null` and becomes
+ * a message.
  */
 function openRefusal(error: unknown): WireProjectOpenResult | null {
   if (!(error instanceof ProjectStoreError)) {
@@ -721,6 +724,12 @@ function openRefusal(error: unknown): WireProjectOpenResult | null {
   }
   if (reason.kind === 'backup-exists') {
     return { outcome: 'backup-blocked', backupPath: reason.path };
+  }
+  if (reason.kind === 'read-only') {
+    return { outcome: 'read-only', detail: reason.detail };
+  }
+  if (reason.kind === 'locked') {
+    return { outcome: 'locked', detail: reason.detail };
   }
   return null;
 }

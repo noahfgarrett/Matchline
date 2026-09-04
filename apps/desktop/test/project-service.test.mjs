@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
-import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -720,6 +727,35 @@ test('a backup from an earlier upgrade attempt blocks the next one, by path', as
     );
   } finally {
     service.close();
+  }
+});
+
+test('a project file that cannot be written comes back as read-only, not as an error', async () => {
+  const readOnlyPath = join(workDir, 'ReadOnly.matchline');
+  const setup = newService();
+  setup.create(readOnlyPath, 'Read Only');
+  setup.close();
+  chmodSync(readOnlyPath, 0o444);
+
+  const service = newService();
+  try {
+    const refused = await service.open(readOnlyPath, false);
+    // A result the landing screen can explain, rather than a driver message
+    // thrown an hour later when the user finally pressed Save.
+    assert.equal(refused.outcome, 'read-only');
+    assert.match(refused.detail, /readonly/i);
+    assert.equal(service.current(), null, 'and nothing was opened');
+  } finally {
+    service.close();
+    chmodSync(readOnlyPath, 0o644);
+  }
+
+  // The mode was the only thing wrong with it.
+  const reopened = newService();
+  try {
+    assert.equal((await reopened.open(readOnlyPath, false)).outcome, 'opened');
+  } finally {
+    reopened.close();
   }
 });
 

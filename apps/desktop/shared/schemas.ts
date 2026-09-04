@@ -366,8 +366,15 @@ export type WireOpenNotice = z.infer<typeof openNoticeSchema>;
  * numbers the confirm card states; the second call sends `acceptMigration`.
  *
  * `backup-blocked` is the one thing the user has to fix outside Matchline: an
- * earlier upgrade attempt left a backup at that exact path, and overwriting it
- * would destroy the evidence it was taken for.
+ * earlier upgrade attempt left a backup at that exact path holding DIFFERENT
+ * bytes, and overwriting it would destroy the evidence it was taken for. (A
+ * backup that still matches the project is the crash-retry case and is reused,
+ * so it never reaches here.)
+ *
+ * `read-only` and `locked` are the two ways a file that IS a project still
+ * cannot be worked in, and they are settled when it is opened rather than at
+ * the first save. Both used to open "successfully" and fail an hour later with
+ * a driver message, having lost whatever the user had configured in between.
  */
 export const projectOpenResultSchema = z.discriminatedUnion('outcome', [
   z.object({
@@ -385,6 +392,15 @@ export const projectOpenResultSchema = z.discriminatedUnion('outcome', [
   z.object({
     outcome: z.literal('backup-blocked'),
     backupPath: z.string().min(1),
+  }),
+  z.object({
+    outcome: z.literal('read-only'),
+    /** The driver's own words, so a support call has something to go on. */
+    detail: z.string(),
+  }),
+  z.object({
+    outcome: z.literal('locked'),
+    detail: z.string(),
   }),
 ]);
 export type WireProjectOpenResult = z.infer<typeof projectOpenResultSchema>;

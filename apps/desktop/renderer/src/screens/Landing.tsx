@@ -158,6 +158,26 @@ export function Landing({
           setPendingUpgrade({ path: target, ...opened.migrationNeeded });
           return;
         }
+        if (opened.outcome === 'read-only') {
+          setPendingUpgrade(null);
+          setError(
+            'Matchline can read that project but cannot write to it, so nothing you did in it ' +
+              `would be saved (${opened.detail}). It is usually a file marked read-only, a ` +
+              'folder you do not have permission to write in, or a copy still on a disc or a ' +
+              'network share you are only allowed to read. Copy it somewhere you own, then ' +
+              'open the copy.',
+          );
+          return;
+        }
+        if (opened.outcome === 'locked') {
+          setPendingUpgrade(null);
+          setError(
+            'Another program is holding that project file open and will not let go of it ' +
+              `(${opened.detail}). Close any other copy of Matchline, give a sync or backup ` +
+              'client a moment to finish with the folder, then open it again.',
+          );
+          return;
+        }
         if (opened.outcome === 'backup-blocked') {
           setPendingUpgrade(null);
           setError(
