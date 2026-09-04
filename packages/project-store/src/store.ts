@@ -1021,10 +1021,15 @@ class SqliteProjectStore implements ProjectStore {
       return result;
     } catch (error) {
       rollbackQuietly(db);
-      // A throw from `fn` is the caller's own error and is rethrown as it is;
-      // only the commit is translated, because only the commit is this
-      // package's own failure to write.
-      throw committing ? writeFailure(this.path, error) : error;
+      // A throw from `fn` that is the CALLER's own -- a compile service falling
+      // over mid-transaction, a validation refusal -- is rethrown exactly as it
+      // is, so composing mutations does not rewrite the reason one of them
+      // failed. A throw that carries a SQLite result code is not the caller's:
+      // it is this file failing to write, and the package's contract is that a
+      // caller never sees a raw driver error.
+      throw committing || sqliteErrcode(error) !== null
+        ? writeFailure(this.path, error)
+        : error;
     } finally {
       // In `finally`, so the depth is right whichever way the block left --
       // including the return, where it used to be reset before the commit.

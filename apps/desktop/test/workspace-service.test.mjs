@@ -1294,6 +1294,17 @@ test('an imported profile package is written into the project, not just held', a
   }
 });
 
+/** The five screens 6-7 sections, as a draft or a legacy entry carries them. */
+function asProfileSections(source) {
+  return {
+    hierarchy: source.hierarchy,
+    roleGraph: source.roleGraph,
+    ladder: source.ladder,
+    ssmDisciplineProjection: source.ssmDisciplineProjection,
+    parentTagProperty: source.parentTagProperty,
+  };
+}
+
 /**
  * The one-way move out of the app-state file, for projects configured by a
  * build that had nowhere else to put it.
@@ -1320,14 +1331,6 @@ test('a config left in the app-state file is copied into the project once', asyn
     ssmDisciplineProjection: FULL_PROFILE_PATCH.ssmDisciplineProjection,
     parentTagProperty: FULL_PROFILE_PATCH.parentTagProperty,
   };
-  /** The same sections as the profile carries them once the merge has run. */
-  const asProfileSections = (draft) => ({
-    hierarchy: draft.hierarchy,
-    roleGraph: draft.roleGraph,
-    ladder: draft.ladder,
-    ssmDisciplineProjection: draft.ssmDisciplineProjection,
-    parentTagProperty: draft.parentTagProperty,
-  });
   state.projectConfigs = { [projectPathHere]: legacyConfig };
   writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
 
@@ -1371,6 +1374,91 @@ test('a config left in the app-state file is copied into the project once', asyn
   } finally {
     second.close();
   }
+});
+
+/**
+ * The order the move happens in, which is the whole safety property.
+ *
+ * The state file used to lose its copy in the same call that read it, BEFORE
+ * the project file was known to have taken one. A read-only project, a full
+ * disk or a locked file therefore turned "your configuration moved" into "your
+ * configuration is gone" — from both places at once, with nothing left to
+ * restore it from. The write comes first now, and the state file is only
+ * forgotten once it succeeded.
+ *
+ * The failure is staged with a trigger that refuses every insert into `config`.
+ * A trigger is invisible to the store's own validation, which looks at tables,
+ * so the project opens normally and it is exactly the adoption write that
+ * fails — which is the case a permissions test cannot isolate.
+ */
+test('a project that cannot take the legacy config leaves it in the app-state file', async () => {
+  const projectPathHere = join(workDir, 'Stubborn.matchline');
+  const legacyUserData = join(workDir, 'stubborn-userdata');
+
+  const creator = createProjectService({ userDataDir: legacyUserData, appVersion: '0.6.0' });
+  try {
+    creator.create(projectPathHere, 'Stubborn');
+  } finally {
+    creator.close();
+  }
+
+  const statePath = join(legacyUserData, 'app-state.json');
+  const state = JSON.parse(readFileSync(statePath, 'utf8'));
+  const legacyConfig = {
+    hierarchy: FULL_PROFILE_PATCH.hierarchy,
+    roleGraph: FULL_PROFILE_PATCH.roleGraph,
+    ladder: FULL_PROFILE_PATCH.ladder,
+    ssmDisciplineProjection: FULL_PROFILE_PATCH.ssmDisciplineProjection,
+    parentTagProperty: FULL_PROFILE_PATCH.parentTagProperty,
+  };
+  state.projectConfigs = { [projectPathHere]: legacyConfig };
+  writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+
+  const refuseConfigWrites = (sql) => {
+    const db = new DatabaseSync(projectPathHere);
+    try {
+      db.exec(sql);
+    } finally {
+      db.close();
+    }
+  };
+  refuseConfigWrites(
+    `CREATE TRIGGER refuse_config BEFORE INSERT ON config
+     BEGIN SELECT RAISE(ABORT, 'the project file would not take it'); END`,
+  );
+
+  const blocked = createProjectService({ userDataDir: legacyUserData, appVersion: '0.6.0' });
+  try {
+    const { notice } = await blocked.open(projectPathHere);
+    assert.equal(notice.adoptedAppStateConfig, false, 'nothing was adopted, and nothing claimed');
+    assert.deepEqual(blocked.config(), { extoTemplate: null }, 'the wizard opens on defaults');
+  } finally {
+    blocked.close();
+  }
+
+  const still = JSON.parse(readFileSync(statePath, 'utf8'));
+  assert.deepEqual(
+    asProfileSections(still.projectConfigs?.[projectPathHere] ?? {}),
+    asProfileSections(legacyConfig),
+    'the only copy of the configuration is still where it was',
+  );
+
+  // And it is adopted the moment the project can take it.
+  refuseConfigWrites('DROP TRIGGER refuse_config');
+  const retried = createProjectService({ userDataDir: legacyUserData, appVersion: '0.6.0' });
+  try {
+    const { notice } = await retried.open(projectPathHere);
+    assert.equal(notice.adoptedAppStateConfig, true, 'the deferred move ran on the next open');
+    assert.deepEqual(asProfileSections(retried.draftState().draft), asProfileSections(legacyConfig));
+  } finally {
+    retried.close();
+  }
+  const forgotten = JSON.parse(readFileSync(statePath, 'utf8'));
+  assert.equal(
+    forgotten.projectConfigs?.[projectPathHere],
+    undefined,
+    'and only then is this installation’s copy dropped',
+  );
 });
 
 /**

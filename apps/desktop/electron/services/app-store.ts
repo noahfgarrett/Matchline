@@ -29,11 +29,11 @@ import {
  * the wizard reopened on its defaults. Schema v2 adds a `config` table and
  * `project-config.ts` owns it now.
  *
- * What survives here is one-way: {@link AppStateStore.takeLegacyProjectConfig}
- * reads an entry written by an older build and removes it in the same call, so
- * opening a project carries its configuration into the file exactly once. New
- * entries are never written, and once the last one has been taken the key
- * disappears from the file altogether.
+ * What survives here is one-way: {@link AppStateStore.readLegacyProjectConfig}
+ * hands over an entry written by an older build, and
+ * {@link AppStateStore.forgetLegacyProjectConfig} drops it once the project
+ * file has definitely taken it. New entries are never written, and once the
+ * last one has been forgotten the key disappears from the file altogether.
  *
  * Writes are atomic (temp file + rename) so a crash mid-write cannot leave the
  * installation with an unparseable state file.
@@ -53,8 +53,8 @@ interface AppState {
   /**
    * Project file path → the screens 6-7 sections an older build left here.
    *
-   * Read-and-remove only. Persisted under the key an older build wrote,
-   * `projectConfigs`, and omitted from the file once empty.
+   * Read then forgotten, never added to. Persisted under the key an older build
+   * wrote, `projectConfigs`, and omitted from the file once empty.
    */
   readonly legacyProjectConfigs: Readonly<Record<string, WireLegacyProjectConfig>>;
 }
@@ -78,15 +78,24 @@ export interface AppStateStore {
   sourcePath(sha256: string): string | undefined;
   rememberSourcePath(sha256: string, absolutePath: string): void;
   /**
-   * The screens 6-7 sections an older build left for this project, removing
-   * them as it hands them over. `undefined` when there are none.
+   * The screens 6-7 sections an older build left for this project, or
+   * `undefined` when there are none. Reads only.
    *
-   * One-way and one-shot: the caller copies them into the project file's own
-   * `config` table, and a second call finds nothing. That asymmetry is the
-   * point — two copies of a configuration is exactly the problem schema v2
-   * exists to end.
+   * Split from {@link AppStateStore.forgetLegacyProjectConfig} on purpose. They
+   * used to be one call that read and deleted together, which meant the state
+   * file lost its copy BEFORE the project file was known to have taken one: a
+   * read-only project, a full disk or a locked file turned "your configuration
+   * moved" into "your configuration is gone", from both places at once and with
+   * nothing to restore it from. The caller writes first and forgets second, so
+   * the value is briefly in two places rather than briefly in none.
    */
-  takeLegacyProjectConfig(projectPath: string): WireLegacyProjectConfig | undefined;
+  readLegacyProjectConfig(projectPath: string): WireLegacyProjectConfig | undefined;
+  /**
+   * Drops this installation's copy, once the project file definitely has one.
+   *
+   * A no-op when there is nothing to drop, so a caller need not check first.
+   */
+  forgetLegacyProjectConfig(projectPath: string): void;
 }
 
 /** Reads one entry, returning `null` rather than throwing on anything odd. */
@@ -228,16 +237,18 @@ export function createAppStateStore(userDataDir: string): AppStateStore {
       persist();
     },
 
-    takeLegacyProjectConfig(projectPath: string): WireLegacyProjectConfig | undefined {
-      const config = state.legacyProjectConfigs[projectPath];
-      if (config === undefined) {
-        return undefined;
+    readLegacyProjectConfig(projectPath: string): WireLegacyProjectConfig | undefined {
+      return state.legacyProjectConfigs[projectPath];
+    },
+
+    forgetLegacyProjectConfig(projectPath: string): void {
+      if (state.legacyProjectConfigs[projectPath] === undefined) {
+        return;
       }
       const remaining = { ...state.legacyProjectConfigs };
       delete remaining[projectPath];
       state = { ...state, legacyProjectConfigs: remaining };
       persist();
-      return config;
     },
   };
 }

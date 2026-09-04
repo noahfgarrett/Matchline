@@ -3,6 +3,7 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   rmSync,
   writeFileSync,
@@ -654,6 +655,76 @@ test('a source whose bytes changed is reported as changed, not read anyway', asy
     assert.equal((await service.compile()).state, 'done', 'and the compile runs again');
   } finally {
     service.close();
+  }
+});
+
+/**
+ * The compile save is the one durable write of a compile, and it can fail.
+ *
+ * It used to be unguarded, which was the worst of both outcomes: the throw
+ * escaped with `running` still set, so the session believed a compile was in
+ * flight for the rest of its life and every later Compile answered with the
+ * stale running status — while the compile the user had just watched finish
+ * was gone, and they found out on reopen.
+ *
+ * The failure is staged by taking write permission off the FOLDER rather than
+ * off the file. A `chmod` on an open database changes nothing: POSIX checks
+ * permission when the descriptor is opened and SQLite is already holding one.
+ * It cannot create its rollback journal in a folder it may not write to, which
+ * is what a project on a locked-down share really looks like.
+ */
+test('a compile that cannot be written settles as failed and leaves the session usable', async () => {
+  const ownDir = join(workDir, 'unwritable');
+  mkdirSync(ownDir);
+  const ownProjectPath = join(ownDir, 'Unwritable.matchline');
+
+  const service = newService();
+  try {
+    service.create(ownProjectPath, 'Unwritable');
+    await service.addSources([cachePath, melPath]);
+    teachDragon(service);
+    // Published first, so the auto-save is not what fails: the thing under test
+    // is the transaction that records the compile.
+    assert.equal(service.saveProfile('Ready to compile').revision, 1);
+    assert.equal((await service.compile()).state, 'done');
+
+    chmodSync(ownDir, 0o555);
+
+    const failed = await service.compile();
+    assert.equal(failed.state, 'failed');
+    assert.match(failed.reason, /Unwritable\.matchline/, 'the message names the file');
+    assert.match(failed.reason, /could not write the result to the project file/);
+    assert.match(failed.reason, /Nothing was saved/);
+
+    // `running` was cleared, so the session is not wedged: a second attempt
+    // runs a second worker and fails the same way, rather than answering with
+    // a compile that is not happening.
+    const again = await service.compile();
+    assert.equal(again.state, 'failed');
+    assert.match(again.reason, /could not write the result/);
+
+    chmodSync(ownDir, 0o755);
+    assert.equal((await service.compile()).state, 'done', 'and it works again once it can write');
+  } finally {
+    try {
+      chmodSync(ownDir, 0o755);
+    } catch {
+      // Already restored.
+    }
+    service.close();
+  }
+
+  // Exactly the two compiles that could be written are on file.
+  const reopened = newService();
+  try {
+    await reopened.open(ownProjectPath, false);
+    assert.equal(
+      reopened.compileHistory().length,
+      2,
+      'the failed save left no half-recorded compile behind',
+    );
+  } finally {
+    reopened.close();
   }
 });
 

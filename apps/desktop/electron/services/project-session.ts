@@ -658,6 +658,24 @@ function messageOf(error: unknown): string {
 }
 
 /**
+ * Why a write to the project file failed, in the driver's own words.
+ *
+ * `ProjectStoreError` already carries a sentence, but for the three write
+ * failures it is a sentence with the path in it — and the caller putting this
+ * in a message has just named the file. So the detail is unwrapped and the
+ * surrounding message says which file and what to do about it.
+ */
+function writeFailureDetail(error: unknown): string {
+  if (error instanceof ProjectStoreError) {
+    const reason = error.reason;
+    if (reason.kind === 'locked' || reason.kind === 'read-only' || reason.kind === 'write-failed') {
+      return reason.detail;
+    }
+  }
+  return messageOf(error);
+}
+
+/**
  * Whether the file at `absolutePath` still hashes to what the project recorded.
  *
  * A file that cannot be read at all counts as not matching: the caller has
@@ -947,15 +965,33 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       return { config: defaultProjectConfig(), adopted: false };
     }
 
-    const legacy = appState.takeLegacyProjectConfig(projectPath);
+    // READ, not take. The state file keeps its copy until the project file
+    // definitely has one: `takeLegacyProjectConfig` deletes, and deleting
+    // before the write below succeeded is how a read-only project file, a full
+    // disk or a locked file turned "your configuration moved" into "your
+    // configuration is gone" -- from both places at once, with nothing to
+    // restore it from.
+    const legacy = appState.readLegacyProjectConfig(projectPath);
     if (legacy === undefined) {
       return { config: defaultProjectConfig(), adopted: false };
     }
     // Written back verbatim, sections and all: the merge below is what moves
     // the profile material out of this table, and running it through the one
-    // migration is what keeps a state-file project and a v6 project from taking
+    // migration is what keeps a state-file project and a v7 project from taking
     // two different routes into the profile.
-    writeLegacyProjectConfig(store, legacy);
+    try {
+      writeLegacyProjectConfig(store, legacy);
+    } catch {
+      // The project file could not take it. The state file still holds it, so
+      // the adoption is simply retried the next time this project opens; the
+      // wizard meanwhile opens on defaults rather than on a copy of something
+      // that is not in the project.
+      return { config: defaultProjectConfig(), adopted: false };
+    }
+    // Only now. The value is in two places for the length of this line, which
+    // is the safe direction: a crash here leaves a duplicate that the next open
+    // resolves, rather than a hole.
+    appState.forgetLegacyProjectConfig(projectPath);
     return { config: { extoTemplate: legacy.extoTemplate }, adopted: true };
   }
 
@@ -2393,22 +2429,50 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     // A ledger committed without its compile would hand the next compile ids
     // nothing can date; a compile committed without its ledger would re-mint
     // every id on the next run and orphan every decision (P0-9).
-    const compileId = active.store.withTransaction((): number => {
-      const id = active.store.recordCompile({
-        inputHashes,
-        profileRevision,
-        // The summary alone. The generated MEL goes to `compile_assets` below
-        // (schema v7): inside `stats_json` it made every history read parse
-        // every asset of every compile the project had ever run.
-        statsJson: { summary: project.stats },
-        startedAt,
-        finishedAt,
+    let compileId: number;
+    try {
+      compileId = active.store.withTransaction((): number => {
+        const id = active.store.recordCompile({
+          inputHashes,
+          profileRevision,
+          // The summary alone. The generated MEL goes to `compile_assets` below
+          // (schema v7): inside `stats_json` it made every history read parse
+          // every asset of every compile the project had ever run.
+          statsJson: { summary: project.stats },
+          startedAt,
+          finishedAt,
+        });
+        active.store.saveSnapshot(id, serializeSnapshot(project.snapshot));
+        active.store.saveLedger(id, project.identityLedger);
+        active.store.saveCompileAssets(id, view.assets);
+        return id;
       });
-      active.store.saveSnapshot(id, serializeSnapshot(project.snapshot));
-      active.store.saveLedger(id, project.identityLedger);
-      active.store.saveCompileAssets(id, view.assets);
-      return id;
-    });
+    } catch (error: unknown) {
+      // The one durable write of a compile, and it can fail: a read-only file,
+      // a full disk, another program holding the lock, a network share that
+      // went away while the worker ran.
+      //
+      // It used to be unguarded, which was the worst of both. The throw
+      // escaped `compileNow` with `active.running` still set, so the session
+      // believed a compile was in flight for the rest of its life: every later
+      // Compile returned the stale running status, and Stop had a marker to
+      // cancel that no worker belonged to. Meanwhile the compile the user had
+      // just watched finish was gone, and they only found out on reopen.
+      //
+      // Settled instead, which clears `running` and puts the reason on screen.
+      // The view is deliberately NOT adopted: a workspace showing a compile the
+      // project file never recorded is a workspace whose ids nothing else will
+      // agree with.
+      return settle({
+        state: 'failed',
+        reason:
+          `Matchline compiled ${path.basename(active.projectPath)} but could not write the ` +
+          `result to the project file (${writeFailureDetail(error)}). Nothing was saved and the ` +
+          'workspace still shows the last compile that was. Make sure the file is not open ' +
+          'in another program and not on a disc or share you can only read from, then ' +
+          'compile again.',
+      });
+    }
 
     active.view = view;
     return settle({
