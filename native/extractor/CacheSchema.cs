@@ -22,7 +22,7 @@ namespace Matchline.Extraction.Extractor
     internal static class CacheSchema
     {
         internal const string Ddl = @"
--- Matchline extraction cache schema, version 2.
+-- Matchline extraction cache schema, version 3.
 -- Single source of truth: the C# worker writes this shape, packages/model-schema reads it.
 -- Bump meta.schema_version on ANY change; readers refuse versions they don't know.
 --
@@ -30,13 +30,19 @@ namespace Matchline.Extraction.Extractor
 -- still readable — packages/model-schema reads a v1 row as resolved for
 -- 'folder'/'selection' and unresolved for 'search', which is what a v1 writer
 -- actually meant: it recorded saved searches without ever running them.
+--
+-- v3 (persistent object identity): objects gains authoring_id_kind,
+-- structural_key and flags; source_models gains source_file_name and
+-- source_guid; selection_sets gains guid. v1 and v2 stay readable: the reader
+-- picks its column list from the declared version, so a column an older writer
+-- never wrote reads as absent rather than as a failed SELECT.
 
 CREATE TABLE meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 ) WITHOUT ROWID;
 -- Required keys:
---   schema_version      '2'
+--   schema_version      '3'
 --   input_file_name     original NWD filename (name only, no directory — privacy)
 --   input_sha256        lowercase hex digest of the NWD bytes; also the cache filename stem
 --   input_bytes         decimal string
@@ -45,13 +51,18 @@ CREATE TABLE meta (
 --   adapter_version     e.g. 'navisworks-2025'
 --   navisworks_version  product version string reported by the API
 --   object_count        decimal string, must equal COUNT(*) of objects (integrity check)
+-- Optional keys, added in v3 and absent from every cache an older adapter wrote:
+--   units               Document.Units as the API names it, e.g. 'Meters'
+--   ui_language         the extracting process's UI culture, e.g. 'en-US'
 
 CREATE TABLE source_models (
-  id           INTEGER PRIMARY KEY,          -- extraction ordinal, depth-first
-  parent_id    INTEGER REFERENCES source_models(id),  -- nested appended models
-  file_name    TEXT,                          -- as recorded inside the NWD (name only)
-  display_name TEXT,
-  guid         TEXT
+  id               INTEGER PRIMARY KEY,      -- extraction ordinal, depth-first
+  parent_id        INTEGER REFERENCES source_models(id),  -- nested appended models
+  file_name        TEXT,                     -- as recorded inside the NWD (name only)
+  display_name     TEXT,
+  guid             TEXT,
+  source_file_name TEXT,                     -- Model.SourceFileName (name only, never a directory)
+  source_guid      TEXT                      -- Model.SourceGuid, the appended file's own identity
 );
 
 CREATE TABLE objects (
@@ -63,7 +74,20 @@ CREATE TABLE objects (
   display_name    TEXT,
   class_name      TEXT,                       -- Navisworks item class/category display
   instance_guid   TEXT,
-  authoring_id    TEXT,
+  authoring_id    TEXT,                       -- the authoring tool's own object id
+  -- Which well-known property pair answered authoring_id, e.g.
+  -- 'revit-element-id', 'revit-unique-id', 'ifc-global-id', 'dwg-handle'. NULL
+  -- exactly when authoring_id is NULL: an id whose origin is unknown is not one
+  -- of these, and two authoring systems can number an object the same.
+  authoring_id_kind TEXT,
+  -- Lowercase SHA-256 hex over the ancestor chain of
+  -- (class_name, display_name, path_index) from the source model's root down to
+  -- this object. Shape only, never content, so a re-extraction of an unchanged
+  -- model reproduces it; inserting a sibling changes only the siblings after it.
+  structural_key  TEXT,
+  -- Bitfield: 1 hidden, 2 layer, 4 insert, 8 composite, 16 collection,
+  -- 32 has-model (the item is the root of an appended model).
+  flags           INTEGER NOT NULL DEFAULT 0,
   -- bounding box optional per PRODUCT.md §6.4; all-or-none per row
   bbox_min_x REAL, bbox_min_y REAL, bbox_min_z REAL,
   bbox_max_x REAL, bbox_max_y REAL, bbox_max_z REAL
@@ -91,7 +115,9 @@ CREATE TABLE selection_sets (
   -- it out (a saved search that would not run). An unresolved set has NO rows
   -- in selection_set_members at all: absent is not empty, and a reader must
   -- refuse to filter on it rather than answer with zero objects.
-  membership_resolved INTEGER NOT NULL DEFAULT 1 CHECK (membership_resolved IN (0, 1))
+  membership_resolved INTEGER NOT NULL DEFAULT 1 CHECK (membership_resolved IN (0, 1)),
+  -- SavedItem.Guid: the set's own persistent identity, which survives a rename.
+  guid      TEXT
 );
 
 CREATE TABLE selection_set_members (

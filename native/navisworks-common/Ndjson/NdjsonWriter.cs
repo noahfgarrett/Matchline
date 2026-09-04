@@ -100,7 +100,23 @@ namespace Matchline.Extraction.Ndjson
                 .AddNullableInt(NdjsonFields.ParentId, record.ParentId)
                 .AddString(NdjsonFields.FileName, record.FileName)
                 .AddString(NdjsonFields.Name, record.DisplayName)
-                .AddString(NdjsonFields.Guid, record.SourceGuid);
+                .AddString(NdjsonFields.Guid, record.Guid)
+                .AddString(NdjsonFields.SourceFileName, record.SourceFileName)
+                .AddString(NdjsonFields.SourceGuid, record.SourceGuid);
+            WriteLine();
+        }
+
+        /// <summary>
+        /// One entry of <c>Document.Models</c>. Written before the walk, so a
+        /// launcher tailing the stream learns what the document references
+        /// before it learns what is in it.
+        /// </summary>
+        public void WriteSourceReference(SourceReferenceRecord record)
+        {
+            _builder.Begin()
+                .AddString(NdjsonFields.Type, NdjsonRecordType.Reference)
+                .AddString(NdjsonFields.SourceFileName, record.SourceFileName)
+                .AddBool(NdjsonFields.Loaded, record.Loaded);
             WriteLine();
         }
 
@@ -117,6 +133,9 @@ namespace Matchline.Extraction.Ndjson
                 .AddString(NdjsonFields.ClassName, record.ClassName)
                 .AddString(NdjsonFields.InstanceGuid, record.InstanceGuid)
                 .AddString(NdjsonFields.AuthoringId, record.AuthoringId)
+                .AddString(NdjsonFields.AuthoringIdKind, record.AuthoringIdKind)
+                .AddString(NdjsonFields.StructuralKey, record.StructuralKey)
+                .AddInt(NdjsonFields.Flags, record.Flags)
                 .AddDoubleArray(NdjsonFields.BoundingBox, record.BoundingBox);
             WriteLine();
         }
@@ -143,7 +162,8 @@ namespace Matchline.Extraction.Ndjson
                 .AddNullableInt(NdjsonFields.ParentId, record.ParentId)
                 .AddString(NdjsonFields.Name, record.Name)
                 .AddString(NdjsonFields.Kind, record.Kind)
-                .AddBool(NdjsonFields.MembershipResolved, record.MembershipResolved);
+                .AddBool(NdjsonFields.MembershipResolved, record.MembershipResolved)
+                .AddString(NdjsonFields.Guid, record.Guid);
             WriteLine();
         }
 

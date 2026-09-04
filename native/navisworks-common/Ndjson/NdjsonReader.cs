@@ -22,6 +22,8 @@ namespace Matchline.Extraction.Ndjson
 
         public SourceModelRecord SourceModel { get; set; }
 
+        public SourceReferenceRecord SourceReference { get; set; }
+
         public ObjectRecord Object { get; set; }
 
         public PropertyRecord Property { get; set; }
@@ -152,8 +154,21 @@ namespace Matchline.Extraction.Ndjson
                     model.ParentId = json.GetNullableInt64(NdjsonFields.ParentId);
                     model.FileName = json.GetString(NdjsonFields.FileName);
                     model.DisplayName = json.GetString(NdjsonFields.Name);
-                    model.SourceGuid = json.GetString(NdjsonFields.Guid);
+                    model.Guid = json.GetString(NdjsonFields.Guid);
+                    model.SourceFileName = json.GetString(NdjsonFields.SourceFileName);
+                    model.SourceGuid = json.GetString(NdjsonFields.SourceGuid);
                     entry.SourceModel = model;
+                    break;
+
+                case NdjsonRecordType.Reference:
+                    SourceReferenceRecord reference = new SourceReferenceRecord();
+                    reference.SourceFileName = json.GetString(NdjsonFields.SourceFileName);
+
+                    // Absent means loaded: only a plugin that looked and found
+                    // nothing writes false, so a stream from an adapter that
+                    // predates this record must not read as everything missing.
+                    reference.Loaded = json.GetBoolean(NdjsonFields.Loaded, true);
+                    entry.SourceReference = reference;
                     break;
 
                 case NdjsonRecordType.Object:
@@ -167,6 +182,9 @@ namespace Matchline.Extraction.Ndjson
                     item.ClassName = json.GetString(NdjsonFields.ClassName);
                     item.InstanceGuid = json.GetString(NdjsonFields.InstanceGuid);
                     item.AuthoringId = json.GetString(NdjsonFields.AuthoringId);
+                    item.AuthoringIdKind = json.GetString(NdjsonFields.AuthoringIdKind);
+                    item.StructuralKey = json.GetString(NdjsonFields.StructuralKey);
+                    item.Flags = json.GetInt64(NdjsonFields.Flags, 0);
                     item.BoundingBox = ReadBoundingBox(json);
                     entry.Object = item;
                     break;
@@ -196,6 +214,7 @@ namespace Matchline.Extraction.Ndjson
                     // words. Defaulting the other way would mark every set in
                     // such a stream unusable.
                     set.MembershipResolved = json.GetBoolean(NdjsonFields.MembershipResolved, true);
+                    set.Guid = json.GetString(NdjsonFields.Guid);
                     entry.SelectionSet = set;
                     break;
 

@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.IO;
 using Matchline.Extraction.Ndjson;
 using Matchline.Extraction.Records;
@@ -149,12 +150,18 @@ namespace Matchline.Extraction.Protocol
 
         /// <param name="preferredPath">Path the launcher handed the plugin; may be null.</param>
         /// <param name="fallbackPath">Path the open document reports; used only when the first is absent.</param>
+        /// <param name="units">
+        /// <c>Document.Units</c> as the API names it, or null when the document
+        /// would not say. Written as <c>meta.units</c>, which is optional: a
+        /// cache without it is a cache from an older adapter, not a broken one.
+        /// </param>
         public static void Write(
             NdjsonWriter writer,
             string adapterVersion,
             string productVersion,
             string preferredPath,
-            string fallbackPath)
+            string fallbackPath,
+            string units)
         {
             if (writer == null)
             {
@@ -166,6 +173,22 @@ namespace Matchline.Extraction.Protocol
                 CacheMetaKeys.NavisworksVersion,
                 string.IsNullOrEmpty(productVersion) ? UnknownProductVersion : productVersion);
 
+            if (!string.IsNullOrEmpty(units))
+            {
+                writer.WriteMeta(CacheMetaKeys.Units, units);
+            }
+
+            // Read here rather than passed in: it is a .NET fact, not an
+            // Autodesk one, and every year would otherwise spell it separately.
+            // It is recorded because Navisworks localises property and category
+            // DISPLAY names, so the language a cache was extracted under is part
+            // of what its property catalog means.
+            string uiLanguage = UiLanguage();
+            if (!string.IsNullOrEmpty(uiLanguage))
+            {
+                writer.WriteMeta(CacheMetaKeys.UiLanguage, uiLanguage);
+            }
+
             string fileName = FileNameOnly(preferredPath);
             if (string.IsNullOrEmpty(fileName))
             {
@@ -175,6 +198,30 @@ namespace Matchline.Extraction.Protocol
             if (!string.IsNullOrEmpty(fileName))
             {
                 writer.WriteMeta(CacheMetaKeys.InputFileName, fileName);
+            }
+        }
+
+        /// <summary>
+        /// The UI culture this extraction ran under, e.g. "en-US". Null when the
+        /// runtime will not name one -- the invariant culture answers an empty
+        /// string, which is not a language.
+        /// </summary>
+        private static string UiLanguage()
+        {
+            try
+            {
+                CultureInfo culture = CultureInfo.CurrentUICulture;
+                if (culture == null)
+                {
+                    return null;
+                }
+
+                string name = culture.Name;
+                return string.IsNullOrEmpty(name) ? null : name;
+            }
+            catch (Exception)
+            {
+                return null;
             }
         }
 

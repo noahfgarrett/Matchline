@@ -105,6 +105,21 @@ namespace Matchline.Extraction.Protocol
         /// </summary>
         public const string PluginNotFound = "PLUGIN_NOT_FOUND";
 
+        /// <summary>
+        /// The document opened without one or more of the files it references,
+        /// or a model-level read failed outright, so the stream describes less
+        /// than the input does.
+        /// <para>
+        /// Its own code because the run looks like a success from every other
+        /// angle: Navisworks opened, the walk finished, the terminator arrived,
+        /// and the cache would have committed cleanly -- describing a model with
+        /// a whole discipline silently missing. An NWF whose references have
+        /// moved is the usual cause, which is why the launcher never serves a
+        /// cached answer for an NWF without re-opening it.
+        /// </para>
+        /// </summary>
+        public const string SourceModelMissing = "SOURCE_MODEL_MISSING";
+
         /// <summary>The stream was complete but the cache could not be written or verified.</summary>
         public const string CacheWriteFailed = "CACHE_WRITE_FAILED";
 
@@ -128,11 +143,30 @@ namespace Matchline.Extraction.Protocol
         public const string ObjectCount = "object_count";
 
         /// <summary>
-        /// The schema version this build writes. Bumped to 2 when
-        /// selection_sets gained membership_resolved; the reader half of that
-        /// bump lives in packages/model-schema, which still accepts 1.
+        /// <c>meta.units</c>: the document's display units, as the API names
+        /// them. Optional, and deliberately NOT in <see cref="Required"/> --
+        /// every cache written before schema v3 lacks it, and refusing those
+        /// would make the key a breaking change rather than an addition.
         /// </summary>
-        public const string CurrentSchemaVersion = "2";
+        public const string Units = "units";
+
+        /// <summary>
+        /// <c>meta.ui_language</c>: the UI culture the extraction ran under.
+        /// Optional, for the same reason as <see cref="Units"/>. It matters
+        /// because Navisworks localises property and category DISPLAY names, so
+        /// a catalog built from a de-DE extraction and one built from an en-US
+        /// extraction of the same model do not name the same things.
+        /// </summary>
+        public const string UiLanguage = "ui_language";
+
+        /// <summary>
+        /// The schema version this build writes. Bumped to 3 when objects gained
+        /// authoring_id_kind, structural_key and flags, source_models gained
+        /// source_file_name and source_guid, and selection_sets gained guid; the
+        /// reader half of that bump lives in packages/model-schema, which still
+        /// accepts 1 and 2.
+        /// </summary>
+        public const string CurrentSchemaVersion = "3";
 
         public static string[] Required()
         {

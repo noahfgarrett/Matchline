@@ -15,6 +15,16 @@ namespace Matchline.Extraction.Records
         public const string Warning = "warn";
 
         /// <summary>
+        /// One entry of <c>Document.Models</c> as the plugin found it: the file
+        /// the document references and whether it actually loaded. Not a cache
+        /// table -- it exists so the launcher can tell an NWF whose references
+        /// all resolved from one that opened with models missing, which is the
+        /// difference between a cache worth keeping and a cache that silently
+        /// omits a discipline (docs/EXTRACTION.md, "NWF inputs").
+        /// </summary>
+        public const string Reference = "ref";
+
+        /// <summary>
         /// A progress line from inside the Navisworks process. Not a cache
         /// table: the plugin has no channel back to the launcher, so a stage it
         /// wants reported live is written into the stream and relayed by the
@@ -51,8 +61,44 @@ namespace Matchline.Extraction.Records
 
         public string DisplayName { get; set; }
 
-        /// <summary>Maps to the <c>guid</c> column. Named to avoid shadowing System.Guid.</summary>
+        /// <summary>
+        /// The <c>guid</c> column: the model GUID the adapter reads reflectively,
+        /// because the member name for it varies by release.
+        /// </summary>
+        public string Guid { get; set; }
+
+        /// <summary>
+        /// The <c>source_file_name</c> column, from <c>Model.SourceFileName</c>.
+        /// File name only, never a directory (privacy: see EXTRACTION.md).
+        /// </summary>
+        public string SourceFileName { get; set; }
+
+        /// <summary>
+        /// The <c>source_guid</c> column, from <c>Model.SourceGuid</c> read
+        /// directly. Distinct from <see cref="Guid"/> on purpose: that one is a
+        /// reflective probe over three candidate spellings and may answer from a
+        /// different member, and a cache that carries both can say which.
+        /// </summary>
         public string SourceGuid { get; set; }
+    }
+
+    /// <summary>
+    /// One entry of <c>Document.Models</c>, as reported by the plugin before the
+    /// walk. Not a cache row: the launcher reads these to decide whether the
+    /// document opened with everything it references.
+    /// </summary>
+    public sealed class SourceReferenceRecord
+    {
+        /// <summary>File name only, never a directory.</summary>
+        public string SourceFileName { get; set; }
+
+        /// <summary>
+        /// False when the reference did not come in: the model's root item has
+        /// no children AND its source file is not on disk. Either alone is
+        /// ordinary (an empty appended file; a file loaded from a path that has
+        /// since moved), so both are required before an absence is claimed.
+        /// </summary>
+        public bool Loaded { get; set; }
     }
 
     /// <summary>One row of <c>objects</c>.</summary>
@@ -79,10 +125,57 @@ namespace Matchline.Extraction.Records
         public string AuthoringId { get; set; }
 
         /// <summary>
+        /// One of <see cref="AuthoringIdKinds"/>, naming which well-known
+        /// property pair produced <see cref="AuthoringId"/>. Null exactly when
+        /// <see cref="AuthoringId"/> is null.
+        /// </summary>
+        public string AuthoringIdKind { get; set; }
+
+        /// <summary>
+        /// Lowercase SHA-256 hex over the ancestor chain of
+        /// (class name, display name, path index) from the source model's root.
+        /// Shape only, never content.
+        /// </summary>
+        public string StructuralKey { get; set; }
+
+        /// <summary>A bitwise OR of <see cref="ObjectFlags"/>.</summary>
+        public long Flags { get; set; }
+
+        /// <summary>
         /// Six doubles (min x/y/z then max x/y/z) or null. All-or-none per row,
         /// matching the schema comment.
         /// </summary>
         public double[] BoundingBox { get; set; }
+    }
+
+    /// <summary>
+    /// Values for <c>objects.authoring_id_kind</c>. The list is ordered the way
+    /// <c>DocumentWalker</c> tries them, strongest first: a Revit element id is
+    /// stable within a model, a Revit UniqueId is stable across exports, and an
+    /// IFC GlobalId or a DWG handle is whatever the exporting tool guarantees.
+    /// </summary>
+    public static class AuthoringIdKinds
+    {
+        public const string RevitElementId = "revit-element-id";
+        public const string RevitUniqueId = "revit-unique-id";
+        public const string IfcGlobalId = "ifc-global-id";
+        public const string DwgHandle = "dwg-handle";
+    }
+
+    /// <summary>
+    /// Bits of <c>objects.flags</c>. Powers of two, appended only: a reader that
+    /// does not know a bit must be able to ignore it rather than misread the
+    /// ones it does know.
+    /// </summary>
+    public static class ObjectFlags
+    {
+        public const long None = 0;
+        public const long Hidden = 1;
+        public const long Layer = 2;
+        public const long Insert = 4;
+        public const long Composite = 8;
+        public const long Collection = 16;
+        public const long HasModel = 32;
     }
 
     /// <summary>One row of <c>properties</c>.</summary>
@@ -144,6 +237,12 @@ namespace Matchline.Extraction.Records
             get { return _membershipResolved; }
             set { _membershipResolved = value; }
         }
+
+        /// <summary>
+        /// <c>SavedItem.Guid</c>: the set's own persistent identity, which
+        /// survives a rename. Null when the API would not give one up.
+        /// </summary>
+        public string Guid { get; set; }
     }
 
     /// <summary>
@@ -195,6 +294,14 @@ namespace Matchline.Extraction.Records
         /// </summary>
         public const string SearchSetUnresolved = "SEARCH_SET_UNRESOLVED";
         public const string SourceModelReadFailed = "SOURCE_MODEL_READ_FAILED";
+
+        /// <summary>
+        /// A file the document references was not loaded: its model has no
+        /// items and the file is not on disk. Always error severity, because a
+        /// cache written from such a document is missing a whole discipline
+        /// rather than a property, and the launcher refuses to commit it.
+        /// </summary>
+        public const string SourceModelMissing = "SOURCE_MODEL_MISSING";
     }
 
     /// <summary>One row of <c>warnings</c>.</summary>

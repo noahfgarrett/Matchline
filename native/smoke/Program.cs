@@ -283,6 +283,18 @@ namespace Matchline.Extraction.Smoke
                 meta.ContainsKey(CacheMetaKeys.InputFileName) &&
                 meta[CacheMetaKeys.InputFileName] == "SYNTHETIC-PLANT.nwd",
                 meta.ContainsKey(CacheMetaKeys.InputFileName) ? meta[CacheMetaKeys.InputFileName] : "absent");
+            Check(
+                "the header stamps the document's units",
+                meta.ContainsKey(CacheMetaKeys.Units) && meta[CacheMetaKeys.Units] == "Meters");
+
+            // Read from the running process rather than passed in, so this is the
+            // only check that can catch it being written at all. Its VALUE is the
+            // host's, so only its presence and shape are asserted.
+            Check(
+                "the header stamps the UI language it ran under",
+                meta.ContainsKey(CacheMetaKeys.UiLanguage) &&
+                meta[CacheMetaKeys.UiLanguage].Length > 0,
+                meta.ContainsKey(CacheMetaKeys.UiLanguage) ? meta[CacheMetaKeys.UiLanguage] : "absent");
 
             int failExit = ExtractionSession.Run(failPath, new SyntheticWorkload(inputPath, true));
             Check("a failed session exits non-zero", failExit == ExtractionSession.ExitFailed, failExit.ToString());
@@ -531,7 +543,7 @@ namespace Matchline.Extraction.Smoke
 
             public ExtractionCounts Run(NdjsonWriter writer)
             {
-                ExtractionHeader.Write(writer, "navisworks-2025", null, _inputPath, null);
+                ExtractionHeader.Write(writer, "navisworks-2025", null, _inputPath, null, "Meters");
 
                 if (_fail)
                 {
@@ -575,6 +587,7 @@ namespace Matchline.Extraction.Smoke
         {
             Meta,
             Model,
+            Reference,
             Object,
             Property,
             SelectionSet,
@@ -591,6 +604,8 @@ namespace Matchline.Extraction.Smoke
             internal MetaRecord Meta { get; set; }
 
             internal SourceModelRecord Model { get; set; }
+
+            internal SourceReferenceRecord Reference { get; set; }
 
             internal ObjectRecord Object { get; set; }
 
@@ -619,63 +634,111 @@ namespace Matchline.Extraction.Smoke
             List<StreamItem> items = new List<StreamItem>();
 
             items.Add(MetaItem(CacheMetaKeys.AdapterVersion, "navisworks-2025"));
-            items.Add(MetaItem(CacheMetaKeys.NavisworksVersion, "Navisworks 2025 (synthetic)"));
+            items.Add(MetaItem(CacheMetaKeys.NavisworksVersion, "2025"));
+            items.Add(MetaItem(CacheMetaKeys.Units, "Meters"));
+            items.Add(MetaItem(CacheMetaKeys.UiLanguage, "en-US"));
             items.Add(MetaItem(CacheMetaKeys.InputFileName, "SYNTHETIC-PLANT.nwd"));
 
-            items.Add(ModelItem(1, null, "SYNTHETIC-PLANT-A.nwc", "Plant A", "11111111-2222-3333-4444-555555555555"));
-            items.Add(ModelItem(2, null, "SYNTHETIC-PLANT-B.nwc", null, null));
+            // What the document references, before anything else. One of the two
+            // did not load, which is the shape ExtractionRunner refuses to commit
+            // -- so this stream is deliberately NOT a stream that would produce a
+            // cache in production. What is being exercised here is the record
+            // round-tripping and the cache tables, both of which are the same
+            // either way.
+            items.Add(ReferenceItem("SYNTHETIC-PLANT-A.nwc", true));
+            items.Add(ReferenceItem("SYNTHETIC-PLANT-MISSING.nwc", false));
 
-            // Model 1, depth-first: 1 > (2 > (3, 4), 5 > 6)
-            items.Add(ObjectItem(1, 1, null, 0, 0, "Plant A", "Group", Box(0, 0, 0, 100, 60, 24)));
-            items.Add(ObjectItem(2, 1, 1, 0, 1, "Level 1", "Group", null));
-            items.Add(ObjectItem(3, 1, 2, 0, 2, "Pump P-101", "Insert Group", Box(1.5, 2.25, 0, 3.5, 4.25, 2)));
-            AddPropertiesForPump(items);
-            items.Add(WarningItem(WarningSeverity.Info, WarningCodes.BoundingBoxReadFailed, "synthetic bbox note", 3));
-            items.Add(ObjectItem(4, 1, 2, 1, 2, "Valve V-101", "Insert Group", null));
-            items.Add(WarningItem(
-                WarningSeverity.Warning, WarningCodes.PropertyReadFailed, "synthetic property failure", 4));
-            items.Add(ObjectItem(5, 1, 1, 1, 1, "Level 2", "Group", null));
-
-            // Object 6's box contains a NaN. The writer spells NaN as JSON null,
-            // the reader turns any NaN back into "no box at all": all-or-none per
-            // row, exactly as schemas/extraction-cache.sql requires.
-            items.Add(ObjectItem(
-                6, 1, 5, 0, 2, "Tank T-201", "Insert Group",
-                new double[] { 10, 10, 0, double.NaN, 14, 8 }));
-
-            // Model 2. Root path_index 1, matching DocumentWalker's modelId - 1.
-            items.Add(ObjectItem(7, 2, null, 1, 0, "Plant B", "Group", null));
-            items.Add(ObjectItem(8, 2, 7, 0, 1, "Duct D-001", "Insert Group", Box(-5, -5, -1, 5, 5, 1)));
-
-            // The saved-set stage announces itself with a total before it
-            // resolves anything, exactly as DocumentWalker does.
+            // Saved sets FIRST, then the walk, then each item's memberships
+            // inline -- the order DocumentWalker emits since the set/walk
+            // inversion. The stage announces itself with a total before it
+            // resolves anything.
             items.Add(ProgressItem(ExtractionStages.Sets, 0, 3));
 
             items.Add(SetItem(1, null, "Mechanical", SelectionSetKind.Folder, true));
             items.Add(SetItem(2, 1, "Pumps", SelectionSetKind.Selection, true));
-            items.Add(MemberItem(2, 3));
-            // Deliberate duplicate: a saved set can list the same item twice and
-            // the cache's INSERT OR IGNORE must collapse it to one row.
-            items.Add(MemberItem(2, 3));
-            items.Add(MemberItem(2, 6));
             items.Add(ProgressItem(ExtractionStages.Sets, 1, 3));
 
             // A saved search that DID resolve. Schema v1 could not represent
             // this at all -- it recorded searches without members, so members
             // present meant explicit and members absent meant unknown.
             items.Add(SetItem(3, 1, "All Valves", SelectionSetKind.Search, true));
-            items.Add(MemberItem(3, 4));
             items.Add(ProgressItem(ExtractionStages.Sets, 2, 3));
 
             // And one that did not: no member rows at all, and a warning naming
             // it. This is the row that proves absent is distinguishable from
             // empty (schemas/extraction-cache.sql, membership_resolved).
-            items.Add(SetItem(4, null, "Unresolvable Search", SelectionSetKind.Search, false));
+            // A set with no GUID as well, because SavedItem.Guid may not answer.
+            items.Add(SetItem(4, null, "Unresolvable Search", SelectionSetKind.Search, false, null));
             items.Add(WarningItem(
                 WarningSeverity.Warning, WarningCodes.SearchSetUnresolved,
                 "Search set 'Unresolvable Search' could not be resolved and is recorded without members: " +
                 "synthetic search failure.", null));
             items.Add(ProgressItem(ExtractionStages.Sets, 3, 3));
+
+            items.Add(ModelItem(
+                1, null, "SYNTHETIC-PLANT-A.nwc", "Plant A", "11111111-2222-3333-4444-555555555555",
+                "SYNTHETIC-PLANT-A.rvt", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"));
+            items.Add(ModelItem(2, null, "SYNTHETIC-PLANT-B.nwc", null, null, null, null));
+
+            // Model 1, depth-first: 1 > (2 > (3, 4), 5 > 6)
+            items.Add(ObjectItem(
+                1, 1, null, 0, 0, "Plant A", "Group", Box(0, 0, 0, 100, 60, 24),
+                null, null, ObjectFlags.HasModel | ObjectFlags.Collection));
+            items.Add(ObjectItem(
+                2, 1, 1, 0, 1, "Level 1", "Group", null, null, null, ObjectFlags.Layer));
+            items.Add(ObjectItem(
+                3, 1, 2, 0, 2, "Pump P-101", "Insert Group", Box(1.5, 2.25, 0, 3.5, 4.25, 2),
+                "418022", AuthoringIdKinds.RevitElementId, ObjectFlags.Insert | ObjectFlags.Composite));
+            AddPropertiesForPump(items);
+            items.Add(WarningItem(WarningSeverity.Info, WarningCodes.BoundingBoxReadFailed, "synthetic bbox note", 3));
+
+            // Membership rows follow their object, not their set: the set row
+            // already exists, so both ends of the row are on the stream.
+            items.Add(MemberItem(2, 3));
+            // Deliberate duplicate: a saved set can list the same item twice and
+            // the cache's INSERT OR IGNORE must collapse it to one row.
+            items.Add(MemberItem(2, 3));
+
+            // A hidden item, which the walk visits and records rather than skips.
+            items.Add(ObjectItem(
+                4, 1, 2, 1, 2, "Valve V-101", "Insert Group", null,
+                "3n0Xk9Qb1EOhE$Wr0000AB", AuthoringIdKinds.IfcGlobalId,
+                ObjectFlags.Hidden | ObjectFlags.Insert));
+            items.Add(WarningItem(
+                WarningSeverity.Warning, WarningCodes.PropertyReadFailed, "synthetic property failure", 4));
+            items.Add(MemberItem(3, 4));
+
+            items.Add(ObjectItem(5, 1, 1, 1, 1, "Level 2", "Group", null, null, null, ObjectFlags.Layer));
+
+            // Object 6's box contains a NaN. The writer spells NaN as JSON null,
+            // the reader turns any NaN back into "no box at all": all-or-none per
+            // row, exactly as schemas/extraction-cache.sql requires.
+            items.Add(ObjectItem(
+                6, 1, 5, 0, 2, "Tank T-201", "Insert Group",
+                new double[] { 10, 10, 0, double.NaN, 14, 8 },
+                "2A7F", AuthoringIdKinds.DwgHandle, ObjectFlags.None));
+            items.Add(MemberItem(2, 6));
+
+            // Model 2. Root path_index 1, matching the order Document.Models
+            // yields its top-level models.
+            items.Add(ObjectItem(7, 2, null, 1, 0, "Plant B", "Group", null, null, null, ObjectFlags.HasModel));
+
+            // A nested appended model, discovered mid-walk: its row is written
+            // when the walk reaches the item that carries it, so its id is higher
+            // than every top-level model's and its parent_id names the model it
+            // was appended into.
+            items.Add(ModelItem(
+                3, 2, "SYNTHETIC-DUCT.nwc", "Ductwork", "33333333-4444-5555-6666-777777777777",
+                "SYNTHETIC-DUCT.dwg", "cccccccc-dddd-eeee-ffff-000000000000"));
+            items.Add(ObjectItem(
+                8, 3, 7, 0, 1, "Duct D-001", "Insert Group", Box(-5, -5, -1, 5, 5, 1),
+                null, null, ObjectFlags.HasModel | ObjectFlags.Composite));
+
+            items.Add(WarningItem(
+                WarningSeverity.Error, WarningCodes.SourceModelMissing,
+                "The document references 'SYNTHETIC-PLANT-MISSING.nwc' but that file is not where " +
+                "the document expects it and nothing was loaded from it. Everything it holds is " +
+                "absent from this extraction.", null));
 
             items.Add(WarningItem(
                 WarningSeverity.Error, WarningCodes.SourceModelReadFailed, "synthetic model-level failure", null));
@@ -685,7 +748,7 @@ namespace Matchline.Extraction.Smoke
             end.Code = null;
             end.Message = null;
             end.ObjectCount = 8;
-            end.WarningCount = 4;
+            end.WarningCount = 5;
             items.Add(new StreamItem { Kind = ItemKind.End, End = end });
 
             return items;
@@ -727,20 +790,33 @@ namespace Matchline.Extraction.Smoke
             return new StreamItem { Kind = ItemKind.Meta, Meta = record };
         }
 
-        private static StreamItem ModelItem(long id, long? parentId, string fileName, string displayName, string guid)
+        private static StreamItem ModelItem(
+            long id, long? parentId, string fileName, string displayName, string guid,
+            string sourceFileName, string sourceGuid)
         {
             SourceModelRecord record = new SourceModelRecord();
             record.Id = id;
             record.ParentId = parentId;
             record.FileName = fileName;
             record.DisplayName = displayName;
-            record.SourceGuid = guid;
+            record.Guid = guid;
+            record.SourceFileName = sourceFileName;
+            record.SourceGuid = sourceGuid;
             return new StreamItem { Kind = ItemKind.Model, Model = record };
+        }
+
+        private static StreamItem ReferenceItem(string sourceFileName, bool loaded)
+        {
+            SourceReferenceRecord record = new SourceReferenceRecord();
+            record.SourceFileName = sourceFileName;
+            record.Loaded = loaded;
+            return new StreamItem { Kind = ItemKind.Reference, Reference = record };
         }
 
         private static StreamItem ObjectItem(
             long id, long? modelId, long? parentId, int pathIndex, int depth,
-            string displayName, string className, double[] box)
+            string displayName, string className, double[] box,
+            string authoringId, string authoringIdKind, long flags)
         {
             ObjectRecord record = new ObjectRecord();
             record.Id = id;
@@ -752,9 +828,27 @@ namespace Matchline.Extraction.Smoke
             record.ClassName = className;
             record.InstanceGuid = new Guid(
                 (int)id, 0x1234, 0x5678, 1, 2, 3, 4, 5, 6, 7, 8).ToString("D", CultureInfo.InvariantCulture);
-            record.AuthoringId = null;
+            record.AuthoringId = authoringId;
+            record.AuthoringIdKind = authoringIdKind;
+
+            // A stand-in for the walker's SHA-256, and the shape is what matters
+            // here: 64 lowercase hex characters, one per object, stable per id.
+            record.StructuralKey = SyntheticStructuralKey(id);
+            record.Flags = flags;
             record.BoundingBox = box;
             return new StreamItem { Kind = ItemKind.Object, Object = record };
+        }
+
+        /// <summary>
+        /// 64 hex characters derived from the object id. Not the walker's
+        /// algorithm -- that needs a ModelItem tree -- but the same shape, so the
+        /// column, the wire field and the reader are all exercised against a
+        /// realistic value.
+        /// </summary>
+        private static string SyntheticStructuralKey(long id)
+        {
+            string seed = id.ToString("x", CultureInfo.InvariantCulture);
+            return seed.PadLeft(64, 'a');
         }
 
         private static StreamItem PropertyItem(
@@ -775,12 +869,21 @@ namespace Matchline.Extraction.Smoke
         private static StreamItem SetItem(
             long id, long? parentId, string name, string kind, bool membershipResolved)
         {
+            return SetItem(id, parentId, name, kind, membershipResolved,
+                new Guid((int)(0x5E700000 + id), 0x4321, 0x8765, 9, 8, 7, 6, 5, 4, 3, 2)
+                    .ToString("D", CultureInfo.InvariantCulture));
+        }
+
+        private static StreamItem SetItem(
+            long id, long? parentId, string name, string kind, bool membershipResolved, string guid)
+        {
             SelectionSetRecord record = new SelectionSetRecord();
             record.Id = id;
             record.ParentId = parentId;
             record.Name = name;
             record.Kind = kind;
             record.MembershipResolved = membershipResolved;
+            record.Guid = guid;
             return new StreamItem { Kind = ItemKind.SelectionSet, Set = record };
         }
 
@@ -827,6 +930,9 @@ namespace Matchline.Extraction.Smoke
                             break;
                         case ItemKind.Model:
                             writer.WriteSourceModel(item.Model);
+                            break;
+                        case ItemKind.Reference:
+                            writer.WriteSourceReference(item.Reference);
                             break;
                         case ItemKind.Object:
                             writer.WriteObject(item.Object);
@@ -887,6 +993,11 @@ namespace Matchline.Extraction.Smoke
                     {
                         item.Kind = ItemKind.Model;
                         item.Model = entry.SourceModel;
+                    }
+                    else if (entry.SourceReference != null)
+                    {
+                        item.Kind = ItemKind.Reference;
+                        item.Reference = entry.SourceReference;
                     }
                     else if (entry.Object != null)
                     {
@@ -967,7 +1078,14 @@ namespace Matchline.Extraction.Smoke
                         Same(at + " model.parent", e.Model.ParentId, a.Model.ParentId);
                         Same(at + " model.file", e.Model.FileName, a.Model.FileName);
                         Same(at + " model.name", e.Model.DisplayName, a.Model.DisplayName);
-                        Same(at + " model.guid", e.Model.SourceGuid, a.Model.SourceGuid);
+                        Same(at + " model.guid", e.Model.Guid, a.Model.Guid);
+                        Same(at + " model.sfile", e.Model.SourceFileName, a.Model.SourceFileName);
+                        Same(at + " model.sguid", e.Model.SourceGuid, a.Model.SourceGuid);
+                        break;
+
+                    case ItemKind.Reference:
+                        Same(at + " ref.sfile", e.Reference.SourceFileName, a.Reference.SourceFileName);
+                        Same(at + " ref.loaded", e.Reference.Loaded, a.Reference.Loaded);
                         break;
 
                     case ItemKind.Object:
@@ -980,6 +1098,9 @@ namespace Matchline.Extraction.Smoke
                         Same(at + " object.class", e.Object.ClassName, a.Object.ClassName);
                         Same(at + " object.iguid", e.Object.InstanceGuid, a.Object.InstanceGuid);
                         Same(at + " object.aid", e.Object.AuthoringId, a.Object.AuthoringId);
+                        Same(at + " object.aidk", e.Object.AuthoringIdKind, a.Object.AuthoringIdKind);
+                        Same(at + " object.skey", e.Object.StructuralKey, a.Object.StructuralKey);
+                        Same(at + " object.flags", e.Object.Flags, a.Object.Flags);
                         SameBox(at + " object.bbox", e.Object.BoundingBox, a.Object.BoundingBox);
                         break;
 
@@ -999,6 +1120,7 @@ namespace Matchline.Extraction.Smoke
                         Same(at + " set.name", e.Set.Name, a.Set.Name);
                         Same(at + " set.kind", e.Set.Kind, a.Set.Kind);
                         Same(at + " set.res", e.Set.MembershipResolved, a.Set.MembershipResolved);
+                        Same(at + " set.guid", e.Set.Guid, a.Set.Guid);
                         break;
 
                     case ItemKind.SelectionSetMember:
@@ -1087,6 +1209,11 @@ namespace Matchline.Extraction.Smoke
                         case ItemKind.Model:
                             writer.WriteSourceModel(item.Model);
                             break;
+                        case ItemKind.Reference:
+                            // What the document REFERENCES is not what it holds;
+                            // a reference that did not load reaches the cache as
+                            // an error-severity warning and nothing else.
+                            break;
                         case ItemKind.Object:
                             writer.WriteObject(item.Object);
                             break;
@@ -1170,6 +1297,19 @@ namespace Matchline.Extraction.Smoke
                         "('schema_version','input_file_name','input_sha256','input_bytes','extracted_at_utc'," +
                         "'extractor_version','adapter_version','navisworks_version','object_count')") == 9);
 
+                // v3's two optional keys. They are written by the adapter, not by
+                // the launcher, and the required set deliberately does not name
+                // them -- every cache an older adapter wrote lacks both.
+                Check(
+                    "meta.units and meta.ui_language survive the round trip",
+                    Text(connection, "SELECT value FROM meta WHERE key = 'units'") == "Meters" &&
+                    Text(connection, "SELECT value FROM meta WHERE key = 'ui_language'") == "en-US");
+
+                Check(
+                    "the optional v3 meta keys are NOT in the required set",
+                    Array.IndexOf(CacheMetaKeys.Required(), CacheMetaKeys.Units) < 0 &&
+                    Array.IndexOf(CacheMetaKeys.Required(), CacheMetaKeys.UiLanguage) < 0);
+
                 Check(
                     "NaN bounding box stored as no box at all",
                     Scalar(
@@ -1213,7 +1353,7 @@ namespace Matchline.Extraction.Smoke
                 // ---- schema v2: membership_resolved ----------------------------
 
                 Check(
-                    "the cache declares schema version 2",
+                    "the cache declares the schema version this build writes",
                     Text(connection, "SELECT value FROM meta WHERE key = 'schema_version'")
                         == CacheMetaKeys.CurrentSchemaVersion);
 
@@ -1247,6 +1387,84 @@ namespace Matchline.Extraction.Smoke
                         connection,
                         "SELECT COUNT(*) FROM warnings WHERE code = '" + WarningCodes.SearchSetUnresolved + "'")
                         == Scalar(connection, "SELECT COUNT(*) FROM selection_sets WHERE membership_resolved = 0"));
+
+                // ---- schema v3: persistent identity, flags, nested models ------
+
+                Check(
+                    "authoring_id and authoring_id_kind arrive together, or not at all",
+                    Scalar(
+                        connection,
+                        "SELECT COUNT(*) FROM objects WHERE (authoring_id IS NULL) <> " +
+                        "(authoring_id_kind IS NULL)") == 0);
+
+                Check(
+                    "each authoring id kind survives as itself",
+                    Text(connection, "SELECT authoring_id_kind FROM objects WHERE id = 3")
+                        == AuthoringIdKinds.RevitElementId &&
+                    Text(connection, "SELECT authoring_id_kind FROM objects WHERE id = 4")
+                        == AuthoringIdKinds.IfcGlobalId &&
+                    Text(connection, "SELECT authoring_id_kind FROM objects WHERE id = 6")
+                        == AuthoringIdKinds.DwgHandle);
+
+                Check(
+                    "every object carries a 64-character lowercase structural key",
+                    Scalar(
+                        connection,
+                        "SELECT COUNT(*) FROM objects WHERE structural_key IS NOT NULL " +
+                        "AND length(structural_key) = 64 AND structural_key = lower(structural_key)")
+                        == Scalar(connection, "SELECT COUNT(*) FROM objects"));
+
+                Check(
+                    "no two objects share a structural key",
+                    Scalar(connection, "SELECT COUNT(DISTINCT structural_key) FROM objects")
+                        == Scalar(connection, "SELECT COUNT(*) FROM objects"));
+
+                // The bitfield is stored as one integer and read back bit by bit,
+                // so a reader that asks "is this hidden" gets an answer that does
+                // not depend on which other bits are set.
+                Check(
+                    "flags round-trip as a bitfield, not as a number that happens to match",
+                    Scalar(connection, "SELECT flags FROM objects WHERE id = 4")
+                        == (ObjectFlags.Hidden | ObjectFlags.Insert) &&
+                    Scalar(connection, "SELECT COUNT(*) FROM objects WHERE flags & 1") == 1 &&
+                    Scalar(connection, "SELECT COUNT(*) FROM objects WHERE flags & 2") == 2 &&
+                    Scalar(connection, "SELECT COUNT(*) FROM objects WHERE flags & 32") == 3);
+
+                Check(
+                    "an object with no flags stores 0 rather than NULL",
+                    Scalar(connection, "SELECT COUNT(*) FROM objects WHERE flags IS NULL") == 0 &&
+                    Scalar(connection, "SELECT flags FROM objects WHERE id = 6") == 0);
+
+                Check(
+                    "source models keep their converted-from file name and GUID",
+                    Text(connection, "SELECT source_file_name FROM source_models WHERE id = 1")
+                        == "SYNTHETIC-PLANT-A.rvt" &&
+                    Text(connection, "SELECT source_guid FROM source_models WHERE id = 1")
+                        == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" &&
+                    Text(connection, "SELECT source_file_name FROM source_models WHERE id = 2") == null);
+
+                // A model appended inside another is a child row, and the objects
+                // under it belong to the child rather than to its host.
+                Check(
+                    "a nested appended model is a child of the model it was appended into",
+                    Scalar(connection, "SELECT parent_id FROM source_models WHERE id = 3") == 2 &&
+                    Scalar(connection, "SELECT source_model_id FROM objects WHERE id = 8") == 3 &&
+                    Scalar(connection, "SELECT source_model_id FROM objects WHERE id = 7") == 2);
+
+                Check(
+                    "selection sets keep their own GUID, and a set without one is NULL",
+                    Scalar(connection, "SELECT COUNT(*) FROM selection_sets WHERE guid IS NOT NULL") == 3 &&
+                    Text(connection, "SELECT guid FROM selection_sets WHERE id = 4") == null);
+
+                // The launcher refuses to commit a cache built from a stream that
+                // carried one of these; the row itself still has to survive, or
+                // the failure would have nothing to name.
+                Check(
+                    "a SOURCE_MODEL_MISSING warning is recorded at error severity",
+                    Scalar(
+                        connection,
+                        "SELECT COUNT(*) FROM warnings WHERE severity = 'error' AND code = '" +
+                        WarningCodes.SourceModelMissing + "'") == 1);
             }
         }
 
@@ -1300,7 +1518,7 @@ namespace Matchline.Extraction.Smoke
             CacheValidation validation = CacheInspector.Validate(cachePath);
             Check("CacheInspector accepts the cache", validation.IsValid, validation.Reason);
             Check("CacheInspector object count", validation.ObjectCount == objectCount);
-            Check("CacheInspector warning count", validation.WarningCount == 4);
+            Check("CacheInspector warning count", validation.WarningCount == 5);
         }
 
         /// <summary>

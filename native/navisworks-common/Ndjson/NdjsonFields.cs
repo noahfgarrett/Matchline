@@ -20,6 +20,11 @@ namespace Matchline.Extraction.Ndjson
         // model
         internal const string FileName = "file";
         internal const string Guid = "guid";
+        internal const string SourceFileName = "sfile";
+        internal const string SourceGuid = "sguid";
+
+        // reference (one Document.Models entry)
+        internal const string Loaded = "loaded";
 
         // object
         internal const string ModelId = "model";
@@ -28,6 +33,9 @@ namespace Matchline.Extraction.Ndjson
         internal const string ClassName = "class";
         internal const string InstanceGuid = "iguid";
         internal const string AuthoringId = "aid";
+        internal const string AuthoringIdKind = "aidk";
+        internal const string StructuralKey = "skey";
+        internal const string Flags = "flags";
         internal const string BoundingBox = "bbox";
 
         // property

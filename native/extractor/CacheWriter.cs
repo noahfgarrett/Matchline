@@ -90,7 +90,9 @@ namespace Matchline.Extraction.Extractor
             SetNullableInt(_insertModel, "$parent_id", record.ParentId);
             SetText(_insertModel, "$file_name", record.FileName);
             SetText(_insertModel, "$display_name", record.DisplayName);
-            SetText(_insertModel, "$guid", record.SourceGuid);
+            SetText(_insertModel, "$guid", record.Guid);
+            SetText(_insertModel, "$source_file_name", record.SourceFileName);
+            SetText(_insertModel, "$source_guid", record.SourceGuid);
             Execute(_insertModel);
         }
 
@@ -105,6 +107,12 @@ namespace Matchline.Extraction.Extractor
             SetText(_insertObject, "$class_name", record.ClassName);
             SetText(_insertObject, "$instance_guid", record.InstanceGuid);
             SetText(_insertObject, "$authoring_id", record.AuthoringId);
+            SetText(_insertObject, "$authoring_id_kind", record.AuthoringIdKind);
+            SetText(_insertObject, "$structural_key", record.StructuralKey);
+
+            // NOT NULL in the DDL: an object whose flags could not be read is
+            // recorded as flagged with nothing, which is what the walker sends.
+            SetInt(_insertObject, "$flags", record.Flags);
 
             double[] box = record.BoundingBox;
             string[] names =
@@ -145,6 +153,7 @@ namespace Matchline.Extraction.Extractor
             // The column is INTEGER 0/1 rather than a bool: SQLite has no
             // boolean type and the DDL's CHECK is written against 0 and 1.
             SetInt(_insertSet, "$membership_resolved", record.MembershipResolved ? 1 : 0);
+            SetText(_insertSet, "$guid", record.Guid);
             Execute(_insertSet);
         }
 
@@ -277,31 +286,40 @@ namespace Matchline.Extraction.Extractor
                 new SqliteType[] { SqliteType.Text, SqliteType.Text });
 
             _insertModel = PrepareInsert(
-                "INSERT INTO source_models(id, parent_id, file_name, display_name, guid) " +
-                "VALUES($id, $parent_id, $file_name, $display_name, $guid)",
-                new string[] { "$id", "$parent_id", "$file_name", "$display_name", "$guid" },
+                "INSERT INTO source_models(id, parent_id, file_name, display_name, guid, " +
+                "source_file_name, source_guid) " +
+                "VALUES($id, $parent_id, $file_name, $display_name, $guid, " +
+                "$source_file_name, $source_guid)",
+                new string[]
+                {
+                    "$id", "$parent_id", "$file_name", "$display_name", "$guid",
+                    "$source_file_name", "$source_guid"
+                },
                 new SqliteType[]
                 {
-                    SqliteType.Integer, SqliteType.Integer, SqliteType.Text, SqliteType.Text, SqliteType.Text
+                    SqliteType.Integer, SqliteType.Integer, SqliteType.Text, SqliteType.Text, SqliteType.Text,
+                    SqliteType.Text, SqliteType.Text
                 });
 
             _insertObject = PrepareInsert(
                 "INSERT INTO objects(id, source_model_id, parent_id, path_index, depth, display_name, " +
-                "class_name, instance_guid, authoring_id, " +
+                "class_name, instance_guid, authoring_id, authoring_id_kind, structural_key, flags, " +
                 "bbox_min_x, bbox_min_y, bbox_min_z, bbox_max_x, bbox_max_y, bbox_max_z) " +
                 "VALUES($id, $source_model_id, $parent_id, $path_index, $depth, $display_name, " +
-                "$class_name, $instance_guid, $authoring_id, " +
+                "$class_name, $instance_guid, $authoring_id, $authoring_id_kind, $structural_key, $flags, " +
                 "$bbox_min_x, $bbox_min_y, $bbox_min_z, $bbox_max_x, $bbox_max_y, $bbox_max_z)",
                 new string[]
                 {
                     "$id", "$source_model_id", "$parent_id", "$path_index", "$depth", "$display_name",
-                    "$class_name", "$instance_guid", "$authoring_id",
+                    "$class_name", "$instance_guid", "$authoring_id", "$authoring_id_kind",
+                    "$structural_key", "$flags",
                     "$bbox_min_x", "$bbox_min_y", "$bbox_min_z", "$bbox_max_x", "$bbox_max_y", "$bbox_max_z"
                 },
                 new SqliteType[]
                 {
                     SqliteType.Integer, SqliteType.Integer, SqliteType.Integer, SqliteType.Integer,
                     SqliteType.Integer, SqliteType.Text, SqliteType.Text, SqliteType.Text, SqliteType.Text,
+                    SqliteType.Text, SqliteType.Text, SqliteType.Integer,
                     SqliteType.Real, SqliteType.Real, SqliteType.Real,
                     SqliteType.Real, SqliteType.Real, SqliteType.Real
                 });
@@ -322,12 +340,13 @@ namespace Matchline.Extraction.Extractor
                 });
 
             _insertSet = PrepareInsert(
-                "INSERT INTO selection_sets(id, parent_id, name, kind, membership_resolved) " +
-                "VALUES($id, $parent_id, $name, $kind, $membership_resolved)",
-                new string[] { "$id", "$parent_id", "$name", "$kind", "$membership_resolved" },
+                "INSERT INTO selection_sets(id, parent_id, name, kind, membership_resolved, guid) " +
+                "VALUES($id, $parent_id, $name, $kind, $membership_resolved, $guid)",
+                new string[] { "$id", "$parent_id", "$name", "$kind", "$membership_resolved", "$guid" },
                 new SqliteType[]
                 {
-                    SqliteType.Integer, SqliteType.Integer, SqliteType.Text, SqliteType.Text, SqliteType.Integer
+                    SqliteType.Integer, SqliteType.Integer, SqliteType.Text, SqliteType.Text,
+                    SqliteType.Integer, SqliteType.Text
                 });
 
             // OR IGNORE: (set_id, object_id) is the primary key and a set can
