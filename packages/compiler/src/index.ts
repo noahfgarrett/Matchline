@@ -60,6 +60,19 @@ export type { AttributeKey } from './attributes.js';
 export { aggregateReviewItems } from './review.js';
 
 /**
+ * Which asset the model tree publishes each asset inside.
+ *
+ * Exported for the same reason `resolveStoredReference` below is: the desktop
+ * app has to answer this outside a compile. Quick Setup proposes
+ * `parentRole → childRole` rules from the pairings a site's own model already
+ * draws, and a second walk of the object tree in the app would be a second
+ * answer to "what does the model say this sits inside" — which is the rung this
+ * function IS.
+ */
+export { modelTreeParents } from './model-tree.js';
+export type { ModelTreeSource } from './model-tree.js';
+
+/**
  * How a stored reference is re-addressed onto this compile's assets.
  *
  * Exported because the desktop app has to answer the same question outside a

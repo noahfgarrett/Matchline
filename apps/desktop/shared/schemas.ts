@@ -1207,6 +1207,17 @@ export type WirePropertySuggestion = z.infer<typeof propertySuggestionSchema>;
  * a decision Matchline made on a site's behalf.
  */
 export const suggestionConfidenceSchema = z.enum(['strong', 'possible']);
+
+/**
+ * The share of a site that may state nothing at a level before Matchline stops
+ * proposing that level as a boundary.
+ *
+ * A tenth. A boundary refuses to nest equipment across it, and it compares
+ * "unknown" as a value nobody shares, so a boundary that a fifth of the site
+ * cannot state turns a fifth of the site into roots. One in ten is the point
+ * where the level is still describing the site rather than fragmenting it.
+ */
+export const BOUNDARY_MISSING_LIMIT = 0.1;
 export type WireSuggestionConfidence = z.infer<typeof suggestionConfidenceSchema>;
 
 /** One decision Quick Setup offers: a field, and the properties that could fill it. */
@@ -1252,6 +1263,76 @@ export const resolverTemplateSchema = z.object({
 });
 export type WireResolverTemplate = z.infer<typeof resolverTemplateSchema>;
 
+/**
+ * One source-assignment rule Quick Setup proposes, with what it would cover.
+ *
+ * The rule is a whole `WireSourceAssignmentRule`, so accepting it is one append
+ * to `sourceAssignments` and previewing it is the same `assignment:preview` the
+ * screen-6 editor uses. The counts come from `buildAssignmentPreview` for that
+ * reason too: a proposal whose numbers were computed a second way could tell a
+ * person the rule hits three files while the editor said two.
+ */
+export const assignmentSuggestionSchema = z.object({
+  rule: sourceAssignmentRuleSchema,
+  /** Why this rule is proposed, in one sentence. */
+  why: z.string().min(1),
+  matchedFileCount: z.number().int().nonnegative(),
+  matchedObjectCount: z.number().int().nonnegative(),
+});
+export type WireAssignmentSuggestion = z.infer<typeof assignmentSuggestionSchema>;
+
+/** One level as it would group the assets this project has right now. */
+export const hierarchyProjectionLevelSchema = z.object({
+  levelId: z.string().min(1),
+  displayName: z.string().min(1),
+  attributeKey: z.string().min(1),
+  boundary: z.boolean(),
+  /** How many groups this level would make. */
+  distinctValueCount: z.number().int().nonnegative(),
+  /** Assets that state nothing at this level, and so land in `(unassigned)`. */
+  assetsWithoutValue: z.number().int().nonnegative(),
+});
+export type WireHierarchyProjectionLevel = z.infer<typeof hierarchyProjectionLevelSchema>;
+
+/**
+ * What a level stack would do to this project's assets, before it is accepted
+ * (audit blocker B3).
+ *
+ * The one number that decides whether a fast setup produced a register or a
+ * flat list is "how many assets state nothing at a boundary level", and until
+ * now it appeared for the first time on screen 8's completeness report — after
+ * the compile, after the publish, after the person had left. It is computed
+ * here from the same draft, over the same catalog, with the same attribute
+ * resolution the compiler uses.
+ */
+export const hierarchyProjectionSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('blocked'), reason: z.string().min(1) }),
+  z.object({
+    state: z.literal('ready'),
+    assetCount: z.number().int().nonnegative(),
+    levels: z.array(hierarchyProjectionLevelSchema),
+  }),
+]);
+export type WireHierarchyProjection = z.infer<typeof hierarchyProjectionSchema>;
+
+/**
+ * One parent → child role pairing the model tree already draws.
+ *
+ * Read off tagged objects published inside tagged objects and named with the
+ * inferred anatomy's `role` segment: a site whose model puts `VFD-2A-1` inside
+ * `MCC-2A` has stated `MCC → VFD` once per drive, and the role graph is where
+ * that belongs. Counted, never applied.
+ */
+export const rolePairSuggestionSchema = z.object({
+  parentRole: z.string().min(1),
+  childRole: z.string().min(1),
+  /** How many times the model tree draws this pairing. */
+  count: z.number().int().nonnegative(),
+  /** Up to three `parent → child` tag pairs, as evidence. */
+  examples: z.array(z.string()),
+});
+export type WireRolePairSuggestion = z.infer<typeof rolePairSuggestionSchema>;
+
 /** One Navisworks class, and how much of it carries an equipment tag. */
 export const classSuggestionSchema = z.object({
   className: z.string().min(1),
@@ -1285,8 +1366,23 @@ export const quickSetupSuggestionsSchema = z.object({
   anatomy: anatomySuggestionSchema.nullable(),
   resolverTemplates: z.array(resolverTemplateSchema),
   classes: z.array(classSuggestionSchema),
-  /** The P0-5 preset, sent from main so the renderer never restates it. */
+  /** Rules read off the file names, for a federation that states no building. */
+  sourceAssignments: z.array(assignmentSuggestionSchema),
+  /**
+   * The P0-5 preset with its boundary flags decided against this project.
+   *
+   * A boundary a tenth of the site cannot state is not a boundary, it is a wall
+   * across the register, so a level whose projected `assetsWithoutValue` is
+   * above {@link BOUNDARY_MISSING_LIMIT} is proposed WITHOUT the flag and
+   * `hierarchyNotes` says why. The levels themselves never change.
+   */
   hierarchy: hierarchyConfigSchema,
+  /** One sentence per boundary decision above, or empty. */
+  hierarchyNotes: z.array(z.string()),
+  /** What the proposed stack would do to the assets this project has. */
+  hierarchyProjection: hierarchyProjectionSchema,
+  /** Parent → child role pairs the model tree draws, strongest first. */
+  rolePairs: z.array(rolePairSuggestionSchema),
 });
 export type WireQuickSetupSuggestions = z.infer<typeof quickSetupSuggestionsSchema>;
 

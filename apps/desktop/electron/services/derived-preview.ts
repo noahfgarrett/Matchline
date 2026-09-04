@@ -190,6 +190,29 @@ function evaluateRung(
 }
 
 /**
+ * The first rung of one chain that answers for one asset, or `null`.
+ *
+ * The chain rules in one function: first rung wins, missing stays missing,
+ * blank is not a value. Published so the hierarchy projection can ask what a
+ * level addressing a derived attribute would find without rebuilding a whole
+ * `WireDerivedPreview` per level — and, more importantly, so the two answers
+ * come from one evaluation rather than two that could drift.
+ */
+export function resolveDerived(
+  definition: WireDerivedAttribute,
+  context: DerivedPreviewSubject,
+  melByTag: ReadonlyMap<string, readonly MelCatalogRow[]>,
+): string | null {
+  for (const resolver of definition.resolverChain) {
+    const value = evaluateRung(resolver, context, melByTag);
+    if (value !== null) {
+      return value;
+    }
+  }
+  return null;
+}
+
+/**
  * The MEL indexed the one way a derived rung joins into it: by equipment tag.
  *
  * Built once per preview rather than per asset, because a 40,000-asset project

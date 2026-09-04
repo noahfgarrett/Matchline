@@ -7,7 +7,9 @@ import type {
   WireFieldSuggestion,
   WirePropertySuggestion,
   WireResolverTemplate,
+  WireRolePairSuggestion,
   WireSegmentName,
+  WireSourceAssignmentRule,
   WireSuggestionConfidence,
   WireSuggestionTarget,
   WireTagAnatomy,
@@ -64,6 +66,26 @@ type Cardinality = 'unique' | 'few' | 'many';
  */
 const TAG_SHAPE = /^[A-Z0-9]+(?:[-_./][A-Z0-9]+)+$/;
 
+/**
+ * A tag with no separator in it at all: letters, then digits, then at most one
+ * letter. `AHU1`, `P101`, `MCC2A`.
+ *
+ * Revit's `Mark` is the reason this exists. A mark is typed by a person into a
+ * one-line parameter and it very often has no separator — and under the rule
+ * above, `P101` scored zero on shape, which put the equipment tag of every
+ * Revit-authored model behind whatever else happened to be named like a tag.
+ *
+ * Worth {@link BARE_TAG_STRENGTH} rather than a full point, because the reason
+ * the separated shape is trusted still holds: `AHU-1` cannot be a description
+ * and `1811` could be a WBS code. A mark is the best candidate on a Revit model
+ * because of its NAME and its uniqueness; the shape signal is there to stop a
+ * property full of prose from beating it, and a partial point does that.
+ */
+const BARE_TAG_SHAPE = /^[A-Z]{1,6}[0-9]{1,6}[A-Z]?$/;
+
+/** What a separator-less tag is worth against one that carries a separator. */
+const BARE_TAG_STRENGTH = 0.6;
+
 /** A short code with no spaces: `D1`, `AHU`, `1811`, `VF_MECH_AHU`. */
 const CODE_SHAPE = /^[A-Za-z0-9][A-Za-z0-9\-_./]{0,23}$/;
 
@@ -76,16 +98,22 @@ function looksLikeWords(value: string): boolean {
   return trimmed.length > 12 && /[a-z]/.test(trimmed);
 }
 
-function matchesShape(value: string, shape: ValueShape): boolean {
+/** How well one value fits one shape: 0, 1, or a partial point for a bare tag. */
+function shapeStrength(value: string, shape: ValueShape): number {
+  const trimmed = value.trim();
   switch (shape) {
     case 'tag':
-      return TAG_SHAPE.test(value.trim());
+      return TAG_SHAPE.test(trimmed)
+        ? 1
+        : BARE_TAG_SHAPE.test(trimmed)
+          ? BARE_TAG_STRENGTH
+          : 0;
     case 'code':
-      return CODE_SHAPE.test(value.trim()) && !value.trim().includes(' ');
+      return CODE_SHAPE.test(trimmed) && !trimmed.includes(' ') ? 1 : 0;
     case 'words':
-      return looksLikeWords(value);
+      return looksLikeWords(value) ? 1 : 0;
     case 'any':
-      return true;
+      return 1;
     default: {
       const exhaustive: never = shape;
       throw new Error(`Unhandled value shape: ${String(exhaustive)}`);
@@ -102,6 +130,21 @@ interface SignalWeights {
   readonly cardinality: number;
 }
 
+/**
+ * A name this field is not usually called, but which is sometimes the only
+ * thing a model offers.
+ *
+ * `strength` is what the name signal is worth, between 0 and 1, against the
+ * full point an exact synonym scores. `why` is the sentence the candidate
+ * carries onto the screen, because a proposal made on weak evidence has to say
+ * that it is a proposal made on weak evidence.
+ */
+interface WeakSynonym {
+  readonly folded: string;
+  readonly strength: number;
+  readonly why: string;
+}
+
 interface FieldProfile {
   readonly target: WireSuggestionTarget;
   readonly label: string;
@@ -109,6 +152,17 @@ interface FieldProfile {
   readonly example: string;
   /** Folded, exact. See {@link nameScoreOf}. */
   readonly synonyms: ReadonlyArray<string>;
+  /** Names that are evidence, but not the field's own name. Never pre-ticked. */
+  readonly weakSynonyms?: ReadonlyArray<WeakSynonym>;
+  /**
+   * Words that disqualify a property from this field outright.
+   *
+   * Not a low score — an exclusion. `System Classification` is a duct's air
+   * system, not the commissioning register's classification column, and a field
+   * whose synonym list merely outranked it would still put it on the screen for
+   * somebody to accept by mistake.
+   */
+  readonly antiSynonyms?: ReadonlyArray<string>;
   readonly shape: ValueShape;
   readonly cardinality: Cardinality;
   readonly weights: SignalWeights;
@@ -182,7 +236,7 @@ const FIELD_PROFILES: readonly FieldProfile[] = [
     label: 'Equipment type',
     what: 'What kind of thing this is. Used for grouping and for the role rules later on.',
     example: 'Air Handler',
-    synonyms: ['type', 'equipmenttype', 'assettype', 'category', 'family', 'itemtype'],
+    synonyms: ['type', 'equipmenttype', 'assettype', 'category', 'family', 'itemtype', 'typename', 'familyandtype'],
     shape: 'code',
     cardinality: 'few',
     weights: { name: 0.4, fill: 0.2, shape: 0.15, cardinality: 0.25 },
@@ -193,6 +247,29 @@ const FIELD_PROFILES: readonly FieldProfile[] = [
     what: 'Which building the asset sits in. Becomes the top level of the hierarchy.',
     example: 'B14',
     synonyms: ['building', 'buildingname', 'buildingcode', 'bldg', 'facility', 'site'],
+    // A Revit federation has no property called Building. What it has is a
+    // workset, which on a per-building delivery is named after the building,
+    // and a level, which is not a building at all but is at least a place. Both
+    // are offered with the reason attached and neither is ever pre-ticked — see
+    // `confidenceOf`. The better answer on such a model is usually a
+    // source-assignment rule read off the file names (`suggestSourceAssignments`).
+    weakSynonyms: [
+      {
+        folded: 'workset',
+        strength: 0.6,
+        why: 'Named “Workset”. Revit models have no Building parameter; a per-building delivery usually names its worksets after the building, so this is the nearest thing the model states.',
+      },
+      {
+        folded: 'level',
+        strength: 0.4,
+        why: 'Named “Level”. A level is a floor, not a building — L01 exists in every building on the site — so take this only if this project is one building.',
+      },
+      {
+        folded: 'floor',
+        strength: 0.4,
+        why: 'Named “Floor”. A floor is not a building; take it only if this project is one building.',
+      },
+    ],
     shape: 'code',
     cardinality: 'few',
     weights: { name: 0.4, fill: 0.2, shape: 0.15, cardinality: 0.25 },
@@ -232,7 +309,26 @@ const FIELD_PROFILES: readonly FieldProfile[] = [
     label: 'Equipment Classification',
     what: "The register's classification column. Left unmapped, Matchline falls back to the equipment type.",
     example: 'AHU',
-    synonyms: ['classification', 'equipmentclassification', 'assetclass', 'classcode'],
+    // `category` and `family` are here because on a Revit model they are what
+    // this column is filled from: an EXTO classification of an air handling unit
+    // is read off `Element > Category` = Mechanical Equipment and
+    // `Element > Family` = Air Handling Unit, and nothing else in the file says
+    // what kind of thing an object is.
+    synonyms: [
+      'classification',
+      'equipmentclassification',
+      'assetclass',
+      'classcode',
+      'category',
+      'family',
+      'omniclass',
+      'assemblycode',
+    ],
+    // `System Classification` is a duct's air system — Supply Air, Exhaust Air,
+    // Power. It is evidence for the System Resolver and it is not this column;
+    // offering it here is how a register ends up classifying every air handler
+    // as "Supply Air".
+    antiSynonyms: ['system'],
     shape: 'code',
     cardinality: 'few',
     weights: { name: 0.5, fill: 0.15, shape: 0.1, cardinality: 0.25 },
@@ -339,16 +435,70 @@ function clamp(value: number): number {
  * that the value shape and the cardinality decide the ranking, which for
  * `Tag Colour` is exactly what happens.
  */
-function nameScoreOf(name: string, synonyms: ReadonlyArray<string>): number {
+/**
+ * What the name signal came to, and on what evidence.
+ *
+ * `weak` is true when the only thing that scored was a {@link WeakSynonym} —
+ * the fact `confidenceOf` reads to refuse to pre-tick a guess, and the reason
+ * the candidate prints.
+ */
+interface NameEvidence {
+  readonly score: number;
+  readonly weak: boolean;
+  /** The weak synonym's sentence, or `''`. */
+  readonly why: string;
+  /** True when a word of the name disqualifies it from this field entirely. */
+  readonly disqualified: boolean;
+}
+
+const NO_NAME_EVIDENCE: NameEvidence = {
+  score: 0,
+  weak: false,
+  why: '',
+  disqualified: false,
+};
+
+function nameEvidenceOf(name: string, profile: FieldProfile): NameEvidence {
   const folded = fold(name);
-  if (synonyms.includes(folded)) {
-    return 1;
-  }
   const nameWords = words(name);
-  if (nameWords.length <= 3 && nameWords.some((word) => synonyms.includes(word))) {
-    return 0.35;
+
+  const anti = profile.antiSynonyms ?? [];
+  if (anti.length > 0 && nameWords.some((word) => anti.includes(word))) {
+    return { ...NO_NAME_EVIDENCE, disqualified: true };
   }
-  return 0;
+
+  if (profile.synonyms.includes(folded)) {
+    return { score: 1, weak: false, why: '', disqualified: false };
+  }
+
+  const weakExact = (profile.weakSynonyms ?? []).find((entry) => entry.folded === folded);
+  if (weakExact !== undefined) {
+    return { score: weakExact.strength, weak: true, why: weakExact.why, disqualified: false };
+  }
+
+  if (nameWords.length <= 3 && nameWords.some((word) => profile.synonyms.includes(word))) {
+    return { score: 0.35, weak: false, why: '', disqualified: false };
+  }
+
+  const weakWord =
+    nameWords.length > 3
+      ? undefined
+      : (profile.weakSynonyms ?? []).find((entry) => nameWords.includes(entry.folded));
+  if (weakWord !== undefined) {
+    return {
+      score: weakWord.strength * 0.35,
+      weak: true,
+      why: weakWord.why,
+      disqualified: false,
+    };
+  }
+
+  return NO_NAME_EVIDENCE;
+}
+
+/** {@link nameEvidenceOf}'s score alone, for the callers that only want it. */
+function nameScoreOf(name: string, profile: FieldProfile): number {
+  return nameEvidenceOf(name, profile).score;
 }
 
 /** How much of the universe carries the property at all (§6.5 "fill rate"). */
@@ -361,8 +511,11 @@ function shapeScoreOf(entry: UniversePropertyCatalogEntry, shape: ValueShape): n
   if (shape === 'any' || entry.exampleValues.length === 0) {
     return shape === 'any' ? 1 : 0;
   }
-  const hits = entry.exampleValues.filter((value) => matchesShape(value, shape)).length;
-  return hits / entry.exampleValues.length;
+  const strength = entry.exampleValues.reduce(
+    (total, value) => total + shapeStrength(value, shape),
+    0,
+  );
+  return strength / entry.exampleValues.length;
 }
 
 /**
@@ -409,9 +562,12 @@ function reasonsFor(
   entry: UniversePropertyCatalogEntry,
   profile: FieldProfile,
   signals: { name: number; fill: number; shape: number; cardinality: number },
+  nameEvidence: NameEvidence,
 ): readonly string[] {
   const reasons: string[] = [];
-  if (signals.name >= 1) {
+  if (nameEvidence.weak && nameEvidence.why !== '') {
+    reasons.push(nameEvidence.why);
+  } else if (signals.name >= 1) {
     reasons.push(`Named “${entry.name}”, which is what this field is usually called`);
   } else if (signals.name > 0) {
     reasons.push(`“${entry.name}” contains the word this field is usually called`);
@@ -419,7 +575,13 @@ function reasonsFor(
   reasons.push(
     `${String(Math.round(entry.objectFraction * 100))}% of objects carry it (${String(entry.objectCount)})`,
   );
-  if (signals.shape >= 0.99 && profile.shape !== 'any') {
+  if (
+    profile.shape === 'tag' &&
+    signals.shape > 0 &&
+    signals.shape <= BARE_TAG_STRENGTH + 0.001
+  ) {
+    reasons.push('Sampled values are a role and a number with no separator, the way a mark is');
+  } else if (signals.shape >= 0.99 && profile.shape !== 'any') {
     reasons.push(
       profile.shape === 'tag'
         ? 'Every sampled value is shaped like a tag'
@@ -457,9 +619,15 @@ export function rankCandidates(
   catalog: readonly UniversePropertyCatalogEntry[],
   profile: FieldProfile,
 ): readonly WirePropertySuggestion[] {
-  const scored = catalog.map((entry): WirePropertySuggestion => {
+  const scored: WirePropertySuggestion[] = [];
+  for (const entry of catalog) {
+    const nameEvidence = nameEvidenceOf(entry.name, profile);
+    if (nameEvidence.disqualified) {
+      // Not a low score — off the list. See `FieldProfile.antiSynonyms`.
+      continue;
+    }
     const signals = {
-      name: nameScoreOf(entry.name, profile.synonyms),
+      name: nameEvidence.score,
       fill: fillScoreOf(entry),
       shape: shapeScoreOf(entry, profile.shape),
       cardinality: cardinalityScoreOf(entry, profile.cardinality),
@@ -471,16 +639,16 @@ export function rankCandidates(
       signals.shape * weights.shape +
       signals.cardinality * weights.cardinality;
 
-    return {
+    scored.push({
       property: { category: entry.category, name: entry.name },
       score: round(total),
       coverage: entry.objectFraction,
       distinctValueCount: entry.distinctValueCount,
       objectCount: entry.objectCount,
       examples: [...entry.exampleValues].slice(0, 3),
-      reasons: [...reasonsFor(entry, profile, signals)],
-    };
-  });
+      reasons: [...reasonsFor(entry, profile, signals, nameEvidence)],
+    });
+  }
 
   return scored
     .filter((candidate) => candidate.score >= CANDIDATE_FLOOR)
@@ -501,9 +669,21 @@ export function rankCandidates(
 }
 
 /** `strong` only when the winner is good AND clearly ahead. See the schema. */
-function confidenceOf(candidates: readonly WirePropertySuggestion[]): WireSuggestionConfidence {
+function confidenceOf(
+  candidates: readonly WirePropertySuggestion[],
+  profile: FieldProfile,
+): WireSuggestionConfidence {
   const top = candidates[0];
   if (top === undefined || top.score < STRONG_SCORE) {
+    return 'possible';
+  }
+  // A winner whose only name evidence is a weak synonym is never a clear
+  // winner, whatever it scored: `Level` outscoring `Workset` for Building says
+  // which of two guesses fits the signals better, not that either is the
+  // building. Quick Setup's accept-all path takes the strong rows, and a level
+  // silently becoming a site's top hierarchy level is exactly the outcome the
+  // audit found (B3).
+  if (nameEvidenceOf(top.property.name, profile).weak) {
     return 'possible';
   }
   const runnerUp = candidates[1];
@@ -542,7 +722,7 @@ export function suggestFields(
   for (const profile of FIELD_PROFILES) {
     const candidates = rankCandidates(catalog, profile);
     const top = candidates[0];
-    const named = top !== undefined && nameScoreOf(top.property.name, profile.synonyms) > 0;
+    const named = top !== undefined && nameScoreOf(top.property.name, profile) > 0;
     if (profile.required !== true && !named) {
       continue;
     }
@@ -551,7 +731,7 @@ export function suggestFields(
       label: profile.label,
       what: profile.what,
       example: profile.example,
-      confidence: confidenceOf(candidates),
+      confidence: confidenceOf(candidates, profile),
       candidates: [...candidates],
     });
   }
@@ -675,7 +855,49 @@ function anatomyCandidates(
     familyKeyTemplate: tokenCount > 1 ? familyTemplateFor(tokenCount) : '{system}',
   };
 
-  return [
+  /**
+   * The role is the letters at the front and the number is just which one it
+   * is. `AHU-1`, `P101`, `EF-3` — Revit's `Mark`, and every hand-typed tag on a
+   * building services model.
+   *
+   * There is no system in a mark, and the whole reason this family exists is to
+   * stop the engine pretending there is: under `separateTokens`, `AHU-1` yields
+   * `system = "1"`, which then becomes a hierarchy level with one system per
+   * air handler. {@link systemSanityOf} is what catches that; this is what it
+   * loses to.
+   *
+   * Three arrangements of the same idea, because the digits can be at either
+   * end of the mark or in a token of their own:
+   *
+   * 1. **instance in the first token** — `P101`, no separator at all.
+   * 2. **instance in the last token** — `AHU-1`.
+   * 3. **role only** — the honest answer for a site whose marks are
+   *    `MCC-2A` and `VFD-2A-1` alongside `AHU-1`, where no single digit
+   *    position is the instance. It teaches one segment, which is one more than
+   *    nothing, and it is the vocabulary the role-pair proposals read.
+   */
+  const noSystemBase = {
+    ...base,
+    familyKeyTemplate: '',
+  };
+  const roleAndInstance = (instanceToken: number): WireTagAnatomy => ({
+    ...noSystemBase,
+    segments: [
+      { segment: 'role' as WireSegmentName, extractor: { kind: 'alphaPrefix' as const, token: 0 } },
+      {
+        segment: 'instance' as WireSegmentName,
+        extractor: { kind: 'digitSuffix' as const, token: instanceToken },
+      },
+    ],
+  });
+  const roleOnly: WireTagAnatomy = {
+    ...noSystemBase,
+    segments: [
+      { segment: 'role' as WireSegmentName, extractor: { kind: 'alphaPrefix' as const, token: 0 } },
+    ],
+  };
+
+  const candidates: AnatomyCandidate[] = [
     {
       rationale:
         'The letters and digits of the first token are the role and the system, and the tokens after it place the unit and the instance.',
@@ -685,7 +907,58 @@ function anatomyCandidates(
       rationale: 'Each token is one field: role, then system, then unit, then instance.',
       anatomy: separateTokens,
     },
+    {
+      rationale:
+        'The letters at the front of the mark are the role and the digits after them are which one it is. There is no system in these marks, so the system has to come from somewhere else.',
+      anatomy: roleAndInstance(0),
+    },
   ];
+  if (tokenCount > 1) {
+    candidates.push({
+      rationale:
+        'The letters at the front are the role and the last token is which one it is. There is no system in these marks, so the system has to come from somewhere else.',
+      anatomy: roleAndInstance(tokenCount - 1),
+    });
+  }
+  candidates.push({
+    rationale:
+      'These marks are a role and a number and nothing else — no system, and no instance in a fixed position. Matchline teaches the role, which is what the parent rules read, and the system comes from a model property instead.',
+    anatomy: roleOnly,
+  });
+  return candidates;
+}
+
+/**
+ * How much a candidate's `system` segment behaves like a system.
+ *
+ * A system groups equipment. A `system` segment whose distinct values number
+ * about as many as the tags it split has grouped nothing — it is the instance
+ * number wearing the wrong name, and a hierarchy built on it gives every air
+ * handler a system of its own. That is the audit's "on `AHU-1` makes
+ * system = 1", and it is a fact this function can see without knowing anything
+ * about the site.
+ *
+ * `1` for a family that teaches no `system` at all: there is nothing to be
+ * wrong about. `1` down to `0` across a distinct-to-matched ratio of a quarter
+ * to three quarters — a quarter is an ordinary site (four units per system),
+ * and at three quarters the segment is an identifier.
+ */
+export function systemSanityOf(
+  anatomy: WireTagAnatomy,
+  preview: AnatomyPreview,
+): number {
+  if (!anatomy.segments.some((row) => row.segment === 'system')) {
+    return 1;
+  }
+  if (preview.matchedCount === 0) {
+    return 0;
+  }
+  const stat = preview.segmentStats.find((entry) => entry.segment === 'system');
+  if (stat === undefined) {
+    return 1;
+  }
+  const ratio = stat.distinctValueCount / preview.matchedCount;
+  return clamp(1 - (ratio - 0.25) / 0.5);
 }
 
 /** The most common token count across the sample, ties going to the larger. */
@@ -741,23 +1014,30 @@ export function inferAnatomy(tags: readonly string[]): WireAnatomySuggestion | n
   }
   const tokenCount = commonTokenCount(sample, separators);
 
-  let best: { readonly candidate: AnatomyCandidate; readonly preview: AnatomyPreview } | null =
-    null;
+  let best: {
+    readonly candidate: AnatomyCandidate;
+    readonly preview: AnatomyPreview;
+    readonly score: number;
+  } | null = null;
   for (const candidate of anatomyCandidates(separators, tokenCount)) {
     const preview = previewAnatomy(toAnatomyConfig(candidate.anatomy), sample);
+    // Coverage decides, discounted by whether the candidate's `system` segment
+    // is a system at all. A shape that splits every tag by calling the instance
+    // number a system has not read this site's tags; it has renamed them.
+    const score = preview.coverage * systemSanityOf(candidate.anatomy, preview);
     if (best === null) {
-      best = { candidate, preview };
+      best = { candidate, preview, score };
       continue;
     }
-    if (preview.coverage > best.preview.coverage) {
-      best = { candidate, preview };
+    if (score > best.score) {
+      best = { candidate, preview, score };
       continue;
     }
     if (
-      preview.coverage === best.preview.coverage &&
+      score === best.score &&
       candidate.anatomy.segments.length > best.candidate.anatomy.segments.length
     ) {
-      best = { candidate, preview };
+      best = { candidate, preview, score };
     }
   }
 
@@ -810,6 +1090,54 @@ function toAnatomyConfig(wire: WireTagAnatomy): Parameters<typeof previewAnatomy
     familyKeyTemplate: wire.familyKeyTemplate,
     localFamilyTemplate: wire.localFamilyTemplate,
   };
+}
+
+/**
+ * Which of the ranked system-code candidates a resolver should actually key on.
+ *
+ * Preference, strongest first, and the order is about what the property MEANS
+ * rather than what it scored:
+ *
+ * 1. `System Name` names one system — `Supply Air 1`, `Power 2A`. That is a
+ *    system key.
+ * 2. `UPN` / `System Code` / `System No` are the same thing on a plant model.
+ * 3. `System Classification` names a KIND of system — `Supply Air`, `Power`.
+ *    Keying on it merges every supply-air system on the site into one, which is
+ *    a worse answer than no answer, so it comes last and only when nothing else
+ *    is offered.
+ *
+ * The ranking cannot see this: a classification has fewer distinct values than
+ * a name, and "few distinct values" is exactly what the System/UPN profile
+ * rewards, so the classification wins the score and loses the argument.
+ */
+const SYSTEM_PROPERTY_PREFERENCE: readonly string[] = [
+  'systemname',
+  'systemcode',
+  'systemno',
+  'systemnumber',
+  'upn',
+  'unitprocessnumber',
+  'system',
+  'systemclassification',
+];
+
+export function preferredSystemProperty(
+  candidates: readonly WirePropertySuggestion[],
+): { readonly category: string; readonly name: string } | null {
+  let best: { readonly candidate: WirePropertySuggestion; readonly rank: number } | null = null;
+  for (const candidate of candidates) {
+    const rank = SYSTEM_PROPERTY_PREFERENCE.indexOf(fold(candidate.property.name));
+    if (rank < 0) {
+      continue;
+    }
+    if (best === null || rank < best.rank) {
+      best = { candidate, rank };
+    }
+  }
+  const chosen = best?.candidate ?? candidates[0];
+  return chosen === undefined
+    ? null
+    : { category: chosen.property.category, name: chosen.property.name };
 }
 
 /* ------------------------------------------------- resolver starter templates */
@@ -942,6 +1270,147 @@ export function resolverTemplates(evidence: TemplateEvidence): readonly WireReso
       },
     },
   ];
+}
+
+/* --------------------------------------------- source-assignment suggestions */
+
+/**
+ * A building code at the front of a file name: letters and digits, then a
+ * separator.
+ *
+ * Both halves are required. `B14-Mechanical.nwc` yields `B14`; `Dragon-
+ * Mechanical.nwc` yields nothing, because `Dragon` is the site, not a building,
+ * and a rule assigning every asset to a building called Dragon would be a
+ * confident wrong answer. A building code that people write on drawings has a
+ * number in it.
+ */
+const FILENAME_PREFIX = /^([A-Za-z]{1,4}[0-9]{1,4}[A-Za-z]?)[-_]/;
+
+/** What one source-assignment proposal is, before its counts are attached. */
+export interface AssignmentProposal {
+  readonly rule: WireSourceAssignmentRule;
+  readonly why: string;
+}
+
+/**
+ * Rules that read the building off the file names, for a federation that has no
+ * building property (audit: "no Building is ever proposed for a federated Revit
+ * NWD").
+ *
+ * The evidence is the whole file list at once, and it has to be unanimous: every
+ * document with a file name starts with a code, and the codes are not all the
+ * same one. A federation delivered as `B14-Mechanical.nwc`,
+ * `B14-Electrical.nwc` and `B22-Mechanical.nwc` has said which building each
+ * file is for as plainly as a property would have, and it is the only thing on
+ * such a model that HAS said it — `Level` repeats in every building and
+ * `Workset` is a coordination convention.
+ *
+ * One rule per distinct code, in code order, so the same file list always
+ * produces the same rules. `match` carries exactly one `*`, which is what
+ * `isCapturePattern` requires and what the preview and the engine both read.
+ *
+ * Nothing is proposed when a project has one building — one rule assigning every
+ * file to `B14` is true and useless — or when any file name does not carry a
+ * code, because a rule that speaks for four files out of five leaves the fifth
+ * silently unassigned, which is the outcome this whole proposal exists to avoid.
+ */
+export function suggestSourceAssignments(
+  fileNames: readonly string[],
+): readonly AssignmentProposal[] {
+  const named = fileNames.filter((name) => name !== '');
+  if (named.length === 0) {
+    return [];
+  }
+
+  const prefixes = new Set<string>();
+  for (const name of named) {
+    const match = FILENAME_PREFIX.exec(name);
+    if (match === null) {
+      return [];
+    }
+    const prefix = match[1];
+    if (prefix === undefined) {
+      return [];
+    }
+    prefixes.add(prefix.toUpperCase());
+  }
+  if (prefixes.size < 2) {
+    return [];
+  }
+
+  const separatorOf = (prefix: string): string => {
+    const example = named.find((name) => name.toUpperCase().startsWith(`${prefix}-`));
+    return example === undefined ? '_' : '-';
+  };
+
+  return [...prefixes].sort().map((prefix): AssignmentProposal => ({
+    rule: {
+      scope: 'filename-pattern',
+      match: `${prefix}${separatorOf(prefix)}*`,
+      assign: { building: prefix, nativeDiscipline: '', custom: [] },
+    },
+    why:
+      `Every file in this project starts with a short code, and “${prefix}” is one of ` +
+      `${String(prefixes.size)} of them. Nothing inside these models says which building an ` +
+      'object is in, so the file name is the only thing that does.',
+  }));
+}
+
+/* -------------------------------------------------------- role-pair proposals */
+
+/** One nesting the model tree draws, in tags. */
+export interface TaggedNesting {
+  readonly parentTag: string;
+  readonly childTag: string;
+}
+
+/** At most this many `parent → child` examples travel with one pair. */
+const ROLE_PAIR_EXAMPLE_LIMIT = 3;
+
+/**
+ * The `parentRole → childRole` rules the model tree has already stated.
+ *
+ * `roleOf` is the site's own anatomy applied to a tag — never a guess about
+ * what a prefix means. A pairing is proposed once per direction and carries its
+ * count, because "the model puts a VFD inside an MCC 14 times" is a fact about
+ * this site and "a VFD belongs to an MCC" is a rule about the industry, and only
+ * the first one is Matchline's to say.
+ *
+ * Self-pairs are dropped: `AHU → AHU` is a model tree that nested two air
+ * handlers, which is a modelling accident far more often than it is a rule, and
+ * a role graph containing it would let any air handler parent any other.
+ */
+export function suggestRolePairs(
+  nestings: readonly TaggedNesting[],
+  roleOf: (tag: string) => string | null,
+): readonly WireRolePairSuggestion[] {
+  const counts = new Map<string, { count: number; examples: string[] }>();
+  for (const nesting of nestings) {
+    const parentRole = roleOf(nesting.parentTag);
+    const childRole = roleOf(nesting.childTag);
+    if (parentRole === null || childRole === null || parentRole === childRole) {
+      continue;
+    }
+    const key = `${parentRole}\u0000${childRole}`;
+    const bucket = counts.get(key) ?? { count: 0, examples: [] };
+    bucket.count += 1;
+    if (bucket.examples.length < ROLE_PAIR_EXAMPLE_LIMIT) {
+      bucket.examples.push(`${nesting.parentTag} → ${nesting.childTag}`);
+    }
+    counts.set(key, bucket);
+  }
+
+  return [...counts.entries()]
+    .map(([key, bucket]): WireRolePairSuggestion => {
+      const [parentRole = '', childRole = ''] = key.split('\u0000');
+      return { parentRole, childRole, count: bucket.count, examples: [...bucket.examples] };
+    })
+    .sort((left, right) =>
+      left.count === right.count
+        ? left.parentRole.localeCompare(right.parentRole) ||
+          left.childRole.localeCompare(right.childRole)
+        : right.count - left.count,
+    );
 }
 
 /* ------------------------------------------------------- class suggestions */

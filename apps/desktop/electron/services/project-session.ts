@@ -12,12 +12,14 @@ import type { AssetLedger } from '@matchline/asset-identity';
 import {
   COMPILE_STAGES,
   decisionResolverOf,
+  modelTreeParents,
   subjectPropertiesFor,
   type CompiledProject,
   type CompileStage,
   type ConnectivityWorkbookInput,
   type MelWorkbookInput,
 } from '@matchline/compiler';
+import { migrateSourceAssignmentRules } from '@matchline/domain';
 import type { ManualRelationshipOverride, SiteProfileV2 } from '@matchline/domain';
 import { reviewKeyKind } from '@matchline/ssm-compiler';
 import type { ManualAssignment } from '@matchline/system-resolver';
@@ -48,9 +50,14 @@ import { applyAnatomy } from '@matchline/tag-anatomy';
 import type {
   WireAddSourceResult,
   WireAnatomyPreview,
+  WireAnatomySuggestion,
   WireAssignmentPreview,
+  WireAssignmentSuggestion,
   WireExtractionJob,
   WireAssetPreview,
+  WireHierarchyLevel,
+  WireHierarchyProjection,
+  WireRolePairSuggestion,
   WireAttributeChoice,
   WireClassCount,
   WireClassSuggestion,
@@ -141,6 +148,7 @@ import {
   toAssetFilters,
   toPropertyMappings,
   toSiteProfile,
+  toSourceAssignments,
   toTagAnatomy,
 } from './draft-profile.js';
 import {
@@ -190,11 +198,16 @@ import {
 import { catalogPage, type PropertyPageRequest } from './property-page.js';
 import {
   inferAnatomy,
+  preferredSystemProperty,
   resolverTemplates,
   suggestClasses,
   suggestFields,
+  suggestRolePairs,
+  suggestSourceAssignments,
   type ClassTagCount,
+  type TaggedNesting,
 } from './suggestions.js';
+import { buildHierarchyProjection, proposeHierarchy } from './hierarchy-preview.js';
 import {
   identifySource,
   melSheetDescriptor,
@@ -1803,6 +1816,149 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     return suggestClasses(counts);
   }
 
+  /**
+   * The source-assignment rules Quick Setup proposes, with what each covers.
+   *
+   * The rules come from {@link suggestSourceAssignments}, which reads the file
+   * names alone; the counts come from `buildAssignmentPreview`, which is the
+   * screen-6 editor's own preview. Two computations of "which files does this
+   * hit" would eventually disagree, and the one a person accepts from must be
+   * the one the editor will show them afterwards.
+   */
+  function assignmentSuggestions(active: Session): readonly WireAssignmentSuggestion[] {
+    const documents = assignmentDocuments(active);
+    const universeObjectCount = [...active.models.values()].reduce(
+      (total, model) => total + model.objectCount,
+      0,
+    );
+    const already = new Set(
+      active.draft.sourceAssignments.map((rule) => `${rule.scope} ${rule.match}`),
+    );
+
+    const suggestions: WireAssignmentSuggestion[] = [];
+    for (const proposal of suggestSourceAssignments(
+      documents.map((document) => document.sourceModelFile),
+    )) {
+      // A rule the draft already carries is not a proposal, it is a decision
+      // somebody made. Re-offering it would let a second copy be appended.
+      if (already.has(`${proposal.rule.scope} ${proposal.rule.match}`)) {
+        continue;
+      }
+      const preview = buildAssignmentPreview(proposal.rule, documents, universeObjectCount);
+      if (preview.state !== 'ready' || preview.matches.length === 0) {
+        continue;
+      }
+      suggestions.push({
+        rule: proposal.rule,
+        why: proposal.why,
+        matchedFileCount: preview.matches.length,
+        matchedObjectCount: preview.matchedObjectCount,
+      });
+    }
+    return suggestions;
+  }
+
+  /**
+   * What the proposed level stack would do to the assets this draft produces.
+   *
+   * `blocked` until an equipment tag property is chosen, because until then the
+   * project has no assets and "0 of 0 assets state a building" is not an answer
+   * anybody can read.
+   */
+  function hierarchyProjectionOf(
+    active: Session,
+    levels: readonly WireHierarchyLevel[],
+  ): WireHierarchyProjection {
+    if (!hasMappings(active.draft)) {
+      return {
+        state: 'blocked',
+        reason:
+          'Accept an equipment tag first — the levels are projected over the assets it defines.',
+      };
+    }
+    const derived = requireDerived(active);
+    const systems = resolveSystemMap(
+      active.draft.systemResolver,
+      active.draft.tagAnatomy,
+      derived.subjects,
+      active.melRows,
+    );
+    const contexts = derivedSubjectsFor(
+      derived.catalog,
+      derived.subjects,
+      toTagAnatomy(active.draft.tagAnatomy),
+      systems,
+    );
+    return buildHierarchyProjection(
+      levels,
+      contexts,
+      active.draft.derivedAttributes,
+      new Map(active.draft.ssmDisciplineProjection.map((rewrite) => [rewrite.from, rewrite.to])),
+      indexMelByTag(active.melRows),
+    );
+  }
+
+  /**
+   * `parentRole → childRole` pairs, from this model's own nesting.
+   *
+   * The nesting is `modelTreeParents` — the compiler's own `model-tree` rung,
+   * called rather than re-walked — and the roles come from the inferred anatomy
+   * applied to each tag. Empty until both exist, which is the honest answer:
+   * before a tag property and a tag shape there are no roles to pair.
+   */
+  function rolePairSuggestions(
+    active: Session,
+    anatomy: WireAnatomySuggestion | null,
+  ): readonly WireRolePairSuggestion[] {
+    const taught = anatomy?.anatomy ?? active.draft.tagAnatomy;
+    const config = toTagAnatomy(taught);
+    if (config === null || !hasMappings(active.draft)) {
+      return [];
+    }
+
+    const derived = requireDerived(active);
+    const parents = modelTreeParents(
+      orderedModels(active).map((model) => ({ sourceId: model.sourceId, cache: model.cache })),
+      derived.catalog.assets,
+    );
+    const tagById = new Map(
+      derived.catalog.assets.map((asset) => [asset.assetId, asset.canonicalTag] as const),
+    );
+
+    const nestings: TaggedNesting[] = [];
+    for (const [assetId, parentAssetId] of parents) {
+      const childTag = tagById.get(assetId) ?? '';
+      const parentTag = tagById.get(parentAssetId) ?? '';
+      if (childTag === '' || parentTag === '') {
+        continue;
+      }
+      nestings.push({ parentTag, childTag });
+    }
+    // `modelTreeParents` is a Map and iterates in insertion order, which is
+    // source order then catalog order; sorting makes the proposal depend on the
+    // content alone.
+    nestings.sort(
+      (left, right) =>
+        left.parentTag.localeCompare(right.parentTag) ||
+        left.childTag.localeCompare(right.childTag),
+    );
+
+    const roles = new Map<string, string | null>();
+    const roleOf = (tag: string): string | null => {
+      const memo = roles.get(tag);
+      if (memo !== undefined) {
+        return memo;
+      }
+      const result = applyAnatomy(config, tag);
+      const role = result.matched ? (result.segments.role ?? null) : null;
+      const value = role === null || role.trim() === '' ? null : role;
+      roles.set(tag, value);
+      return value;
+    };
+
+    return suggestRolePairs(nestings, roleOf);
+  }
+
   /** Re-reads every MEL source. Screen 5's `mel-lookup` rungs join against these. */
   function loadMelRows(active: Session): void {
     const rows: MelCatalogRow[] = [];
@@ -1827,7 +1983,16 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
   /* ------------------------------------------------------- derived assets */
 
   function configKeyOf(active: Session): string {
-    return JSON.stringify([active.draft.propertyMappings, active.draft.assetFilters]);
+    // The assignment rules are part of what an asset IS: a rule assigning the
+    // building off the file name puts a value on every asset in that file
+    // (P0-8). Leaving them out of the key served a catalog built without them
+    // to every preview, so the wizard showed a site with no buildings and the
+    // compile produced one with buildings.
+    return JSON.stringify([
+      active.draft.propertyMappings,
+      active.draft.assetFilters,
+      active.draft.sourceAssignments,
+    ]);
   }
 
   /**
@@ -1854,7 +2019,12 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     // The same universe the compile runs on, so the asset ids previewed on
     // screen 3 are the asset ids screen 8 reports.
     const sources = openSources(active);
-    const catalog = buildAssetCatalog(sources, mappings, filters);
+    const catalog = buildAssetCatalog(
+      sources,
+      mappings,
+      filters,
+      migrateSourceAssignmentRules(toSourceAssignments(active.draft)),
+    );
 
     const fileOf = new Map(sources.map((source) => [source.sourceId, source.rawFileName]));
     const subjects: ResolverSubject[] = catalog.assets.map((asset) => ({
@@ -3417,7 +3587,14 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           anatomy: null,
           resolverTemplates: [],
           classes: [],
+          sourceAssignments: [],
           hierarchy,
+          hierarchyNotes: [],
+          hierarchyProjection: {
+            state: 'blocked',
+            reason: 'Add a model on screen 1 to see how the levels would group it.',
+          },
+          rolePairs: [],
         };
       }
 
@@ -3430,14 +3607,24 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       const tags = hasMappings(active.draft) ? catalogTagsOf(active) : [];
       const anatomy = inferAnatomy(tags);
 
-      const systemProperty =
-        fields
-          .find(
-            (field) =>
-              field.target.kind === 'derived-attribute' &&
-              field.target.attributeId === 'system-upn',
-          )
-          ?.candidates[0]?.property ?? null;
+      const systemProperty = preferredSystemProperty(
+        fields.find(
+          (field) =>
+            field.target.kind === 'derived-attribute' && field.target.attributeId === 'system-upn',
+        )?.candidates ?? [],
+      );
+
+      // The inferred anatomy only makes the tag rungs available when it
+      // actually teaches a `system`. A shape that decomposes every mark into a
+      // role and an instance has said the opposite — that the system is not in
+      // the tag — and offering "the tag says it" after that is how a project
+      // ends up with one system per air handler (WP8, item 4).
+      const inferredSystemSegment =
+        anatomy !== null && anatomy.anatomy.segments.some((row) => row.segment === 'system');
+
+      const assignments = assignmentSuggestions(active);
+      const projection = hierarchyProjectionOf(active, hierarchy.levels);
+      const proposed = proposeHierarchy(hierarchy.levels, projection);
 
       return {
         ready: true,
@@ -3452,14 +3639,18 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         resolverTemplates: [
           ...resolverTemplates({
             hasSystemSegment:
-              anatomy !== null ||
+              inferredSystemSegment ||
               active.draft.tagAnatomy.segments.some((row) => row.segment === 'system'),
             hasMel: active.melRows.length > 0,
             systemProperty,
           }),
         ],
         classes: [...classSuggestions(active)],
-        hierarchy,
+        sourceAssignments: [...assignments],
+        hierarchy: proposed.hierarchy,
+        hierarchyNotes: [...proposed.notes],
+        hierarchyProjection: projection,
+        rolePairs: [...rolePairSuggestions(active, anatomy)],
       };
     },
 
