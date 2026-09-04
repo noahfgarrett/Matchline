@@ -1598,8 +1598,17 @@ export type WireCompleteness = z.infer<typeof completenessSchema>;
 
 /** Everything screen 8's checklist prints (PRODUCT.md §7 screen 8). */
 export const compileSummarySchema = z.object({
-  compileId: z.number().int().positive(),
-  profileRevision: z.number().int().positive(),
+  /**
+   * The `compiles` row this result was recorded as, or `null`.
+   *
+   * `null` means the compile ran against a draft no revision holds, so nothing
+   * was written for it to be: a preview, kept in memory and gone when the
+   * project closes. Publishing on screen 9 is what makes the next one a
+   * recorded compile.
+   */
+  compileId: z.number().int().positive().nullable(),
+  /** The revision that produced it, or `null` on the same terms. */
+  profileRevision: z.number().int().positive().nullable(),
   finishedAt: z.string().min(1),
   durationMs: z.number().int().nonnegative(),
 
@@ -1699,8 +1708,55 @@ export const compileStatusSchema = z.discriminatedUnion('state', [
     stageCount: z.number().int().positive(),
     note: z.string().min(1),
   }),
-  z.object({ state: z.literal('done'), summary: compileSummarySchema }),
-  z.object({ state: z.literal('failed'), reason: z.string().min(1) }),
+  z.object({
+    state: z.literal('done'),
+    summary: compileSummarySchema,
+    /**
+     * True when this compile ran against a draft no revision holds.
+     *
+     * A compile needs a `profile_revision` to point at, and it used to publish
+     * one itself the moment the draft was unsaved — which walked straight past
+     * screen 9's publish blockers and its boundary confirmation. It no longer
+     * does: an unconfirmed draft still compiles, because seeing the numbers is
+     * how a person decides whether the draft is right, but NO revision is
+     * written and screen 8 says so. Publishing on screen 9 is the only way a
+     * profile becomes a revision.
+     */
+    unsavedDraft: z.boolean(),
+  }),
+  z.object({
+    state: z.literal('failed'),
+    reason: z.string().min(1),
+    /**
+     * The compile whose view the workspace is still showing, or `null`.
+     *
+     * A failed recompile no longer throws the last good view away. The tree,
+     * the flow and every export go on answering from the compile named here,
+     * and the workspace draws the failure above them rather than instead of
+     * them — losing a working view is a worse answer to "that compile failed"
+     * than keeping a stale one that says it is stale.
+     */
+    staleViewFrom: z.number().int().positive().nullable(),
+  }),
+  /**
+   * The last compile this project recorded, read back on open (audit "High —
+   * reopening a project discards the compile").
+   *
+   * Not `done`, deliberately: what a reopened project can rebuild is what it
+   * stored — the resolved snapshot, the register that compile produced and the
+   * identity ledger — and not the flow projection, the review queue or the
+   * level grouping, none of which are on file. So this is its own state, the
+   * views that cannot be served say a recompile is needed, and every screen
+   * that shows it says which compile it is looking at and how old it is.
+   */
+  z.object({
+    state: z.literal('restored'),
+    compileId: z.number().int().positive(),
+    /** When that compile finished, ISO-8601. */
+    at: z.string().min(1),
+    /** How many assets it produced, from the compile row itself. */
+    assetCount: z.number().int().nonnegative(),
+  }),
   /**
    * Stopped on request. Not a failure: the worker was terminated before it
    * returned, so the project file was never touched and the previous compile —

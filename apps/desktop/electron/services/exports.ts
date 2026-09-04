@@ -28,8 +28,11 @@ import {
   diffMelRevisions,
   isCanonicalMelField,
   writeDiffWorkbook,
+  writeSsmHierarchyWorkbook,
   writeTemplateMel,
   type GeneratedMelAsset,
+  type SsmHierarchyLevelConfig,
+  type SsmHierarchyRow,
   type TemplateColumnSource,
   type TemplateMelMapping,
 } from '@matchline/mel-export';
@@ -38,10 +41,12 @@ import {
   writePredecessorWorkbook,
   type PredecessorAsset,
 } from '@matchline/scheduling';
+import type { HierarchyAssetNode, HierarchyLevelNode } from '@matchline/ssm-compiler';
 
 import type {
   WireExportResult,
   WireExtoTemplate,
+  WireHierarchyConfig,
   WireTemplateAnalysis,
   WireTemplateBinding,
 } from '../../shared/schemas.js';
@@ -499,7 +504,128 @@ export function exportPredecessors(
   );
 }
 
-/* ---------------------------------------------------- 5. revision diff */
+/* -------------------------------------------------- 5. the SSM hierarchy */
+
+/** Level values gathered on the way down, keyed by `levelId`. */
+type LevelPath = ReadonlyMap<string, string>;
+
+/**
+ * The SSM hierarchy itself, widened onto one sheet (audit blocker B5).
+ *
+ * Every other export describes equipment as a flat list. The generated MEL
+ * carries no derived attribute, so a level a site defined for itself had no
+ * column anywhere; level order, the `(unassigned)` buckets and which assets are
+ * roots were all implicit in a tree nobody outside the app could see. This is
+ * the export that hands the tree over.
+ *
+ * One column per configured level, in stack order — derived-attribute levels
+ * included, under the display name the site gave them, because to a reviewer
+ * they are levels like any other. Then the asset's own facts, then a second
+ * sheet stating which of those levels are structural boundaries, since "these
+ * two never nest" is the single most consequential thing the configuration
+ * says and it is invisible in the data columns.
+ *
+ * The tree is walked, not the catalog: an asset's place in the hierarchy is the
+ * thing being exported, and the walk is the only reading of it that cannot
+ * disagree with the compile. An asset the projection did not place therefore
+ * produces no row, and the note says how many.
+ */
+export function exportSsmHierarchy(
+  project: CompiledProject,
+  hierarchy: WireHierarchyConfig,
+  absolutePath: string,
+): WireExportResult {
+  const levels: readonly SsmHierarchyLevelConfig[] = hierarchy.levels.map((level) => ({
+    displayName: level.displayName,
+    attributeKey: level.attributeKey,
+    boundary: level.boundary,
+  }));
+  const columnOf = new Map(hierarchy.levels.map((level, index) => [level.levelId, index]));
+
+  const tagOf = new Map(project.catalog.assets.map((asset) => [asset.assetId, asset.canonicalTag]));
+  const assetOf = new Map(project.catalog.assets.map((asset) => [asset.assetId, asset]));
+  const subjectOf = new Map(project.compileSubjects.map((subject) => [subject.assetId, subject]));
+
+  const rows: SsmHierarchyRow[] = [];
+
+  const emit = (node: HierarchyAssetNode, path: LevelPath): void => {
+    const asset = assetOf.get(node.assetId);
+    const resolution = project.systems.bySubject.get(node.assetId)?.resolution ?? null;
+    const resolved = project.snapshot.nodes.get(node.assetId);
+
+    // Positional, so a level that placed no value still occupies its column.
+    const levelValues: string[] = hierarchy.levels.map(
+      (level) => path.get(level.levelId) ?? '',
+    );
+
+    rows.push({
+      levelValues,
+      canonicalTag: tagOf.get(node.assetId) ?? node.assetId,
+      description: asset?.description ?? '',
+      equipmentType: asset?.equipmentType ?? '',
+      nativeDiscipline: asset?.nativeDiscipline ?? '',
+      ssmDiscipline: subjectOf.get(node.assetId)?.attributes.get('ssmDiscipline') ?? '',
+      systemKey: resolution?.systemKey ?? '',
+      systemLabel: resolution?.systemLabel ?? '',
+      structuralParentTag:
+        node.parentAssetId === null ? '' : (tagOf.get(node.parentAssetId) ?? node.parentAssetId),
+      // Deduplicated and sorted so two exports of one compile read alike; the
+      // engine lists a dependency once per claim that produced it.
+      dependencyTags: [
+        ...new Set(
+          (resolved?.dependencies ?? [])
+            .map((dependency): string => tagOf.get(dependency.parentAssetId) ?? '')
+            .filter((tag) => tag !== ''),
+        ),
+      ].sort(),
+      root: node.parentAssetId === null,
+      // The same values again, joined, so a reader who has collapsed the level
+      // columns can still see where the row sits.
+      levelPath: levelValues.filter((value) => value !== '').join(' › '),
+    });
+
+    for (const child of node.children) {
+      emit(child, path);
+    }
+  };
+
+  const descend = (node: HierarchyLevelNode, path: LevelPath): void => {
+    const next = new Map(path);
+    // The label, not the key: this sheet is read by a person, and the key is on
+    // the Levels sheet under the attribute that produced it.
+    next.set(node.levelId, node.label);
+    for (const child of node.levels) {
+      descend(child, next);
+    }
+    for (const asset of node.assets) {
+      emit(asset, next);
+    }
+  };
+
+  for (const level of project.tree.levels) {
+    descend(level, new Map());
+  }
+  for (const asset of project.tree.assets) {
+    emit(asset, new Map());
+  }
+
+  const rootCount = rows.filter((row) => row.root).length;
+  const boundaryCount = levels.filter((level) => level.boundary).length;
+  const unplaced = project.stats.assetCount - rows.length;
+
+  return write(
+    absolutePath,
+    writeSsmHierarchyWorkbook(rows, levels),
+    `${count(rows.length, 'row', 'rows')} across ` +
+      `${count(levels.length, 'level', 'levels')}, ${String(rootCount)} of them roots. ` +
+      `${count(boundaryCount, 'level is a structural boundary', 'levels are structural boundaries')}.` +
+      (unplaced > 0
+        ? ` ${count(unplaced, 'asset', 'assets')} the projection did not place produced no row.`
+        : ''),
+  );
+}
+
+/* ---------------------------------------------------- 6. revision diff */
 
 export function exportRevisionDiff(
   previous: readonly GeneratedMelAsset[],

@@ -144,6 +144,25 @@ test('the round-3 channels are all declared', () => {
 });
 
 /**
+ * The channels this round added, and what each of them is for.
+ *
+ * Listed by name rather than counted, because the failure this catches is a
+ * channel declared in one place and forgotten in another: the façade, the
+ * handler map and the service method are all derived from this table, so a
+ * channel that is here is reachable and one that is not does not exist.
+ */
+test('the workspace channels this round added are declared', () => {
+  for (const channel of ['export:ssm-hierarchy', 'decision:delete']) {
+    assert.ok(IPC_CHANNEL_NAMES.includes(channel), `"${channel}" is missing from the table`);
+  }
+
+  // A review key is the whole address of a decision, so the dismissal takes one
+  // and nothing else: a kind or an index could name a different decision by the
+  // time it arrived.
+  assert.deepEqual(Object.keys(IPC_CHANNELS['decision:delete'].example.request), ['reviewKey']);
+});
+
+/**
  * Extraction is a channel pair, not a screen-local trick (RELEASE-1.0-PLAN
  * P0-2): the queue lives in main, and the renderer can only ask what it is
  * doing and ask it to stop.

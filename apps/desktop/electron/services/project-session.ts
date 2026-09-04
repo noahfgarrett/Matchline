@@ -34,6 +34,7 @@ import {
   createProject,
   deriveSourceId,
   deserializeLedger,
+  deserializeSnapshot,
   openProject,
   serializeSnapshot,
   type CompileRecord,
@@ -101,6 +102,7 @@ import { draftProfileSchema } from '../../shared/schemas.js';
 import { createAppStateStore, type AppStateStore } from './app-store.js';
 import {
   createCompileView,
+  createRestoredCompileView,
   startCompile,
   type CompileRun,
   type CompileView,
@@ -149,6 +151,7 @@ import {
   exportGeneratedMel,
   exportPredecessors,
   exportRevisionDiff,
+  exportSsmHierarchy,
   exportTemplateMel,
   readExtoTemplate,
   readItemMasterTable,
@@ -450,6 +453,8 @@ export interface ProjectService {
 
   reviewPage(kind: string, offset: number, limit: number): WireReviewPage;
   recordDecision(reviewKey: string, decision: WireDecisionValue, note: string): boolean;
+  /** Forgets a decision the latest compile has no item for. See `removeDecision`. */
+  deleteDecision(reviewKey: string): boolean;
 
   /* -------------------------------------------------- exports and packages */
 
@@ -466,6 +471,8 @@ export interface ProjectService {
   clearExtoTemplate(): WireProjectConfig;
   exportExto(filePath: string): WireExportResult;
   exportPredecessors(filePath: string): WireExportResult;
+  /** The SSM hierarchy widened onto one sheet, a column per level (B5). */
+  exportSsmHierarchy(filePath: string): WireExportResult;
   exportRevisionDiff(filePath: string, previousCompileId: number): WireExportResult;
 
   profileSections(): readonly WireProfileSection[];
@@ -1085,6 +1092,69 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     return parsed.success ? parsed.data : null;
   }
 
+  /**
+   * The last compile this project recorded, or `null` when there is nothing to
+   * show (audit "High — reopening a project discards the compile").
+   *
+   * Every session used to start with `view: null` and `compile: never-run`, so
+   * the workspace button was disabled, every workspace channel threw and every
+   * export refused until a full recompile had run — minutes on a large site,
+   * every morning, to look at a result the project file was already holding.
+   *
+   * Three stored artefacts make the rebuild possible: the resolved snapshot
+   * (each asset's structural parent, its dependencies, its level path and the
+   * review items the fold raised), the register that compile produced, and the
+   * compile row that dates them. What is NOT stored — the electrical
+   * projection, the screen-8 checklist, the property-derived previews — the
+   * restored view refuses by name (see `createRestoredCompileView`).
+   *
+   * Everything here is best-effort by design. A snapshot this build cannot
+   * read, a compile whose register has aged out of the retention window, a
+   * project last compiled before the register carried asset ids: all three mean
+   * the same thing to the person opening the project, which is that they have
+   * to compile. Refusing to OPEN a project over an unreadable copy of an old
+   * compile would be much worse than not restoring it.
+   */
+  function restoreLastCompile(active: Session): WireCompileStatus | null {
+    try {
+      const stored = active.store.getLatestSnapshot(deserializeSnapshot);
+      if (stored === undefined) {
+        return null;
+      }
+      const record = active.store
+        .listCompiles(1)
+        .find((entry) => entry.compileId === stored.compileId);
+      if (record === undefined) {
+        return null;
+      }
+      const assets = storedAssetsOf(active.store.getCompileAssets(stored.compileId));
+      if (assets === null) {
+        return null;
+      }
+      const view = createRestoredCompileView({
+        compileId: stored.compileId,
+        finishedAt: record.finishedAt,
+        snapshot: stored.snapshot,
+        assets,
+        hierarchy: active.draft.hierarchy,
+      });
+      if (view === null) {
+        return null;
+      }
+      active.view = view;
+      return {
+        state: 'restored',
+        compileId: stored.compileId,
+        at: record.finishedAt,
+        assetCount: record.assetCount,
+      };
+    } catch {
+      // See above: an unreadable stored compile is a project that has to be
+      // compiled again, not a project that cannot be opened.
+      return null;
+    }
+  }
+
   function adopt(
     store: ProjectStore,
     projectPath: string,
@@ -1125,6 +1195,12 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       running: null,
       overridesRekeyed: false,
     };
+    // After the session exists, because the rebuild is indexed against the
+    // level stack the draft above settled on.
+    const restored = restoreLastCompile(active);
+    if (restored !== null) {
+      active.compile = restored;
+    }
     return { session: active, mergedLegacyConfig: moved.merged };
   }
 
@@ -1895,6 +1971,12 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       return null;
     }
     const seen = new Map<string, Set<string>>();
+    if (view.project === null) {
+      // A restored view carries the register, not the compile subjects the
+      // attributes were read from. The menu falls back to its examples, which
+      // is what it shows before the first compile.
+      return null;
+    }
     for (const subject of view.project.compileSubjects) {
       for (const [key, value] of subject.attributes) {
         const values = seen.get(key) ?? new Set<string>();
@@ -2234,6 +2316,27 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
   }
 
   /**
+   * The compiled project behind the current view, for the things that need it.
+   *
+   * A view restored on open carries what the project file stores — the
+   * snapshot, the register, the review items — and not the compiled project
+   * itself, so the exports that read the catalog, the flow or the engine's own
+   * generated bytes cannot be served from one. Refused by name rather than
+   * served with an empty catalog: an EXTO sheet with no rows in it is a
+   * statement about the site.
+   */
+  function requireCompiledProject(active: Session, what: string): CompiledProject {
+    const view = requireView(active);
+    if (view.project === null) {
+      throw new Error(
+        `This project is showing the compile it had on file when it was opened, and ${what} ` +
+          'is built from the model rather than stored with it. Run Compile on screen 8 first.',
+      );
+    }
+    return view.project;
+  }
+
+  /**
    * Applies one config patch: to the table and to the live object, together.
    *
    * Both, always. `active.config` is what every compile reads, and the table is
@@ -2282,6 +2385,102 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
    * a thread started only to be told there is no tag property is a thread
    * nobody needed.
    */
+  /**
+   * Whether anything in this draft can put a value on `attributeKey`.
+   *
+   * Four sources, and a boundary only needs one of them: a property mapping
+   * (screen 3, chain or per-source override), a source-assignment rule that
+   * asserts the value for a whole file (P0-8), a derived attribute with at
+   * least one rung (P0-7), or — for the three system keys — a System Resolver
+   * with something on its ladder.
+   *
+   * `ssmDiscipline` is deliberately answered by the native discipline's
+   * mapping: the projection rewrites a discipline, it never mints one, so an
+   * unmapped native discipline means no asset has either.
+   */
+  function attributeIsSupplied(draft: WireDraftProfile, attributeKey: string): boolean {
+    const mapped = (mapping: { chain: readonly unknown[]; bySource: readonly { chain: readonly unknown[] }[] }): boolean =>
+      mapping.chain.length > 0 || mapping.bySource.some((entry) => entry.chain.length > 0);
+
+    const assigned = draft.sourceAssignments.some((rule): boolean => {
+      if (attributeKey === 'building') {
+        return rule.assign.building.trim() !== '';
+      }
+      if (attributeKey === 'nativeDiscipline' || attributeKey === 'ssmDiscipline') {
+        return rule.assign.nativeDiscipline.trim() !== '';
+      }
+      return rule.assign.custom.some(
+        (entry) => entry.key === attributeKey && entry.value.trim() !== '',
+      );
+    });
+    if (assigned) {
+      return true;
+    }
+
+    if (
+      draft.derivedAttributes.some(
+        (definition) =>
+          definition.attributeId === attributeKey && definition.resolverChain.length > 0,
+      )
+    ) {
+      return true;
+    }
+
+    const mappings = draft.propertyMappings;
+    switch (attributeKey) {
+      case 'canonicalTag':
+        return mapped(mappings.equipmentTag);
+      case 'description':
+        return mapped(mappings.description);
+      case 'equipmentType':
+        return mapped(mappings.equipmentType);
+      case 'building':
+        return mapped(mappings.building);
+      case 'nativeDiscipline':
+      case 'ssmDiscipline':
+        return mapped(mappings.nativeDiscipline);
+      case 'systemKey':
+      case 'systemLabel':
+      case 'systemDescription':
+        return hasResolver(draft);
+      default:
+        // A level naming a key nothing publishes — a misspelling, or a derived
+        // attribute that has been deleted. Unsupplied, which is the truth.
+        return false;
+    }
+  }
+
+  /**
+   * Boundary levels whose compared value nothing in this profile can state
+   * (audit blocker B3).
+   *
+   * A boundary compares one attribute across a child and its candidate parent
+   * and refuses to nest when they differ — and `foldBoundaries` treats *absent*
+   * as unknown, so a boundary on an attribute nobody supplies refuses every
+   * nesting in the project. The compile succeeds, the register is complete, and
+   * every asset is a root: the single most expensive way this app can waste an
+   * afternoon, because nothing in the result says why.
+   *
+   * Checked here rather than left to the completeness report, which can only
+   * say it afterwards. What a boundary COMPARES is checked — the key attribute
+   * unless the level names another for the comparison (P0-6) — because that is
+   * the value the fold will look for.
+   */
+  function boundaryLevelsWithoutSource(
+    draft: WireDraftProfile,
+  ): ReadonlyArray<{ readonly displayName: string; readonly attributeKey: string }> {
+    return draft.hierarchy.levels
+      .filter((level) => level.boundary)
+      .filter(
+        (level) =>
+          !attributeIsSupplied(draft, level.boundaryAttributeKey ?? level.attributeKey),
+      )
+      .map((level) => ({
+        displayName: level.displayName,
+        attributeKey: level.boundaryAttributeKey ?? level.attributeKey,
+      }));
+  }
+
   function compileRefusal(active: Session): string | null {
     const changed = changedSourceNames(active);
     if (changed.length > 0) {
@@ -2291,11 +2490,11 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         'recorded. Add the file again on screen 1, or remove the source.'
       );
     }
-    const blocked = unreadableModelSources(active);
-    if (blocked.length > 0) {
+    const unreadable = unreadableModelSources(active);
+    if (unreadable.length > 0) {
       return (
-        `This project compiles from ${String(blocked.length)} model ` +
-        `${blocked.length === 1 ? 'source' : 'sources'} it cannot read: ${blocked.join('; ')}. ` +
+        `This project compiles from ${String(unreadable.length)} model ` +
+        `${unreadable.length === 1 ? 'source' : 'sources'} it cannot read: ${unreadable.join('; ')}. ` +
         'Compiling without them would produce a register missing everything they hold. ' +
         'Add each file again on screen 1, or remove the source.'
       );
@@ -2305,6 +2504,29 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     }
     if (!hasMappings(active.draft)) {
       return 'Pick the property that holds the equipment tag on screen 3 before compiling.';
+    }
+
+    const unsupplied = boundaryLevelsWithoutSource(active.draft);
+    const first = unsupplied[0];
+    if (first !== undefined) {
+      const names = unsupplied.map((level) => `'${level.displayName}'`);
+      return (
+        `${names.join(' and ')} ${names.length === 1 ? 'is a structural boundary' : 'are structural boundaries'}, ` +
+        `and nothing in this profile states ${names.length === 1 ? 'the value it compares' : 'the values they compare'}. ` +
+        'A boundary refuses to nest an asset under a parent whose value differs — and an asset ' +
+        'with no value at all differs from everything, so this compile would make every asset ' +
+        `a root and say nothing about why. Map a property for ${first.attributeKey} on screen 3, ` +
+        'give it a source-assignment rule or a derived attribute, or turn that boundary off on ' +
+        'screen 6.'
+      );
+    }
+
+    // Publishing gates the compile too, and for the same reason it gates a
+    // save: a profile naming a selection set nobody resolved is one the engine
+    // refuses, so the refusal is better read here than as an engine error.
+    const blocked = publishBlockersFor(active)[0];
+    if (blocked !== undefined) {
+      return blocked.message;
     }
     return null;
   }
@@ -2327,6 +2549,68 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     projections: 'Arranging the level tree and writing the generated MEL.',
     review: 'Collecting everything that still needs a decision.',
   };
+
+  /**
+   * The compile the current view belongs to, or `null` when there is no view.
+   *
+   * Read off the status rather than off the view, because it is the status a
+   * failed run has to carry forward: `staleViewFrom` names the compile the
+   * workspace is still showing, and a chain of failures must keep naming the
+   * one good compile rather than forgetting it after the first.
+   */
+  function compiledIdOf(status: WireCompileStatus): number | null {
+    switch (status.state) {
+      case 'done':
+        return status.summary.compileId;
+      case 'restored':
+        return status.compileId;
+      case 'failed':
+        return status.staleViewFrom;
+      case 'never-run':
+      case 'running':
+      case 'cancelled':
+        return null;
+      default: {
+        const exhaustive: never = status;
+        throw new Error(`Unhandled compile status: ${JSON.stringify(exhaustive)}`);
+      }
+    }
+  }
+
+  /**
+   * A compile failure, as a sentence rather than as a clause.
+   *
+   * The engine's two configuration errors are written to be embedded — "selection
+   * set 'Plant' is in no source of this project", "ladder.tiers[2] says 'modelTree',
+   * which is not a ladder rung" — because the package raising them does not know
+   * what the caller is doing. Printed alone they read as fragments and, worse, as
+   * if the compile had crashed. Named here, in the same voice `compileRefusal`
+   * uses, they read as what they are: a decision in the profile that has to
+   * change, and where to change it.
+   *
+   * Matched on the error's `name`, carried across the thread boundary by the
+   * worker, never on the wording — a message this file pattern-matched would go
+   * on "recognising" an error long after the engine had reworded it.
+   */
+  function compileFailureSentence(reason: string, errorName: string): string {
+    switch (errorName) {
+      case 'AssetCatalogConfigError':
+        return (
+          `This profile decides which objects are equipment in a way this project cannot ` +
+          `carry out: ${reason}. Nothing was compiled. Screen 3 is where the asset filters ` +
+          'and the tag mapping are, and screen 1 is where the sources they name are added.'
+        );
+      case 'ProfileConfigError':
+        return (
+          `One of this profile's settings names something Matchline does not have: ${reason}. ` +
+          'Nothing was compiled — a setting that is silently ignored is a rule you think is ' +
+          'running and is not. Screen 6 holds the level stack and the ladder, screen 7 the ' +
+          'relationship rules.'
+        );
+      default:
+        return reason;
+    }
+  }
 
   /** The running status for a stage that has just started. */
   function runningStatus(stage: CompileStage | null): WireCompileStatus {
@@ -2393,33 +2677,40 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       return active.compile;
     }
 
+    /** The compile whose view is on screen, kept if this one fails. */
+    const previousViewFrom = compiledIdOf(active.compile);
+
     const refusal = compileRefusal(active);
     if (refusal !== null) {
-      return { state: 'failed', reason: refusal };
+      return { state: 'failed', reason: refusal, staleViewFrom: previousViewFrom };
     }
 
     const startedAtMs = Date.now();
     const startedAt = new Date(startedAtMs).toISOString();
 
+    /**
+     * The revision this compile may point at, or `null` for a preview.
+     *
+     * `compiles.profile_revision` is a foreign key, so a recorded compile needs
+     * a published revision — and this used to publish one itself whenever the
+     * draft was unsaved. That walked straight past screen 9: no publish
+     * blockers, no boundary confirmation, a revision written by a button that
+     * says Compile. A draft naming an unresolved selection set could be stored
+     * as a revision the engine then refused to compile.
+     *
+     * So a compile publishes nothing. An unpublished draft still compiles,
+     * because seeing the numbers is how a person decides whether the draft is
+     * right — but the run is a preview: no compile row, no snapshot, no ledger,
+     * exactly like a cancelled one, and screen 8 says so. Publishing on screen
+     * 9 is the only thing that turns a draft into a revision.
+     */
+    const profileRevision: number | null = active.savedRevision;
+
     let profile: SiteProfileV2;
-    let profileRevision: number;
     try {
       profile = toSiteProfile(active.draft);
-      profileRevision =
-        active.savedRevision ??
-        // The auto-save publishes the draft, so the draft slot is emptied with
-        // it, exactly as `saveProfile` does — the revision is now the answer.
-        active.store.withTransaction((): number => {
-          const saved = active.store.saveProfile(
-            profile,
-            'Saved automatically so this compile has a revision',
-          );
-          active.store.clearDraft();
-          return saved;
-        });
-      active.savedRevision = profileRevision;
     } catch (error: unknown) {
-      return { state: 'failed', reason: messageOf(error) };
+      return { state: 'failed', reason: messageOf(error), staleViewFrom: previousViewFrom };
     }
 
     let previousLedger: AssetLedger | null;
@@ -2434,6 +2725,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           'manual system, parent and review decision recorded against the old ones, so nothing ' +
           'was run. Open the project with the version of Matchline that wrote it, or restore ' +
           'the backup taken when it was last upgraded.',
+        staleViewFrom: previousViewFrom,
       };
     }
 
@@ -2471,7 +2763,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       melWorkbook = await melInput(active);
     } catch (error: unknown) {
       // A workbook this machine can no longer read. Named rather than skipped.
-      return settle({ state: 'failed', reason: messageOf(error) });
+      return settle({ state: 'failed', reason: messageOf(error), staleViewFrom: previousViewFrom });
     }
 
     if (!stillMine()) {
@@ -2506,7 +2798,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       );
     } catch (error: unknown) {
       // A thread that could not be started at all.
-      return settle({ state: 'failed', reason: messageOf(error) });
+      return settle({ state: 'failed', reason: messageOf(error), staleViewFrom: previousViewFrom });
     }
     marker.run = run;
 
@@ -2526,8 +2818,18 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       return settle({ state: 'cancelled' });
     }
     if (outcome.kind === 'failed') {
-      active.view = null;
-      return settle({ state: 'failed', reason: outcome.reason });
+      // The view is deliberately NOT dropped. A failed recompile used to null
+      // it, which turned one bad run into a workspace with nothing in it: the
+      // tree, the flow, the review queue and every export all started refusing,
+      // and the only way back was a compile that had just failed. What the
+      // person needs is the reason on top of the result they already had, so
+      // the status names the compile the view still belongs to and the
+      // workspace draws the failure above it.
+      return settle({
+        state: 'failed',
+        reason: compileFailureSentence(outcome.reason, outcome.errorName),
+        staleViewFrom: previousViewFrom,
+      });
     }
 
     const project: CompiledProject = outcome.project;
@@ -2541,6 +2843,25 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     const inputHashes: Record<string, string> = {};
     for (const source of active.store.listSources()) {
       inputHashes[source.sourceId] = source.rawSha256;
+    }
+
+    // A compile from a draft nobody has published writes NOTHING (see
+    // `profileRevision` above). It is a preview: the view is adopted so screen
+    // 8 and the workspace can be read, and the project file is left exactly as
+    // it was, which is the same bargain a cancelled compile strikes.
+    if (profileRevision === null) {
+      active.view = view;
+      return settle({
+        state: 'done',
+        unsavedDraft: true,
+        summary: view.summary({
+          compileId: null,
+          profileRevision: null,
+          finishedAt,
+          durationMs: finishedAtMs - startedAtMs,
+          undecidedReviewItemCount: undecidedCount(active, view),
+        }),
+      });
     }
 
     // One transaction for all three, because they are one fact: this compile
@@ -2600,12 +2921,14 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           'workspace still shows the last compile that was. Make sure the file is not open ' +
           'in another program and not on a disc or share you can only read from, then ' +
           'compile again.',
+        staleViewFrom: previousViewFrom,
       });
     }
 
     active.view = view;
     return settle({
       state: 'done',
+      unsavedDraft: false,
       summary: view.summary({
         compileId,
         profileRevision,
@@ -3357,6 +3680,25 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       note: string,
     ): readonly WireOverrideRow[] {
       const active = requireSession();
+      // Both ids are proved against the compile they were read from, before
+      // anything is written. An override is durable and outlives every compile,
+      // so one naming an asset that does not exist is a row nothing will ever
+      // resolve — it produces no claim, no review item and no error, and the
+      // person who dragged it goes on believing the parent was recorded. The
+      // tree is the only place these ids come from, so a miss means the view
+      // moved underneath the drag, and re-reading it is the fix.
+      const view = requireView(active);
+      const unknown = [
+        childAssetId,
+        ...(parentAssetId === null ? [] : [parentAssetId]),
+      ].filter((assetId) => !view.hasAsset(assetId));
+      if (unknown.length > 0) {
+        throw new Error(
+          `${unknown.map((assetId) => view.tagOf(assetId)).join(' and ')} ` +
+            `${unknown.length === 1 ? 'is' : 'are'} not in the compile the workspace is ` +
+            'showing, so nothing was recorded. Recompile on screen 8 and try the move again.',
+        );
+      }
       const override: { childAssetId: string; parentAssetId: string | null; note?: string } = {
         childAssetId,
         parentAssetId,
@@ -3439,10 +3781,17 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       return true;
     },
 
+    deleteDecision(reviewKey: string): boolean {
+      return requireSession().store.removeDecision(reviewKey);
+    },
+
     /* ---------------------------------------------- exports and packages */
 
     exportGeneratedMel(filePath: string): WireExportResult {
-      return exportGeneratedMel(requireView(requireSession()).project, filePath);
+      return exportGeneratedMel(
+        requireCompiledProject(requireSession(), 'the generated MEL'),
+        filePath,
+      );
     },
 
     analyzeTemplate(filePath: string): WireTemplateAnalysis {
@@ -3477,7 +3826,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       const active = requireSession();
       const view = requireView(active);
       return exportExto(
-        view.project,
+        requireCompiledProject(active, 'the EXTO upload sheet'),
         view.assets,
         {
           itemMasterTable: readItemMasterTable(
@@ -3494,7 +3843,23 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     },
 
     exportPredecessors(filePath: string): WireExportResult {
-      return exportPredecessors(requireView(requireSession()).project, filePath);
+      return exportPredecessors(
+        requireCompiledProject(requireSession(), 'the predecessor matrix'),
+        filePath,
+      );
+    },
+
+    exportSsmHierarchy(filePath: string): WireExportResult {
+      const active = requireSession();
+      const view = requireView(active);
+      return exportSsmHierarchy(
+        requireCompiledProject(active, 'the SSM hierarchy export'),
+        // The stack the view was indexed against, not the draft as it stands:
+        // the columns have to be the levels that produced this tree, or a level
+        // added since the compile would print an empty column nobody grouped by.
+        view.hierarchy,
+        filePath,
+      );
     },
 
     exportRevisionDiff(filePath: string, previousCompileId: number): WireExportResult {

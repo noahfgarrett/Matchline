@@ -1,7 +1,7 @@
 import { Worker } from 'node:worker_threads';
 
 import type { CompileStage, CompiledProject } from '@matchline/compiler';
-import type { ResolvedAssetNode, ReviewItem } from '@matchline/domain';
+import type { ResolvedAssetNode, ResolvedSnapshot, ReviewItem } from '@matchline/domain';
 import { reviewItemSummary } from '@matchline/domain';
 import type { LedgerEvent } from '@matchline/asset-identity';
 import {
@@ -11,7 +11,7 @@ import {
   type FlowVisit,
 } from '@matchline/electrical-flow';
 import type { GeneratedMelAsset } from '@matchline/mel-export';
-import { reviewKey } from '@matchline/ssm-compiler';
+import { hierarchyTree, reviewKey } from '@matchline/ssm-compiler';
 import type { HierarchyAssetNode, HierarchyLevelNode } from '@matchline/ssm-compiler';
 
 import type { CompileWorkerMessage, CompileWorkerRequest } from './compile-worker.js';
@@ -49,7 +49,12 @@ export type CompileOutcome =
   | { readonly kind: 'done'; readonly project: CompiledProject }
   /** The worker was terminated. Nothing was written, nothing was kept. */
   | { readonly kind: 'cancelled' }
-  | { readonly kind: 'failed'; readonly reason: string };
+  | {
+      readonly kind: 'failed';
+      readonly reason: string;
+      /** The thrown error's `name`, or `''`. See `CompileWorkerMessage`. */
+      readonly errorName: string;
+    };
 
 /** A compile in flight: something to await, and the one way to stop it. */
 export interface CompileRun {
@@ -129,7 +134,7 @@ export function startCompile(
         reported = { kind: 'done', project: message.project as CompiledProject };
         return;
       case 'failed':
-        reported = { kind: 'failed', reason: message.reason };
+        reported = { kind: 'failed', reason: message.reason, errorName: message.errorName };
         return;
       default: {
         const exhaustive: never = message;
@@ -141,7 +146,7 @@ export function startCompile(
   worker.on('error', (error: Error): void => {
     // A throw the worker could not answer for itself: a module that would not
     // load, an out-of-memory. `exit` still follows.
-    reported = { kind: 'failed', reason: error.message };
+    reported = { kind: 'failed', reason: error.message, errorName: error.name };
   });
 
   worker.on('exit', (code: number): void => {
@@ -155,6 +160,7 @@ export function startCompile(
     }
     finish({
       kind: 'failed',
+      errorName: '',
       reason:
         `The compile stopped without saying why (worker exit code ${String(code)}). ` +
         'Nothing was written to the project.',
@@ -206,6 +212,7 @@ export function generatedMelAssets(project: CompiledProject): readonly Generated
 
     const built: {
       canonicalTag: string;
+      stableAssetId: string;
       description?: string;
       equipmentType?: string;
       building?: string;
@@ -219,6 +226,13 @@ export function generatedMelAssets(project: CompiledProject): readonly Generated
       parentEvidence?: string;
     } = {
       canonicalTag: asset.canonicalTag,
+      // The ledger id, carried rather than printed (see `GeneratedMelAsset`).
+      // Two things need it and neither can work without it: a revision diff
+      // pairs rows by identity instead of by spelling, so a corrected tag
+      // reports as a changed tag rather than as a removal and an addition; and
+      // a reopened project joins these stored rows onto the stored snapshot,
+      // which is keyed by asset id and by nothing else.
+      stableAssetId: asset.assetId,
       modelObjectIds: asset.objectIds,
       inclusionStatus: asset.status,
     };
@@ -355,9 +369,32 @@ function page<TRow>(rows: readonly TRow[], offset: number, limit: number): Page<
  * recompiles rather than patching it.
  */
 export interface CompileView {
-  readonly project: CompiledProject;
+  /**
+   * Which of the two views this is.
+   *
+   * `compiled` is the whole thing: a `CompiledProject` in memory and every
+   * index over it. `restored` is what a reopened project can rebuild from what
+   * it stored — the resolved snapshot, the register that compile produced and
+   * the identity ledger — and nothing else. Everything a restored view cannot
+   * answer says so rather than answering with an empty list, which is why this
+   * discriminant exists at all: a workspace that showed "0 flow nodes" for a
+   * projection nobody stored would be stating a fact about the site.
+   */
+  readonly kind: 'compiled' | 'restored';
+  /** `null` on a restored view: the project itself is not on file. */
+  readonly project: CompiledProject | null;
+  /** The level stack this view is indexed against. */
+  readonly hierarchy: WireHierarchyConfig;
   readonly assets: readonly GeneratedMelAsset[];
   tagOf(assetId: string): string;
+  /**
+   * Whether this compile has an asset with that id.
+   *
+   * The one question a durable write has to be able to ask before it happens:
+   * an override addresses assets by id, outlives every compile, and one naming
+   * an id nothing has resolves to no claim, no review item and no error.
+   */
+  hasAsset(assetId: string): boolean;
   summary(base: CompileSummaryBase): WireCompileSummary;
   treeChildren(nodeKey: string, offset: number, limit: number): Page<WireTreeNode>;
   treeSearch(query: string, limit: number): readonly WireTreeNode[];
@@ -371,8 +408,10 @@ export interface CompileView {
 
 /** The facts about a compile that come from the store, not from the engine. */
 export interface CompileSummaryBase {
-  readonly compileId: number;
-  readonly profileRevision: number;
+  /** `null` for a compile from an unsaved draft: no row was written for it. */
+  readonly compileId: number | null;
+  /** `null` on the same terms: there is no revision for it to point at. */
+  readonly profileRevision: number | null;
   readonly finishedAt: string;
   readonly durationMs: number;
   readonly undecidedReviewItemCount: number;
@@ -772,9 +811,15 @@ export function createCompileView(
   /* -------------------------------------------------------------- the API */
 
   return {
+    kind: 'compiled',
     project,
+    hierarchy,
     assets: generatedMelAssets(project),
     tagOf,
+
+    hasAsset(assetId: string): boolean {
+      return assetById.has(assetId);
+    },
 
     summary(base: CompileSummaryBase): WireCompileSummary {
       const stats = project.stats;
@@ -975,6 +1020,310 @@ export function createCompileView(
       return {
         allowed: true,
         explanation: `${tagOf(childAssetId)} and ${tagOf(parentAssetId)} agree on every boundary, so this nests cleanly.`,
+        boundaryLevelId: '',
+        wouldDemote: false,
+      };
+    },
+  };
+}
+
+/* ================================================ the view a reopen rebuilds */
+
+/** What the project file holds about its last compile, read back on open. */
+export interface RestoredCompileInput {
+  readonly compileId: number;
+  /** When that compile finished, from the compile row. */
+  readonly finishedAt: string;
+  /** The resolved snapshot, exactly as `saveSnapshot` stored it. */
+  readonly snapshot: ResolvedSnapshot;
+  /** The register that compile produced, from `compile_assets`. */
+  readonly assets: readonly GeneratedMelAsset[];
+  /** The level stack the project is configured with now. */
+  readonly hierarchy: WireHierarchyConfig;
+}
+
+/**
+ * The sentence every view a reopened project cannot serve answers with.
+ *
+ * One wording, in one place, because the fix is always the same and a person
+ * meeting three different phrasings of it would reasonably think they were
+ * three different problems.
+ */
+function restoredRefusal(what: string): Error {
+  return new Error(
+    `This project is showing the compile it had on file when it was opened, and ${what} ` +
+      'is not stored with it. Run Compile on screen 8 to rebuild it.',
+  );
+}
+
+/**
+ * The last compile, rebuilt from what the project file actually keeps (audit
+ * "High — reopening a project discards the compile").
+ *
+ * `adopt()` used to start every session with no view at all, so the workspace
+ * button, every workspace channel and every export threw until a full recompile
+ * had run — multi-minute on a large site, every morning, to look at something
+ * the project had already computed and written down.
+ *
+ * ## What can be rebuilt, and what cannot
+ *
+ * Three things are on file: the resolved snapshot (every asset's structural
+ * parent, its dependencies and the review items the fold raised), the register
+ * that compile produced, and the identity ledger. So the hierarchy of assets,
+ * the tag search, the review queue and the register-shaped exports come back
+ * whole.
+ *
+ * Nothing else does. The electrical projection, the property-derived previews,
+ * the per-level grouping and the screen-8 checklist are all computed from the
+ * model caches during a compile and none of them is written to the project
+ * file. This view therefore refuses them by name rather than answering with an
+ * empty list — "no flow nodes" is a statement about the site, and this view is
+ * in no position to make one.
+ *
+ * ## Why there are no level rows
+ *
+ * A level node groups assets by an attribute value that only exists inside a
+ * compile. The tree here is the asset nesting alone, which is the half the
+ * snapshot recorded; the workspace says which compile it is showing and that a
+ * recompile refreshes it, so the missing grouping is visible rather than
+ * silently different.
+ *
+ * @returns `null` when the stored rows cannot be joined to the stored snapshot
+ * — a compile recorded before the register carried `stableAssetId`. The caller
+ * treats that exactly as "nothing has been compiled yet", which is what the
+ * project did for every compile before this existed.
+ */
+export function createRestoredCompileView(input: RestoredCompileInput): CompileView | null {
+  const assetById = new Map<string, GeneratedMelAsset>();
+  for (const asset of input.assets) {
+    if (asset.stableAssetId !== undefined) {
+      assetById.set(asset.stableAssetId, asset);
+    }
+  }
+  if (assetById.size === 0) {
+    return null;
+  }
+
+  const tagOf = (assetId: string): string => assetById.get(assetId)?.canonicalTag ?? assetId;
+
+  const flagsByAsset = new Map<string, number>();
+  for (const item of input.snapshot.reviewItems) {
+    for (const assetId of assetIdsOf(item)) {
+      flagsByAsset.set(assetId, (flagsByAsset.get(assetId) ?? 0) + 1);
+    }
+  }
+
+  /**
+   * The projected level tree, rebuilt by the engine that built it the first
+   * time.
+   *
+   * `hierarchyTree` groups by each asset's `levelPath`, which the snapshot
+   * records per node — so the grouping this returns is the grouping that
+   * compile produced, not an approximation of it. Its `subjects` argument is
+   * read for the asset universe and its ordering and for nothing else (see
+   * `tree.ts`), which is why an attribute-free subject per stored node is a
+   * complete input here and would not be anywhere else.
+   */
+  const tree = hierarchyTree(
+    input.snapshot,
+    {
+      // Rebuilt field by field rather than passed through: the wire shape
+      // spells an unset display or boundary attribute as an absent key, and
+      // under `exactOptionalPropertyTypes` an explicit `undefined` is not the
+      // same thing as the engine's optional.
+      levels: input.hierarchy.levels.map((level) => {
+        const built: {
+          levelId: string;
+          displayName: string;
+          attributeKey: string;
+          displayAttributeKey?: string;
+          boundaryAttributeKey?: string;
+          boundary: boolean;
+          missingValuePolicy: (typeof level)['missingValuePolicy'];
+          sort: (typeof level)['sort'];
+        } = {
+          levelId: level.levelId,
+          displayName: level.displayName,
+          attributeKey: level.attributeKey,
+          boundary: level.boundary,
+          missingValuePolicy: level.missingValuePolicy,
+          sort: level.sort,
+        };
+        if (level.displayAttributeKey !== undefined) {
+          built.displayAttributeKey = level.displayAttributeKey;
+        }
+        if (level.boundaryAttributeKey !== undefined) {
+          built.boundaryAttributeKey = level.boundaryAttributeKey;
+        }
+        return built;
+      }),
+    },
+    [...input.snapshot.nodes.keys()].map((assetId) => ({
+      assetId,
+      attributes: new Map<string, string>(),
+    })),
+  );
+
+  const levelName = new Map(input.hierarchy.levels.map((level) => [level.levelId, level.displayName]));
+  const buckets = new Map<string, readonly WireTreeNode[]>();
+
+  const assetRow = (node: HierarchyAssetNode): WireTreeNode => {
+    const resolved = input.snapshot.nodes.get(node.assetId);
+    return {
+      nodeKey: `asset:${node.assetId}`,
+      kind: 'asset',
+      label: tagOf(node.assetId),
+      detail: assetById.get(node.assetId)?.description ?? '',
+      childCount: node.children.length,
+      assetId: node.assetId,
+      dependencyCount: node.dependencies.length,
+      reviewFlagCount: flagsByAsset.get(node.assetId) ?? 0,
+      parentStatus: node.status,
+      overridden: resolved?.parent.ladderSource === 'manual',
+      demoted: resolved?.parent.demotedFrom !== undefined,
+    };
+  };
+
+  const indexAsset = (node: HierarchyAssetNode): void => {
+    buckets.set(`asset:${node.assetId}`, node.children.map(assetRow));
+    for (const child of node.children) {
+      indexAsset(child);
+    }
+  };
+
+  const indexLevel = (
+    node: HierarchyLevelNode,
+    parentPath: ReadonlyArray<readonly [string, string]>,
+  ): WireTreeNode => {
+    const path: ReadonlyArray<readonly [string, string]> = [
+      ...parentPath,
+      [node.levelId, node.key] as const,
+    ];
+    const key = `level:${JSON.stringify(path)}`;
+    const rows = [
+      ...node.levels.map((child): WireTreeNode => indexLevel(child, path)),
+      ...node.assets.map(assetRow),
+    ];
+    for (const asset of node.assets) {
+      indexAsset(asset);
+    }
+    buckets.set(key, rows);
+
+    let flags = 0;
+    for (const row of rows) {
+      flags += row.reviewFlagCount;
+    }
+    return {
+      nodeKey: key,
+      kind: 'level',
+      label: node.label,
+      detail: levelName.get(node.levelId) ?? node.levelId,
+      childCount: rows.length,
+      assetId: '',
+      dependencyCount: 0,
+      reviewFlagCount: flags,
+      parentStatus: '',
+      overridden: false,
+      demoted: false,
+    };
+  };
+
+  buckets.set('', [
+    ...tree.levels.map((level): WireTreeNode => indexLevel(level, [])),
+    ...tree.assets.map(assetRow),
+  ]);
+  for (const asset of tree.assets) {
+    indexAsset(asset);
+  }
+
+  const allAssetRows: WireTreeNode[] = [];
+  for (const rows of buckets.values()) {
+    for (const row of rows) {
+      if (row.kind === 'asset') {
+        allAssetRows.push(row);
+      }
+    }
+  }
+  allAssetRows.sort((left, right) => (left.label < right.label ? -1 : left.label > right.label ? 1 : 0));
+
+  const reviewRows: WireReviewRow[] = input.snapshot.reviewItems.map((item): WireReviewRow => ({
+    reviewKey: storableReviewKey(item),
+    kind: item.kind,
+    summary: reviewItemSummary(item),
+    detail: assetIdsOf(item)
+      .map(tagOf)
+      .filter((tag) => tag !== '')
+      .join(', '),
+    decision: null,
+    decidedAt: '',
+    note: '',
+  }));
+
+  return {
+    kind: 'restored',
+    project: null,
+    hierarchy: input.hierarchy,
+    assets: input.assets,
+    tagOf,
+
+    hasAsset(assetId: string): boolean {
+      return input.snapshot.nodes.has(assetId);
+    },
+
+    summary(): WireCompileSummary {
+      // Never reached: a restored view is reported as `restored`, never as
+      // `done`, so no screen ever has a summary to draw from it.
+      throw restoredRefusal('the compile checklist');
+    },
+
+    treeChildren(nodeKey: string, offset: number, limit: number): Page<WireTreeNode> {
+      return page(buckets.get(nodeKey) ?? [], offset, limit);
+    },
+
+    treeSearch(query: string, limit: number): readonly WireTreeNode[] {
+      const needle = query.trim().toLowerCase();
+      if (needle === '') {
+        return [];
+      }
+      const hits: WireTreeNode[] = [];
+      for (const row of allAssetRows) {
+        if (row.label.toLowerCase().includes(needle)) {
+          hits.push(row);
+          if (hits.length === limit) {
+            break;
+          }
+        }
+      }
+      return hits;
+    },
+
+    issues(): Page<WireCompileIssueRow> {
+      throw restoredRefusal('the screen-8 checklist');
+    },
+
+    ledgerEvents(): Page<WireLedgerEvent> {
+      throw restoredRefusal('the identity log for that compile');
+    },
+
+    flowRoots(): Page<WireFlowRoot> {
+      throw restoredRefusal('the electrical projection');
+    },
+
+    flowWalk(): Page<WireFlowNode> {
+      throw restoredRefusal('the electrical projection');
+    },
+
+    reviewRows(): readonly WireReviewRow[] {
+      return reviewRows;
+    },
+
+    reparentPreview(): WireReparentPreview {
+      return {
+        allowed: false,
+        explanation:
+          'Matchline cannot say what this move would do without the compile behind it: the ' +
+          'boundary values it would compare are read from the model, and this project is ' +
+          'showing the compile it had on file when it was opened. Run Compile on screen 8 first.',
         boundaryLevelId: '',
         wouldDemote: false,
       };

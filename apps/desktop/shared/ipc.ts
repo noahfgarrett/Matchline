@@ -1193,7 +1193,9 @@ export const IPC_CHANNELS = {
     response: z.object({ status: compileStatusSchema }),
     example: {
       request: undefined,
-      response: { status: { state: 'done', summary: EXAMPLE_COMPILE_SUMMARY } },
+      response: {
+        status: { state: 'done', summary: EXAMPLE_COMPILE_SUMMARY, unsavedDraft: false },
+      },
     },
   },
 
@@ -1508,6 +1510,25 @@ export const IPC_CHANNELS = {
     },
   },
 
+  /**
+   * Forgets a decision whose review key no longer names anything (P0-9).
+   *
+   * The queue's other half. A decision is otherwise append-only — deciding
+   * again records a second answer and keeps the first — and this is the single
+   * exception, offered only on the stale list, where the item the decision
+   * answered is gone and no compile can apply it again. `removed: false` means
+   * the key was already forgotten, which is not an error: two windows onto one
+   * project can both offer the same dismissal.
+   */
+  'decision:delete': {
+    request: z.object({ reviewKey: z.string().min(1) }),
+    response: z.object({ removed: z.boolean() }),
+    example: {
+      request: { reviewKey: 'system-conflict␟tag:MAH001-10-01␟string:001,string:002' },
+      response: { removed: true },
+    },
+  },
+
   /* ------------------------------------------------- workspace: exports */
 
   'export:generated-mel': {
@@ -1620,6 +1641,32 @@ export const IPC_CHANNELS = {
           path: '/Users/dragon/Dragon-EXTO.xlsx',
           byteSize: 12288,
           note: '34 rows on the Rev21 upload sheet. No P6 schedule, so the milestone column is blank.',
+        },
+      },
+    },
+  },
+
+  /**
+   * The SSM hierarchy, widened onto one sheet (audit blocker B5).
+   *
+   * Every export before this one described equipment as a flat list: the
+   * generated MEL carries no derived attribute, so a level a site added had no
+   * column anywhere, and level order, the `(unassigned)` buckets and which
+   * assets are roots were all implicit. This is the one export that hands over
+   * the tree itself — a column per configured level, in stack order, plus a
+   * second sheet saying which of those levels are structural boundaries.
+   */
+  'export:ssm-hierarchy': {
+    request: z.object({ path: z.string().min(1) }),
+    response: z.object({ result: exportResultSchema }),
+    example: {
+      request: { path: '/Users/dragon/Dragon-SSM-Hierarchy.xlsx' },
+      response: {
+        result: {
+          written: true,
+          path: '/Users/dragon/Dragon-SSM-Hierarchy.xlsx',
+          byteSize: 9216,
+          note: '34 rows across 2 levels, 12 of them roots. 1 level is a structural boundary.',
         },
       },
     },

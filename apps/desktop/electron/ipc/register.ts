@@ -61,12 +61,31 @@ function failure(code: IpcErrorCode, message: string): IpcFailure {
   return { ok: false, error: { code, message } };
 }
 
+/** Options for {@link registerIpc}. */
+export interface RegisterIpcOptions {
+  /**
+   * Channels to leave unregistered.
+   *
+   * The handler map stays total — every channel in the table still has to have
+   * a handler written for it, which is the guarantee that makes the table the
+   * whole contract — and this decides which of them are actually reachable in
+   * this build. It exists for `dev:ping`, an echo channel that has no business
+   * answering in a shipped app; an omitted channel has no `ipcMain.handle`
+   * registration at all, so an invoke of it rejects rather than being served.
+   */
+  readonly omit?: ReadonlySet<IpcChannelName>;
+}
+
 export function registerIpc(
   ipcMain: IpcMainLike,
   handlers: IpcHandlerMap,
   isTrustedSender: IpcSenderCheck,
+  options: RegisterIpcOptions = {},
 ): void {
   for (const channel of IPC_CHANNEL_NAMES) {
+    if (options.omit?.has(channel) === true) {
+      continue;
+    }
     const declaration = IPC_CHANNELS[channel];
     // The table and the handler map are keyed by the same union, so this pairing is
     // guaranteed by construction; only the dynamic lookup hides that from the compiler.

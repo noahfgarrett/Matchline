@@ -167,6 +167,10 @@ async function configure(service, projectPath) {
     assetFilters: ASSET_FILTERS,
     systemResolver: DRAGON_RESOLVER,
   });
+  // A compile records nothing unless the profile it ran is a published
+  // revision, and every ledger assertion here is about what a recorded compile
+  // wrote down.
+  service.saveProfile('screens 1-5');
 }
 
 test('the ledger is written, reloaded and honoured across a tag correction', async (t) => {
@@ -313,11 +317,21 @@ test('a decision naming equipment no compile has becomes a review item, not a si
   await configure(service, projectPath);
   summaryOf(await service.compile());
 
-  service.setRelationshipOverride(
+  // Written straight into the file rather than through the service, because
+  // the service now refuses an override naming an asset the current compile
+  // does not have -- a durable row nothing will ever resolve is exactly what
+  // that guard exists to stop somebody creating by accident. What this test is
+  // about is the OTHER way such a row appears: one that resolved when it was
+  // written and stopped resolving when the model changed. A row already in the
+  // file is what that looks like from here.
+  service.close();
+  writeRelationshipOverride(
+    projectPath,
     'tag:GHOST999-99-99',
     `tag:${PARENT_TAG}`,
     'Walked down with the mechanical lead.',
   );
+  await service.open(projectPath, false);
 
   const summary = summaryOf(await service.compile());
   assert.equal(summary.orphanedDecisionCount, 1);

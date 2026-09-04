@@ -24,6 +24,7 @@ import {
   registerIpc,
   type IpcHandlerMap,
 } from './ipc/register.js';
+import type { IpcChannelName } from '../shared/ipc.js';
 import { registerAppScheme, serveRendererFrom } from './security/app-protocol.js';
 import { APP_ORIGIN, buildCsp } from './security/csp.js';
 import { createPathGrants, type PathGrants } from './security/path-grants.js';
@@ -48,6 +49,17 @@ const OWN_ORIGIN = originOf(rendererOrigin);
 let mainWindow: BrowserWindow | null = null;
 let projectService: ProjectService | null = null;
 const pathGrants: PathGrants = createPathGrants();
+
+/**
+ * Channels that exist for development and are not registered in a shipped app.
+ *
+ * `dev:ping` is an echo: it exists so the transport can be exercised end to end,
+ * it reads and writes nothing, and there is no reason for a packaged Matchline
+ * to answer it. The handler is still written and still type-checked — the
+ * channel table is the whole contract and a channel without a handler would not
+ * compile — it is simply not reachable outside a dev run.
+ */
+const DEV_ONLY_CHANNELS: ReadonlySet<IpcChannelName> = new Set<IpcChannelName>(['dev:ping']);
 
 /**
  * Built after `app.whenReady()` because the project service needs the
@@ -296,7 +308,12 @@ if (!app.requestSingleInstanceLock()) {
         userDataDir: app.getPath('userData'),
         appVersion: app.getVersion(),
       });
-      registerIpc(ipcMain, buildHandlers(projectService), createSenderCheck([rendererOrigin]));
+      registerIpc(ipcMain, buildHandlers(projectService), createSenderCheck([rendererOrigin]), {
+        // Dev is the one place the echo channel is reachable. `devServerUrl`
+        // rather than `app.isPackaged`, so an unpackaged run against the built
+        // bundle behaves like the shipped app it is standing in for.
+        ...(devServerUrl === undefined ? { omit: DEV_ONLY_CHANNELS } : {}),
+      });
       await createMainWindow();
 
       app.on('activate', (): void => {

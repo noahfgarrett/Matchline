@@ -478,6 +478,21 @@ export interface ProjectStore {
   listDecisions(): readonly ReviewDecision[];
   /** The newest decision for one review key, or `undefined`. */
   decisionFor(reviewKey: string): ReviewDecision | undefined;
+  /**
+   * Removes every decision recorded under one review key. `true` when there was
+   * one to remove.
+   *
+   * The one deliberate exception to "decisions are appended, never replaced".
+   * A review key is content-addressed, so a decision whose key no longer names
+   * anything in the latest compile answers a question that is no longer asked —
+   * it cannot be applied, cannot be re-decided, and would otherwise sit in the
+   * queue for the life of the project. Dismissing one is a person saying "that
+   * question is gone"; keeping a tombstone of it would be keeping the noise
+   * this removes. Every decision the current compile can still apply is
+   * unreachable from here, because the queue only offers this on the stale
+   * list.
+   */
+  removeDecision(reviewKey: string): boolean;
 
   /** Releases the SQLite handle. Safe to call more than once. */
   close(): void;
@@ -1830,6 +1845,16 @@ class SqliteProjectStore implements ProjectStore {
       )
       .get(key);
     return row === undefined ? undefined : this.#readDecision(row);
+  }
+
+  removeDecision(reviewKey: string): boolean {
+    const key = requireFilledArgument(reviewKey, 'reviewKey');
+    return this.#mutate((): boolean => {
+      const { changes } = this.#open()
+        .prepare('DELETE FROM decisions WHERE review_key = ?')
+        .run(key);
+      return Number(changes) > 0;
+    });
   }
 
   #readDecision(row: SqlRow): ReviewDecision {

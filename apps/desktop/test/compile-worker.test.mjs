@@ -137,6 +137,9 @@ async function openProject(name, sourcePath = cachePath) {
       ],
     },
   });
+  // Published, so a compile here is recorded rather than previewed: a compile
+  // no longer publishes a revision for itself.
+  service.saveProfile('scale fixture');
   return service;
 }
 

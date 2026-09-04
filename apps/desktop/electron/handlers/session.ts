@@ -68,6 +68,7 @@ export type SessionChannel = Extract<
   | 'flow:walk'
   | 'review:page'
   | 'review:decide'
+  | 'decision:delete'
   | 'export:generated-mel'
   | 'export:template-analyze'
   | 'export:template-mel'
@@ -75,6 +76,7 @@ export type SessionChannel = Extract<
   | 'export:exto-template-clear'
   | 'export:exto'
   | 'export:predecessors'
+  | 'export:ssm-hierarchy'
   | 'export:revision-diff'
   | 'profile:sections'
   | 'profile:export'
@@ -481,6 +483,12 @@ export function createSessionHandlers(
       };
     },
 
+    async 'decision:delete'(
+      request: IpcRequest<'decision:delete'>,
+    ): Promise<IpcResponse<'decision:delete'>> {
+      return { removed: guard(() => service.deleteDecision(request.reviewKey)) };
+    },
+
     /* ------------------------------------------------- exports and packages */
 
     async 'export:generated-mel'(
@@ -525,6 +533,12 @@ export function createSessionHandlers(
       request: IpcRequest<'export:predecessors'>,
     ): Promise<IpcResponse<'export:predecessors'>> {
       return { result: guard(() => service.exportPredecessors(requireGranted(request.path))) };
+    },
+
+    async 'export:ssm-hierarchy'(
+      request: IpcRequest<'export:ssm-hierarchy'>,
+    ): Promise<IpcResponse<'export:ssm-hierarchy'>> {
+      return { result: guard(() => service.exportSsmHierarchy(requireGranted(request.path))) };
     },
 
     async 'export:revision-diff'(

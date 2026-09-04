@@ -730,7 +730,7 @@ test('a compile that cannot be written settles as failed and leaves the session 
 
 /* ------------------------------------------ the recorded revision is the real one */
 
-test('a compile records the revision it compiled, not the last one saved', async () => {
+test('a compile records the revision it compiled, and previews an unpublished draft', async () => {
   const ownProjectPath = join(workDir, 'Revisions.matchline');
   const service = newService();
   try {
@@ -756,9 +756,33 @@ test('a compile records the revision it compiled, not the last one saved', async
       'the stored revision is no longer what is in memory',
     );
 
+    // A compile no longer publishes a revision for itself. It used to, which
+    // made Compile the one way into the store that skipped screen 9's publish
+    // blockers and its boundary confirmation. So an edited draft compiles as a
+    // PREVIEW: the numbers are real and the workspace opens on them, and
+    // nothing is written down.
+    const preview = await service.compile();
+    assert.equal(preview.state, 'done');
+    assert.equal(preview.unsavedDraft, true, 'and it says so');
+    assert.equal(preview.summary.profileRevision, null, 'there is no revision to point at');
+    assert.equal(preview.summary.compileId, null, 'and no compile row was written');
+    assert.equal(
+      service.draftState().savedRevision,
+      null,
+      'the draft is still unpublished afterwards',
+    );
+    assert.deepEqual(
+      service.compileHistory().map((entry) => entry.profileRevision),
+      [1],
+      'the preview left the history alone',
+    );
+
+    // Publishing is what makes the next one a compile the project keeps.
+    assert.equal(service.saveProfile('the -SPARE suffix').revision, 2);
     const second = await service.compile();
     assert.equal(second.state, 'done');
-    assert.equal(second.summary.profileRevision, 2, 'the edit was saved as its own revision');
+    assert.equal(second.unsavedDraft, false);
+    assert.equal(second.summary.profileRevision, 2, 'the edit compiles as its own revision');
     assert.equal(service.draftState().savedRevision, 2);
 
     const history = service.compileHistory();

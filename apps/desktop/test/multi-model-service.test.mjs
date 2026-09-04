@@ -152,6 +152,9 @@ function teachDragon(service) {
   });
   service.updateDraft({ tagAnatomy: DRAGON_ANATOMY });
   service.updateDraft({ systemResolver: DRAGON_RESOLVER });
+  // Published, so the compiles below are recorded rather than previews: a
+  // compile does not publish for itself any more.
+  service.saveProfile('Dragon');
 }
 
 /** Creates a project, registers `paths`, and teaches it Dragon. */

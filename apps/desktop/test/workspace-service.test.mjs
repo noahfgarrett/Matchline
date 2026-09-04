@@ -340,6 +340,12 @@ async function configureThroughScreen7(service) {
     roleGraph: { rules: [{ parentRole: 'PNL', childRole: 'RIO' }] },
     ssmDisciplineProjection: [{ from: 'I&C', to: 'Electrical' }],
   });
+  // Published before compiling, because a compile no longer publishes for
+  // itself: a draft nobody has put through screen 9's gates compiles as a
+  // preview and records nothing. Every assertion below is about a RECORDED
+  // compile -- its id, its stored register, its snapshot -- so the profile has
+  // to be a revision first.
+  service.saveProfile('screens 1-7');
 }
 
 /* ========================================================== the flow ==== */
@@ -1691,4 +1697,312 @@ test('a connectivity source whose file has gone is named, not skipped', async ()
   } finally {
     service.close();
   }
+});
+
+/* ================================ what a reopened project already knows ==== */
+
+/**
+ * Reopening used to throw the compile away.
+ *
+ * `adopt()` started every session with no view, so the workspace button was
+ * disabled and every workspace channel and every export threw until a full
+ * recompile had run — minutes on a real site, every morning, to look at a
+ * result the project file was already holding. What it holds is the resolved
+ * snapshot, the register that compile produced and the compile row that dates
+ * them, and between them the hierarchy, the tag search and the review queue
+ * come back whole.
+ */
+test('a reopened project answers the tree from the compile it had on file', async (t) => {
+  const path = join(workDir, 'Reopen.matchline');
+  rmSync(path, { force: true });
+
+  const first = newService();
+  first.create(path, 'Reopen');
+  await first.addSources([cachePath, melPath, easyPowerPath]);
+  first.updateDraft({
+    propertyMappings: PROPERTY_MAPPINGS,
+    assetFilters: ASSET_FILTERS,
+    tagAnatomy: DRAGON_ANATOMY,
+    systemResolver: DRAGON_RESOLVER,
+    hierarchy: FULL_PROFILE_PATCH.hierarchy,
+  });
+  first.saveProfile('ready');
+  const compiled = await first.compile();
+  assert.equal(compiled.state, 'done', compiled.state === 'failed' ? compiled.reason : '');
+  const compileId = compiled.summary.compileId;
+  const compiledRoots = first.treeChildren('', 0, 200);
+  first.close();
+
+  const second = newService();
+  t.after(() => {
+    second.close();
+  });
+  const opened = await second.open(path, false);
+  assert.equal(opened.outcome, 'opened');
+
+  const status = second.compileStatus();
+  assert.equal(status.state, 'restored', 'the last compile is what the session opens on');
+  assert.equal(status.compileId, compileId);
+  assert.equal(status.assetCount, DRAGON_ASSET_COUNT);
+
+  // The whole point: the workspace channel answers, with no compile in between.
+  const roots = second.treeChildren('', 0, 200);
+  assert.equal(roots.total, compiledRoots.total, 'the same top level, rebuilt from the snapshot');
+  assert.deepEqual(
+    roots.rows.map((row) => row.label),
+    compiledRoots.rows.map((row) => row.label),
+    'and the same rows, in the same order',
+  );
+
+  const hits = second.treeSearch('MAH001', 10);
+  assert.ok(hits.length > 0, 'the tag search answers too');
+  assert.ok(hits.every((row) => row.label.includes('MAH001')));
+
+  // A view rebuilt from storage says so rather than answering with an empty
+  // list, because "no flow nodes" is a statement about the site.
+  assert.throws(() => second.flowRoots(0, 10), /Run Compile on screen 8/);
+  assert.throws(() => second.exportPredecessors(join(workDir, 'nope.xlsx')), /Run Compile/);
+
+  // And a compile from here records normally again.
+  const again = await second.compile();
+  assert.equal(again.state, 'done', again.state === 'failed' ? again.reason : '');
+  assert.equal(again.summary.compileId, compileId + 1);
+});
+
+/* ================================================== the hierarchy export ==== */
+
+test('the SSM hierarchy export writes a column per configured level', async (t) => {
+  const path = join(workDir, 'Hierarchy.matchline');
+  rmSync(path, { force: true });
+  const service = newService();
+  t.after(() => {
+    service.close();
+  });
+
+  service.create(path, 'Hierarchy');
+  await service.addSources([cachePath, melPath, easyPowerPath]);
+  service.updateDraft({
+    propertyMappings: PROPERTY_MAPPINGS,
+    assetFilters: ASSET_FILTERS,
+    tagAnatomy: DRAGON_ANATOMY,
+    systemResolver: DRAGON_RESOLVER,
+    hierarchy: FULL_PROFILE_PATCH.hierarchy,
+  });
+  service.saveProfile('with levels');
+  const status = await service.compile();
+  assert.equal(status.state, 'done', status.state === 'failed' ? status.reason : '');
+
+  const out = join(workDir, 'Dragon-SSM-Hierarchy.xlsx');
+  const result = service.exportSsmHierarchy(out);
+  assert.equal(result.written, true);
+  assert.match(result.note, /2 levels/);
+  assert.match(result.note, /1 level is a structural boundary/);
+
+  const workbook = readWorkbook(readFileSync(out));
+  assert.deepEqual(workbook.sheetNames, ['SSM Hierarchy', 'Levels']);
+
+  const { aoa } = sheetAoa(workbook.getSheet('SSM Hierarchy'));
+  assert.deepEqual(
+    aoa[0],
+    [
+      'System',
+      'Building',
+      'Tag',
+      'Description',
+      'Type',
+      'Native Discipline',
+      'SSM Discipline',
+      'System Key',
+      'System Label',
+      'Structural Parent Tag',
+      'Dependencies',
+      'Root',
+      'Level Path',
+    ],
+    'the configured levels come first, in stack order, then the fixed columns',
+  );
+  assert.equal(aoa.length - 1, DRAGON_ASSET_COUNT, 'one row per placed asset');
+
+  const tagColumn = 2;
+  const mah = aoa.find((row) => row[tagColumn] === 'MAH001-10-01');
+  assert.ok(mah !== undefined, 'the register is addressed by the site’s own tags');
+  assert.equal(mah[0], '001', 'a leading-zero system key survives as text');
+  assert.ok(mah[11] === 'yes' || mah[11] === 'no', 'Root reads yes or no');
+  assert.equal(mah[12], `${mah[0]} › ${mah[1]}`, 'and the level path is those values, joined');
+
+  const levels = sheetAoa(workbook.getSheet('Levels')).aoa;
+  assert.deepEqual(levels, [
+    ['Level', 'Attribute Key', 'Structural Boundary'],
+    ['System', 'systemKey', 'yes'],
+    ['Building', 'building', 'no'],
+  ]);
+});
+
+/* ========================= a boundary nothing states, and a failed recompile */
+
+/**
+ * The compile that succeeds and describes nothing (audit blocker B3).
+ *
+ * A boundary compares one attribute across a child and a candidate parent and
+ * refuses to nest when they differ — and an absent value differs from
+ * everything. A boundary on an attribute no mapping, rule or derived attribute
+ * supplies therefore refuses every nesting on the site, and before this the
+ * compile reported success and said nothing at all about why the tree was flat.
+ */
+test('a boundary level nothing can state refuses the compile by name', async (t) => {
+  const path = join(workDir, 'UnstatedBoundary.matchline');
+  rmSync(path, { force: true });
+  const service = newService();
+  t.after(() => {
+    service.close();
+  });
+
+  service.create(path, 'Unstated');
+  await service.addSources([cachePath]);
+  service.updateDraft({
+    propertyMappings: { ...PROPERTY_MAPPINGS, building: null },
+    assetFilters: ASSET_FILTERS,
+    tagAnatomy: DRAGON_ANATOMY,
+    systemResolver: DRAGON_RESOLVER,
+    hierarchy: {
+      levels: [
+        {
+          levelId: 'building',
+          displayName: 'Building',
+          attributeKey: 'building',
+          boundary: true,
+          missingValuePolicy: 'unassigned-group',
+          sort: 'label',
+        },
+      ],
+    },
+  });
+
+  const refused = await service.compile();
+  assert.equal(refused.state, 'failed');
+  assert.match(refused.reason, /'Building'/, 'the level is named');
+  assert.match(refused.reason, /screen 3/, 'and so is where to fix it');
+  assert.match(refused.reason, /screen 6/);
+
+  // Mapping the property is one of the two fixes the refusal offers.
+  service.updateDraft({ propertyMappings: PROPERTY_MAPPINGS });
+  const status = await service.compile();
+  assert.equal(status.state, 'done', status.state === 'failed' ? status.reason : '');
+  assert.equal(status.unsavedDraft, true, 'and it ran as a preview, because nothing was published');
+});
+
+test('a failed recompile keeps the workspace on the last compile that finished', async (t) => {
+  const path = join(workDir, 'StaleView.matchline');
+  rmSync(path, { force: true });
+  const service = newService();
+  t.after(() => {
+    service.close();
+  });
+
+  service.create(path, 'Stale view');
+  const [added] = await service.addSources([cachePath]);
+  service.updateDraft({
+    propertyMappings: PROPERTY_MAPPINGS,
+    assetFilters: ASSET_FILTERS,
+    tagAnatomy: DRAGON_ANATOMY,
+    systemResolver: DRAGON_RESOLVER,
+  });
+  service.saveProfile('ready');
+  const good = await service.compile();
+  assert.equal(good.state, 'done', good.state === 'failed' ? good.reason : '');
+  const before = service.treeChildren('', 0, 200);
+
+  // Removing the model is the cheapest honest way to make the next compile
+  // refuse: there is nothing left to match anything against.
+  assert.equal(service.removeSource(added.source.sourceId), true);
+  const failed = await service.compile();
+  assert.equal(failed.state, 'failed');
+  assert.equal(
+    failed.staleViewFrom,
+    good.summary.compileId,
+    'the failure names the compile still on screen',
+  );
+
+  const after = service.treeChildren('', 0, 200);
+  assert.deepEqual(
+    after.rows.map((row) => row.label),
+    before.rows.map((row) => row.label),
+    'and that compile is still answering — a bad run does not empty the workspace',
+  );
+});
+
+/* ================================================ decisions and overrides ==== */
+
+test('a decision the compile has no item for can be dismissed', async (t) => {
+  const path = join(workDir, 'Stale.matchline');
+  rmSync(path, { force: true });
+  const service = newService();
+  t.after(() => {
+    service.close();
+  });
+
+  service.create(path, 'Stale decisions');
+  await service.addSources([cachePath]);
+  service.updateDraft({
+    propertyMappings: PROPERTY_MAPPINGS,
+    assetFilters: ASSET_FILTERS,
+    tagAnatomy: DRAGON_ANATOMY,
+    systemResolver: DRAGON_RESOLVER,
+  });
+  service.saveProfile('ready');
+  assert.equal((await service.compile()).state, 'done');
+
+  const ghostKey = 'system-conflict␟tag:GONE001-10-01␟string:001,string:002';
+  service.recordDecision(ghostKey, 'accepted', 'settled with the mechanical lead');
+
+  const before = service.reviewPage('', 0, 100);
+  const stale = before.staleDecisions.filter((entry) => entry.reviewKey === ghostKey);
+  assert.equal(stale.length, 1, 'a decision with nothing left to apply to is reported, not hidden');
+  assert.equal(stale[0].kind, 'system-conflict');
+  assert.equal(stale[0].note, 'settled with the mechanical lead');
+
+  assert.equal(service.deleteDecision(ghostKey), true);
+  assert.equal(
+    service.reviewPage('', 0, 100).staleDecisions.filter((entry) => entry.reviewKey === ghostKey)
+      .length,
+    0,
+    'and dismissing it forgets it',
+  );
+  assert.equal(service.deleteDecision(ghostKey), false, 'dismissing it twice is not an error');
+});
+
+test('an override naming equipment this compile does not have is refused', async (t) => {
+  const path = join(workDir, 'GhostOverride.matchline');
+  rmSync(path, { force: true });
+  const service = newService();
+  t.after(() => {
+    service.close();
+  });
+
+  service.create(path, 'Ghost override');
+  await service.addSources([cachePath]);
+  service.updateDraft({
+    propertyMappings: PROPERTY_MAPPINGS,
+    assetFilters: ASSET_FILTERS,
+    tagAnatomy: DRAGON_ANATOMY,
+    systemResolver: DRAGON_RESOLVER,
+  });
+  service.saveProfile('ready');
+  assert.equal((await service.compile()).state, 'done');
+
+  // An override is durable and outlives every compile, so one naming an asset
+  // nothing has produces no claim, no review item and no error — it simply
+  // never happens, and the person who asked for it is never told.
+  assert.throws(
+    () => service.setRelationshipOverride('tag:GHOST999-99-99', 'tag:MAH001-10-01', ''),
+    /not in the compile/,
+  );
+  assert.throws(
+    () => service.setRelationshipOverride('tag:MAH001-10-01', 'tag:GHOST999-99-99', ''),
+    /not in the compile/,
+  );
+  assert.deepEqual(service.listRelationshipOverrides(), [], 'and nothing was written');
+
+  // The real move still works, root included.
+  assert.equal(service.setRelationshipOverride('tag:MAH001-10-02', null, '').length, 1);
 });

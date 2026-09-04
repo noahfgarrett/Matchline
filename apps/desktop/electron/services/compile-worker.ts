@@ -109,10 +109,28 @@ export interface CompileWorkerRequest {
 export type CompileWorkerMessage =
   | { readonly kind: 'stage'; readonly stage: CompileStage }
   | { readonly kind: 'done'; readonly project: unknown }
-  | { readonly kind: 'failed'; readonly reason: string };
+  | {
+      readonly kind: 'failed';
+      readonly reason: string;
+      /**
+       * The thrown error's `name`, or `''` when there was not one.
+       *
+       * Carried because the error itself cannot cross the thread boundary: main
+       * receives a message, never an `Error`, so `instanceof
+       * AssetCatalogConfigError` is not a question it can ask. The engine's
+       * config errors are written as clauses meant to be embedded in a
+       * sentence, and this is what lets main pick the right sentence to embed
+       * them in instead of matching on their wording.
+       */
+      readonly errorName: string;
+    };
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function nameOf(error: unknown): string {
+  return error instanceof Error ? error.name : '';
 }
 
 /**
@@ -246,14 +264,14 @@ async function runCompileRequest(
   try {
     caches = await openCaches(request.sources);
   } catch (error: unknown) {
-    return { kind: 'failed', reason: messageOf(error) };
+    return { kind: 'failed', reason: messageOf(error), errorName: nameOf(error) };
   }
 
   try {
     const project = compileProject(buildCompileInput(request, caches, onStage));
     return { kind: 'done', project };
   } catch (error: unknown) {
-    return { kind: 'failed', reason: messageOf(error) };
+    return { kind: 'failed', reason: messageOf(error), errorName: nameOf(error) };
   } finally {
     // The caches are this thread's, and nothing outlives the compile: leaving
     // one open would hold a file handle for as long as the worker lived, and
@@ -263,6 +281,25 @@ async function runCompileRequest(
       cache.close();
     }
   }
+}
+
+/**
+ * The one buffer worth transferring out of a finished compile, if it is there.
+ *
+ * Deliberately narrow. Everything else in a `CompiledProject` is maps, arrays
+ * and strings that a structured clone has to walk anyway; the workbook bytes
+ * are the single contiguous allocation where transferring saves a real copy.
+ * Read defensively because the project crosses this seam as `unknown` — a build
+ * that stopped producing bytes must degrade to a plain clone, not throw on the
+ * way out.
+ */
+function transferableBytesOf(message: CompileWorkerMessage): readonly ArrayBuffer[] {
+  if (message.kind !== 'done') {
+    return [];
+  }
+  const project = message.project as { generatedMel?: { workbookBytes?: unknown } } | null;
+  const bytes = project?.generatedMel?.workbookBytes;
+  return bytes instanceof Uint8Array && bytes.buffer instanceof ArrayBuffer ? [bytes.buffer] : [];
 }
 
 /* ------------------------------------------------------------ the entry point */
@@ -277,12 +314,22 @@ if (parentPort !== null) {
     port.postMessage({ kind: 'stage', stage } satisfies CompileWorkerMessage);
   }).then(
     (message): void => {
-      port.postMessage(message);
+      // The generated MEL's bytes are TRANSFERRED rather than copied. They are
+      // the one large flat buffer in a compiled project — a megabyte at ten
+      // thousand assets — and a structured clone of them is a second megabyte
+      // allocated on main's heap for a value this thread is about to discard.
+      // Transferring detaches the buffer here, which is safe precisely because
+      // this thread's next act is to exit.
+      port.postMessage(message, transferableBytesOf(message));
     },
     (error: unknown): void => {
       // `runCompileRequest` answers rather than throws, so this is a bug in it
       // or an out-of-memory. Either way main is owed a sentence, not silence.
-      port.postMessage({ kind: 'failed', reason: messageOf(error) } satisfies CompileWorkerMessage);
+      port.postMessage({
+        kind: 'failed',
+        reason: messageOf(error),
+        errorName: nameOf(error),
+      } satisfies CompileWorkerMessage);
     },
   );
 }
