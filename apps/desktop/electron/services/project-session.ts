@@ -92,6 +92,7 @@ import type {
   WireTreeNode,
   WireTreePage,
 } from '../../shared/schemas.js';
+import { draftProfileSchema } from '../../shared/schemas.js';
 
 import { createAppStateStore, type AppStateStore } from './app-store.js';
 import {
@@ -618,42 +619,29 @@ interface RunningCompile {
 }
 
 /**
- * What one compile's row in `compiles.stats_json` holds.
+ * The generated-MEL assets one stored compile carries, or `null`.
  *
- * The project schema (v1) has no column for the generated-MEL assets, and the
- * `snapshots` table is one row keyed `slot = 0` — it holds *the latest*
- * snapshot, not one per compile, so a revision diff cannot read a baseline out
- * of it. `stats_json` is declared `unknown` and is the caller's to shape, so
- * the assets ride alongside the stats there: one row per compile, already
- * keyed by compile id, and a diff against any stored compile is a lookup.
+ * The assets used to ride inside `compiles.stats_json`, because v1 had no
+ * per-compile slot for them and the `snapshots` table holds exactly one row.
+ * That made every compile row carry its whole generated MEL — roughly a
+ * kilobyte per hundred assets, on a table nothing deletes from — and made
+ * listing the history parse all of it to print a list of dates. Schema v7 gives
+ * them their own table, keyed by compile id, and `CompileRecord.assetCount`
+ * says how many there were without reading any of them.
  *
- * The cost is row size — roughly a kilobyte per hundred assets — which is why
- * `assetsOfCompile` reads it back defensively rather than assuming the shape.
+ * Still read back defensively: `getCompileAssets` returns `unknown` by
+ * contract, because the store keeps whatever JSON it was handed and never
+ * assumes a shape. `null` covers a compile recorded before v7, a compile whose
+ * assets have aged out of the retention window, and a row this build cannot
+ * read — all three mean the same thing to a caller, and it is what
+ * `WireCompileHistoryEntry.diffable` reports rather than a failure at export
+ * time.
  */
-interface StoredCompileStats {
-  readonly summary: unknown;
-  readonly generatedMelAssets: readonly GeneratedMelAsset[];
-}
-
-/**
- * The generated-MEL assets a stored compile row carries, or `null`.
- *
- * `CompileRecord.stats` is `unknown` by contract — the store keeps whatever
- * JSON it was handed and never assumes a shape — so this reads it back
- * defensively. A row written before this build simply has no assets, which is
- * what `WireCompileHistoryEntry.diffable` reports, rather than a failure at
- * export time.
- */
-function storedAssetsOf(record: CompileRecord): readonly GeneratedMelAsset[] | null {
-  const stats: unknown = record.stats;
-  if (typeof stats !== 'object' || stats === null) {
+function storedAssetsOf(stored: unknown): readonly GeneratedMelAsset[] | null {
+  if (!Array.isArray(stored)) {
     return null;
   }
-  const assets: unknown = (stats as Record<string, unknown>)['generatedMelAssets'];
-  if (!Array.isArray(assets)) {
-    return null;
-  }
-  for (const candidate of assets as readonly unknown[]) {
+  for (const candidate of stored as readonly unknown[]) {
     if (typeof candidate !== 'object' || candidate === null) {
       return null;
     }
@@ -662,7 +650,7 @@ function storedAssetsOf(record: CompileRecord): readonly GeneratedMelAsset[] | n
       return null;
     }
   }
-  return assets as readonly GeneratedMelAsset[];
+  return stored as readonly GeneratedMelAsset[];
 }
 
 function messageOf(error: unknown): string {
@@ -1020,6 +1008,33 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     return { draft: merged, revision, merged: true };
   }
 
+  /**
+   * The unsaved draft this project was left in the middle of, or `null`.
+   *
+   * The project's draft slot (schema v7), written on every edit. Before it
+   * existed, closing the project, opening another or quitting discarded every
+   * answer since the last Save, in silence.
+   *
+   * A slot this build cannot parse is `null` rather than a refusal: the saved
+   * revision is still there and the wizard opens on it, which is exactly where
+   * the user was before drafts were persisted at all. Refusing to open the
+   * project over an unreadable copy of unsaved work would be worse than losing
+   * the unsaved work.
+   */
+  function storedDraft(store: ProjectStore): WireDraftProfile | null {
+    let raw: unknown;
+    try {
+      raw = store.getDraft()?.draft;
+    } catch {
+      return null;
+    }
+    if (raw === undefined) {
+      return null;
+    }
+    const parsed = draftProfileSchema.safeParse(raw);
+    return parsed.success ? parsed.data : null;
+  }
+
   function adopt(
     store: ProjectStore,
     projectPath: string,
@@ -1031,15 +1046,25 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         ? emptyDraft(store.meta().projectName)
         : fromSiteProfile(stored.profile);
     const moved = mergeLegacyConfigSections(store, rehydrated);
+    // The draft slot wins over the rehydrated revision, and it is read AFTER
+    // the legacy merge: the merge publishes a revision and is the answer for
+    // the sections it moved, but a draft in flight is later than any of it --
+    // it is what the person was typing when the app last closed.
+    const inFlight = storedDraft(store);
     // Before the session exists, because rehydrating one is what queues the
     // extractions a reopened project still owes.
     extraction = startExtraction();
     const active: Session = {
       store,
       projectPath,
-      draft: moved.draft,
+      draft: inFlight ?? moved.draft,
       config,
-      savedRevision: moved.revision ?? stored?.revision ?? null,
+      // Null whenever the draft came out of the slot, because that draft is by
+      // definition not the one any revision holds -- the slot is cleared when a
+      // revision is published from it. `savedRevision` is what a compile labels
+      // its results with, so a stale number here would name a profile that is
+      // not what produced them.
+      savedRevision: inFlight !== null ? null : (moved.revision ?? stored?.revision ?? null),
       details: new Map<string, SourceDetail>(),
       models: new Map<string, ModelState>(),
       melRows: [],
@@ -2068,15 +2093,31 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     return active.config;
   }
 
+  /**
+   * Writes the draft to the project's own draft slot (schema v7).
+   *
+   * On EVERY draft edit, not on a timer and not on close. The draft used to
+   * live in this session's memory only, so closing the project, opening another
+   * or quitting discarded every answer since the last Save -- with no prompt,
+   * because nothing in main knew there was anything to lose. It is one small
+   * row and the wizard is not a hot loop.
+   *
+   * Best-effort on purpose. A draft that could not be written is worth a lost
+   * keystroke, not a modal in the middle of typing: the edit is still in memory
+   * and every real failure to write this file has already been reported by the
+   * open-time writability probe or by the next Save.
+   */
+  function persistDraft(active: Session): void {
+    try {
+      active.store.saveDraft(active.draft);
+    } catch {
+      // Deliberately silent. See above.
+    }
+  }
+
   /** The generated-MEL assets a stored compile row carries, or `null`. */
   function assetsOfCompile(active: Session, compileId: number): readonly GeneratedMelAsset[] | null {
-    const record = active.store
-      .listCompiles()
-      .find((entry: CompileRecord): boolean => entry.compileId === compileId);
-    if (record === undefined) {
-      return null;
-    }
-    return storedAssetsOf(record);
+    return storedAssetsOf(active.store.getCompileAssets(compileId));
   }
 
   /**
@@ -2212,7 +2253,16 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       profile = toSiteProfile(active.draft);
       profileRevision =
         active.savedRevision ??
-        active.store.saveProfile(profile, 'Saved automatically so this compile has a revision');
+        // The auto-save publishes the draft, so the draft slot is emptied with
+        // it, exactly as `saveProfile` does — the revision is now the answer.
+        active.store.withTransaction((): number => {
+          const saved = active.store.saveProfile(
+            profile,
+            'Saved automatically so this compile has a revision',
+          );
+          active.store.clearDraft();
+          return saved;
+        });
       active.savedRevision = profileRevision;
     } catch (error: unknown) {
       return { state: 'failed', reason: messageOf(error) };
@@ -2347,17 +2397,16 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       const id = active.store.recordCompile({
         inputHashes,
         profileRevision,
-        statsJson: {
-          summary: project.stats,
-          // See StoredCompileStats: the assets ride here because v1 has no
-          // per-compile slot for them and the snapshot table holds one row.
-          generatedMelAssets: view.assets,
-        } satisfies StoredCompileStats,
+        // The summary alone. The generated MEL goes to `compile_assets` below
+        // (schema v7): inside `stats_json` it made every history read parse
+        // every asset of every compile the project had ever run.
+        statsJson: { summary: project.stats },
         startedAt,
         finishedAt,
       });
       active.store.saveSnapshot(id, serializeSnapshot(project.snapshot));
       active.store.saveLedger(id, project.identityLedger);
+      active.store.saveCompileAssets(id, view.assets);
       return id;
     });
 
@@ -2689,6 +2738,8 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       const active = requireSession();
       active.draft = applyPatch(active.draft, patch);
       active.savedRevision = null;
+      // Into the project's draft slot, on every patch. See `persistDraft`.
+      persistDraft(active);
       return active.draft;
     },
 
@@ -2718,7 +2769,15 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         throw new Error(`This profile is not ready to save: ${messageOf(error)}`);
       }
 
-      const revision = active.store.saveProfile(profile, note === '' ? undefined : note);
+      const revision = active.store.withTransaction((): number => {
+        const saved = active.store.saveProfile(profile, note === '' ? undefined : note);
+        // The published revision IS the draft now, so the slot is emptied in
+        // the same transaction that fills the revision. Leaving the row there
+        // would reopen the project onto a draft that looks unsaved and is in
+        // fact identical to what was just saved.
+        active.store.clearDraft();
+        return saved;
+      });
       active.savedRevision = revision;
 
       const saved = active.store
@@ -3056,18 +3115,24 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       return requireView(requireSession()).ledgerEvents(offset, limit);
     },
 
+    /**
+     * The compile history, without reading a single asset.
+     *
+     * Both fields come off the compile row itself since schema v7:
+     * `asset_count` says what the compile produced, and whether its assets are
+     * still stored is a lookup in `compile_assets` for the ids that have one --
+     * one query for the whole list rather than a parsed generated MEL per row.
+     */
     compileHistory(): readonly WireCompileHistoryEntry[] {
       const active = requireSession();
-      return active.store.listCompiles().map((record: CompileRecord): WireCompileHistoryEntry => {
-        const assets = storedAssetsOf(record);
-        return {
-          compileId: record.compileId,
-          profileRevision: record.profileRevision,
-          finishedAt: record.finishedAt,
-          assetCount: assets?.length ?? 0,
-          diffable: assets !== null,
-        };
-      });
+      const withAssets = active.store.listCompilesWithAssets();
+      return active.store.listCompiles().map((record: CompileRecord): WireCompileHistoryEntry => ({
+        compileId: record.compileId,
+        profileRevision: record.profileRevision,
+        finishedAt: record.finishedAt,
+        assetCount: record.assetCount,
+        diffable: withAssets.has(record.compileId),
+      }));
     },
 
     /* ----------------------------------------------------------- workspace */
@@ -3287,6 +3352,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       // A wholesale replacement of the draft, so the stored revision is no
       // longer what is in memory (see Session.savedRevision).
       active.savedRevision = null;
+      persistDraft(active);
       active.derived = null;
       active.view = null;
       active.compile = { state: 'never-run' };

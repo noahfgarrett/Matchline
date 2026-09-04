@@ -486,6 +486,60 @@ test('reopening restores the draft from the saved revision', async () => {
   }
 });
 
+/**
+ * The wizard draft outlives the session that typed it (schema v7).
+ *
+ * Before the draft slot existed, every answer since the last Save was in this
+ * process's memory only: closing the project, opening another or quitting
+ * discarded all of it with no prompt, because nothing in main knew there was
+ * anything to lose.
+ */
+test('an unsaved draft edit survives close and reopen, and saving retires it', async () => {
+  const editing = newService();
+  try {
+    await editing.open(projectPath, false);
+    assert.equal(editing.draftState().savedRevision, 1);
+    editing.updateDraft({ name: 'Dragon Phase 2' });
+    assert.equal(
+      editing.draftState().savedRevision,
+      null,
+      'an edited draft is no longer the revision that is stored',
+    );
+  } finally {
+    editing.close();
+  }
+
+  const reopened = newService();
+  try {
+    const opened = await reopened.open(projectPath, false);
+    assert.equal(opened.outcome, 'opened');
+    const { draft, savedRevision } = reopened.draftState();
+    assert.equal(draft.name, 'Dragon Phase 2', 'the unsaved edit came back');
+    assert.equal(
+      savedRevision,
+      null,
+      'and it is still unsaved -- a draft in flight is not the revision on disk',
+    );
+    // Everything else is still the revision the draft was built from.
+    assert.deepEqual(draft.tagAnatomy.segments, DRAGON_ANATOMY.segments);
+
+    // Publishing FROM the draft retires the slot: the revision is the answer now.
+    assert.equal(reopened.saveProfile('Renamed').revision, 2);
+  } finally {
+    reopened.close();
+  }
+
+  const after = newService();
+  try {
+    await after.open(projectPath, false);
+    const { draft, savedRevision } = after.draftState();
+    assert.equal(savedRevision, 2, 'back to a saved revision, with no stale draft in the way');
+    assert.equal(draft.name, 'Dragon Phase 2');
+  } finally {
+    after.close();
+  }
+});
+
 test('removing the model source takes screens 2-5 back to blocked', async () => {
   const service = newService();
   try {

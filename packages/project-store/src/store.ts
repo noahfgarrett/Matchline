@@ -362,6 +362,14 @@ export interface ProjectStore {
     compileId: number,
     validate?: (value: unknown) => T,
   ): T | undefined;
+  /**
+   * The compile ids that still hold their assets.
+   *
+   * One query for a whole history list. A caller drawing "diffable" against
+   * fifty compiles would otherwise call `getCompileAssets` fifty times and
+   * parse fifty generated MELs to answer a yes/no.
+   */
+  listCompilesWithAssets(): ReadonlySet<number>;
 
   /** Stores the resolved snapshot, replacing whatever was there. */
   saveSnapshot(compileId: number, snapshot: unknown): void;
@@ -1379,6 +1387,15 @@ class SqliteProjectStore implements ProjectStore {
          WHERE compile_id NOT IN (SELECT id FROM compiles ORDER BY id DESC LIMIT ?)`,
       ).run(COMPILE_ASSET_RETENTION);
     });
+  }
+
+  listCompilesWithAssets(): ReadonlySet<number> {
+    return new Set(
+      this.#open()
+        .prepare('SELECT compile_id FROM compile_assets')
+        .all()
+        .map((row) => requireInteger(row, 'compile_assets', 'compile_id')),
+    );
   }
 
   getCompileAssets<T = unknown>(
