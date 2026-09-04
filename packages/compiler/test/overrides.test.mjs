@@ -294,6 +294,22 @@ test('ssmDiscipline is the native discipline unless a projection rewrites it, an
   assert.equal(row.ssmDiscipline, 'Mechanical');
 });
 
+test('a projection row typed with a stray space still rewrites the discipline', () => {
+  // `ssmDisciplineOf` looks a TRIMMED native discipline up in the projection,
+  // so a row written as `"Chilled Water "` used to match nothing and do nothing
+  // -- a rewrite that silently did not happen.
+  const project = compileProject(
+    fullInput(handle.cache, {
+      profile: siteProfile({
+        ssmDisciplineProjection: [{ from: ' Chilled Water ', to: 'Mechanical' }],
+      }),
+    }),
+  );
+
+  const mah001 = project.compileSubjects.find((s) => s.assetId === idOf('MAH001-10-01'));
+  assert.equal(mah001.attributes.get('ssmDiscipline'), 'Mechanical');
+});
+
 test('an ssmDiscipline boundary breaks a nesting the building and system boundaries allowed', () => {
   // MAH001-10-01 states `Chilled Water`; the PLC it parents states nothing, so
   // the boundary is unknown on one side and no structural decision is safe.
@@ -321,7 +337,9 @@ test('an ssmDiscipline boundary breaks a nesting the building and system boundar
   assert.equal(plc.parent.status, 'unresolved');
   assert.equal(plc.parent.parentAssetId, null);
 
-  const missing = project.reviewItems.filter((item) => item.kind === 'missing-boundary');
-  assert.ok(missing.length > 0);
-  assert.ok(missing.every((item) => item.levelId === 'discipline'));
+  const missing = project.reviewItems.filter((item) => item.kind === 'missing-boundary-level');
+  assert.equal(missing.length, 1, 'one row for the level, counting what it stopped');
+  assert.equal(missing[0].levelId, 'discipline');
+  assert.ok(missing[0].assetCount > 0);
+  assert.ok(missing[0].exampleAssetIds.includes(idOf('PLC001-10-01')));
 });

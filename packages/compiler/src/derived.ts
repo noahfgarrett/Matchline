@@ -44,17 +44,28 @@ import type { DerivedAttributeValue } from './types.js';
 /** One MEL row as the workbook was read, under the project's own field names. */
 export type MelRecord = Readonly<Record<string, string | undefined>>;
 
-/** The MEL, addressed the one way a derived rung joins into it: by tag. */
+/**
+ * The MEL, addressed by the asset its rows belong to.
+ *
+ * Keyed by `assetId` rather than by the tag the workbook wrote, because the
+ * spelling in a spreadsheet and the spelling in a model are exactly what
+ * `@matchline/identity` exists to reconcile: a raw-exact compare here would
+ * refuse a join that identity's normalization, aliases and anatomy tiers make
+ * for every other consumer of the same MEL. The orchestrator resolves each row's
+ * tag once, through the identity index, and hands the buckets over already
+ * addressed (audit: "MEL join is raw-exact while identity applies normalization
+ * and aliases").
+ */
 export interface MelJoinIndex {
-  /** Every row stating a tag, in workbook order, grouped by that tag. */
-  readonly byTag: ReadonlyMap<string, ReadonlyArray<MelRecord>>;
+  /** Every row that resolved to an asset, in workbook order, grouped by asset. */
+  readonly byAsset: ReadonlyMap<string, ReadonlyArray<MelRecord>>;
   readonly sourceFile: string;
   readonly sheet: string;
 }
 
 /** The empty MEL a project with no workbook resolves against. */
 export const NO_MEL_JOIN: MelJoinIndex = {
-  byTag: new Map(),
+  byAsset: new Map(),
   sourceFile: UNSTATED_SOURCE_FILE,
   sheet: '',
 };
@@ -234,13 +245,11 @@ function evaluateResolver(
     }
 
     case 'mel-lookup': {
-      if (asset.canonicalTag === '') {
-        return null;
-      }
-      // First row that both matches the tag and actually states the field --
-      // the same rule `@matchline/system-resolver`'s tag join follows, so the
-      // two cannot disagree about which row answered.
-      for (const row of mel.byTag.get(asset.canonicalTag) ?? []) {
+      // First row that both belongs to this asset and actually states the field
+      // -- the same rule `@matchline/system-resolver`'s tag join follows, so the
+      // two cannot disagree about which row answered. Which rows belong to the
+      // asset is identity's answer, not a string compare's.
+      for (const row of mel.byAsset.get(asset.assetId) ?? []) {
         const value = meaningful(row[resolver.returnField]);
         if (value !== null) {
           return {

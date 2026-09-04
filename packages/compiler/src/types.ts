@@ -22,6 +22,7 @@
  */
 import type {
   AttributeResolverKind,
+  CompletenessReport,
   ConnectivityObservation,
   ManualRelationshipOverride,
   Provenance,
@@ -425,5 +426,14 @@ export interface CompiledProject {
    * reported by two stages is one decision for a person, not two.
    */
   readonly reviewItems: ReadonlyArray<ReviewItem>;
+  /**
+   * Stage 10b: how much of the site this compile actually described (B3).
+   *
+   * Counts of assets, not of work done. `stats` answers "what did the engine
+   * do"; this answers "is my equipment nested, does it have a system, and which
+   * missing field is the reason" -- the questions a compile that succeeds and
+   * describes nothing still leaves open.
+   */
+  readonly completeness: CompletenessReport;
   readonly stats: CompileStats;
 }

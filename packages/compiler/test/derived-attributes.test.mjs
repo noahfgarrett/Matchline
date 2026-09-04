@@ -428,10 +428,13 @@ test('an unresolved derived attribute at a boundary is unknown, never a default'
     false,
     'no value at all, rather than an empty one two assets could share',
   );
+  // Visible, but counted rather than repeated: nobody decided anything about
+  // this asset by hand, and one row per asset per level is a queue nobody works.
   const item = folded.reviewItems.find(
-    (candidate) => candidate.kind === 'missing-boundary' && candidate.assetId === VFD,
+    (candidate) => candidate.kind === 'missing-boundary-level' && candidate.levelId === 'zone',
   );
-  assert.equal(item.levelId, 'zone', 'and it is a visible decision, not a silent root');
+  assert.ok(item.assetCount > 0, 'and it is a visible decision, not a silent root');
+  assert.ok(item.exampleAssetIds.includes(VFD), 'naming the equipment it stopped');
 });
 
 test('a derived attribute used only for display never moves equipment (P0-6)', () => {
@@ -450,7 +453,11 @@ test('a derived attribute used only for display never moves equipment (P0-6)', (
     ],
   };
   const withDisplay = compile(ZONES, {}, { hierarchy: grouping });
-  const withoutDisplay = compile(undefined, {}, { hierarchy: grouping });
+  // The same registry with nothing assigned: a level may only name an attribute
+  // its profile defines (`validateProfile`), so "no zone anywhere" is a table
+  // with no rows rather than a level pointing at an attribute that is not there.
+  const unassignedZones = [{ ...ZONES[0], resolverChain: [{ kind: 'manual', assignments: [] }] }];
+  const withoutDisplay = compile(unassignedZones, {}, { hierarchy: grouping });
 
   // The words differ; the identity does not.
   const d1 = withDisplay.tree.levels.find((level) => level.value === 'D1');

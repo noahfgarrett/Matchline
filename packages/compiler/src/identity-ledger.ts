@@ -26,6 +26,8 @@
  * stage that has to know both spellings.
  */
 import type {
+  AttributeResolver,
+  DerivedAttributeDefinition,
   ManualRelationshipOverride,
   OrphanedDecisionKind,
   OrphanedDecisionReason,
@@ -279,6 +281,66 @@ export function resolveManualAssignments(
   }
 
   return { assignments: applied, reviewItems };
+}
+
+/** The derived registry with every `manual` table re-aimed, and what could not be. */
+export interface ResolvedDerivedAssignments {
+  readonly definitions: ReadonlyArray<DerivedAttributeDefinition>;
+  readonly reviewItems: ReadonlyArray<ReviewItem>;
+}
+
+/**
+ * Derived-attribute `manual` tables, re-addressed through the ledger (P0-9).
+ *
+ * The third kind of stored decision, and the one that was missing. A person
+ * types an Area or a Turnover Package against an asset by hand; the table is
+ * keyed by asset id exactly like a parent decision, and a corrected tag used to
+ * mint a new id and leave the assignment pointing at nothing -- silently, and at
+ * a value a boundary level may well be comparing.
+ *
+ * Every other rung is returned untouched: only `manual` names assets, and
+ * rebuilding the others would be a chance to drop a rung the union grows later.
+ */
+export function resolveDerivedAssignments(
+  definitions: ReadonlyArray<DerivedAttributeDefinition>,
+  resolve: ResolveDecisionRef,
+): ResolvedDerivedAssignments {
+  const reviewItems: OrphanedDecisionReviewItem[] = [];
+  const rekeyed = definitions.map((definition) => ({
+    ...definition,
+    resolverChain: definition.resolverChain.map((resolver): AttributeResolver => {
+      if (resolver.kind !== 'manual') {
+        return resolver;
+      }
+      const assignments = new Map<string, string>();
+      for (const [ref, value] of resolver.assignments) {
+        const subject = resolve(ref);
+        if (subject.status !== 'resolved') {
+          reviewItems.push({
+            kind: 'orphaned-decision',
+            decision: 'derived-attribute',
+            childRef: ref,
+            parentRef: '',
+            // The attribute is part of the identity of the decision: two
+            // attributes can hold an unmappable assignment for one asset, and
+            // they are two rows to re-aim rather than one.
+            field: definition.attributeId,
+            reason: reasonFor('child', subject.status),
+            note: value,
+          });
+          continue;
+        }
+        // First write wins, matching `migrateAttributeResolver`'s own rule: two
+        // refs that reach one asset are the same decision stated twice.
+        if (!assignments.has(subject.assetId)) {
+          assignments.set(subject.assetId, value);
+        }
+      }
+      return { kind: 'manual', assignments };
+    }),
+  }));
+
+  return { definitions: rekeyed, reviewItems };
 }
 
 function orphaned(

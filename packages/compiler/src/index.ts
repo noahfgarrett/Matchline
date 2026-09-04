@@ -38,11 +38,18 @@ export type {
 
 export { derivedRuleIdOf, validateDerivedAttributes } from './derived.js';
 
+export { buildCompleteness } from './completeness.js';
+export type { CompletenessInput, CompletenessResult } from './completeness.js';
+
+export { validateProfile } from './validate.js';
+
 export {
   DerivedAttributeConfigError,
   describeDerivedAttributeConfigReason,
+  describeProfileConfigReason,
+  ProfileConfigError,
 } from './errors.js';
-export type { DerivedAttributeConfigReason } from './errors.js';
+export type { DerivedAttributeConfigReason, ProfileConfigReason } from './errors.js';
 
 export { subjectPropertiesFor } from './properties.js';
 export type { SubjectProperties } from './properties.js';

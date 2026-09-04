@@ -23,11 +23,14 @@
 import {
   chainFor,
   migrateDerivedAttributes,
+  migrateHierarchyConfig,
   migratePropertyMappings,
   migrateSourceAssignmentRules,
 } from '@matchline/domain';
 import type {
+  CompletenessReport,
   DeadClaimRuleReviewItem,
+  DerivedAttributeDefinition,
   ManualRelationshipOverride,
   PropertyChain,
   PropertyMappings,
@@ -61,13 +64,14 @@ import type {
   ClaimSubject,
   FlowEdgeInput,
   LearnedClaimInput,
+  MelParentInput,
   ResolveTag,
   SkippedClaimInput,
 } from '@matchline/relationship-claims';
 import { readMelTable } from '@matchline/spreadsheet-import';
 import { compileSnapshot, hierarchyTree } from '@matchline/ssm-compiler';
 import type { CompileSubject } from '@matchline/ssm-compiler';
-import { buildSystemCatalog, resolveSystems } from '@matchline/system-resolver';
+import { buildSystemCatalog, resolveSystems, UNSTATED_ROW } from '@matchline/system-resolver';
 import type {
   MelCatalogRow,
   ResolveContext,
@@ -78,6 +82,7 @@ import type {
 import { applyAnatomy } from '@matchline/tag-anatomy';
 
 import { attributesFor, ssmDisciplineOf } from './attributes.js';
+import { buildCompleteness } from './completeness.js';
 import {
   anatomyResultOf,
   derivedAttributesFor,
@@ -90,6 +95,7 @@ import {
   applyLedgerMapping,
   decisionResolverOf,
   ledgerCandidateOf,
+  resolveDerivedAssignments,
   resolveManualAssignments,
   resolveManualOverrides,
 } from './identity-ledger.js';
@@ -104,6 +110,7 @@ import {
 import type { AssetPropertyBag } from './properties.js';
 import { aggregateReviewItems } from './review.js';
 import { DEFAULT_MEL_SHEET } from './types.js';
+import { validateProfile } from './validate.js';
 import type {
   CompiledProject,
   CompileProjectInput,
@@ -180,24 +187,70 @@ function melCatalogRow(
   };
 }
 
-/** Stage 3: the MEL, or the empty catalog a MEL-less compile runs on. */
-function readMel(mel: MelWorkbookInput | undefined): {
+/**
+ * The separators a "System Parent" cell may list several parents with.
+ *
+ * A MEL is a document people type into, and a cell naming two parents spells it
+ * with a comma or a semicolon. Nothing else is treated as a separator: a tag
+ * with a space in it is a tag, not two.
+ */
+const MEL_PARENT_SEPARATORS = /[,;]/;
+
+/** The System Parent tags one row states, in the order it states them. */
+function melParentTags(cell: string | undefined): ReadonlyArray<string> {
+  if (cell === undefined) {
+    return [];
+  }
+  return cell
+    .split(MEL_PARENT_SEPARATORS)
+    .map((tag) => tag.trim())
+    .filter((tag) => tag !== '');
+}
+
+/** What one MEL workbook contributes, read once. */
+interface MelReadResult {
   readonly rows: ReadonlyArray<MelCatalogRow>;
   readonly catalog: SystemCatalog;
   readonly reviewItems: ReadonlyArray<ReviewItem>;
   /**
    * The workbook's own records, grouped by tag, for the derived `mel-lookup`
-   * rung (P0-7).
+   * rung (P0-7) and for the MEL parent rung.
    *
    * `MelCatalogRow` carries only the three fields the System Resolver joins on;
    * a derived attribute may return any column the project mapped -- `building`,
    * `discipline`, `projectPhase` -- so the records are kept as read rather than
-   * projected down and then re-read.
+   * projected down and then re-read. They are keyed by TAG here and re-keyed by
+   * asset id once identity exists; the tag is all a workbook knows.
    */
-  readonly join: MelJoinIndex;
-} {
+  readonly byTag: ReadonlyMap<string, ReadonlyArray<MelRecord>>;
+  /** The `mel-parent` rung's inputs (§11.1), one per row stating a parent. */
+  readonly parents: ReadonlyArray<MelParentInput>;
+  readonly sourceFile: string;
+  readonly sheet: string;
+  /**
+   * Rows that stated no tag, no key and no description.
+   *
+   * They join to nothing and describe nothing, so they are dropped -- and until
+   * now dropped without saying so. A MEL whose mapping names the wrong columns
+   * produces a workbook of them, which is a thing a person can fix the moment
+   * they are told the number (audit low finding).
+   */
+  readonly droppedRowCount: number;
+}
+
+/** Stage 3: the MEL, or the empty catalog a MEL-less compile runs on. */
+function readMel(mel: MelWorkbookInput | undefined): MelReadResult {
   if (mel === undefined) {
-    return { rows: [], catalog: new Map(), reviewItems: [], join: NO_MEL_JOIN };
+    return {
+      rows: [],
+      catalog: new Map(),
+      reviewItems: [],
+      byTag: new Map(),
+      parents: [],
+      sourceFile: NO_MEL_JOIN.sourceFile,
+      sheet: NO_MEL_JOIN.sheet,
+      droppedRowCount: 0,
+    };
   }
 
   const sheet = mel.sheetName ?? DEFAULT_MEL_SHEET;
@@ -205,9 +258,13 @@ function readMel(mel: MelWorkbookInput | undefined): {
 
   const rows: MelCatalogRow[] = [];
   const byTag = new Map<string, MelRecord[]>();
+  const parents: MelParentInput[] = [];
+  let droppedRowCount = 0;
   for (const record of table.rows) {
     const row = melCatalogRow(record, mel.sourceFile, sheet);
-    if (row !== null) {
+    if (row === null) {
+      droppedRowCount += 1;
+    } else {
       rows.push(row);
     }
     const tag = stated(record['equipmentTag']);
@@ -223,6 +280,23 @@ function readMel(mel: MelWorkbookInput | undefined): {
     } else {
       bucket.push(record);
     }
+
+    // The donor's primary structural source, kept rather than dropped. No row
+    // number is recorded for the same reason `melCatalogRow` records none: a
+    // position in `table.rows` is not a sheet row once blank rows are gone, and
+    // a wrong row number on real provenance is worse than an unstated one.
+    const parentTags = melParentTags(record['systemParent']);
+    if (parentTags.length > 0) {
+      parents.push({
+        childTag: tag,
+        parentTags,
+        provenance: {
+          sourceFile: mel.sourceFile,
+          sourceRef: { kind: 'sheet-row', sheet, row: UNSTATED_ROW },
+          propertyOrColumn: 'System Parent',
+        },
+      });
+    }
   }
 
   const built: SystemCatalogResult = buildSystemCatalog(rows);
@@ -230,7 +304,11 @@ function readMel(mel: MelWorkbookInput | undefined): {
     rows,
     catalog: built.catalog,
     reviewItems: built.reviewItems,
-    join: { byTag, sourceFile: mel.sourceFile, sheet },
+    byTag,
+    parents,
+    sourceFile: mel.sourceFile,
+    sheet,
+    droppedRowCount,
   };
 }
 
@@ -299,14 +377,24 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     chainFor(mappings.equipmentTag, sourceId);
   // Refused before a single cache is read: a definition that shadowed a built-in
   // attribute key would change where equipment is filed without saying so.
-  const derivedDefinitions = validateDerivedAttributes(
+  const declaredDerived = validateDerivedAttributes(
     migrateDerivedAttributes(profile.derivedAttributes),
   );
+  // And the rest of the profile, before a single cache is read. A ladder tier or
+  // a level key the engine does not have is silently disabled rather than
+  // refused, which is the one failure mode a person cannot see (see
+  // `validateProfile`).
+  validateProfile(profile, declaredDerived);
   // The projection as the attribute helpers read it. Always built, never
   // optional: an empty table rewrites nothing, which is exactly what "this site
   // stated no rewrites" has always meant.
+  //
+  // Keys are trimmed on the way in because `ssmDisciplineOf` looks a TRIMMED
+  // native discipline up in this map: a profile row typed as `"Mechanical "`
+  // would otherwise never match the discipline it was written for, and the
+  // rewrite would silently do nothing.
   const disciplineProjection: SsmDisciplineProjection = new Map(
-    profile.ssmDisciplineProjection.map((rewrite) => [rewrite.from, rewrite.to] as const),
+    profile.ssmDisciplineProjection.map((rewrite) => [rewrite.from.trim(), rewrite.to] as const),
   );
 
   // The universe, in the one order every stage reads it in. `orderCatalogSources`
@@ -423,6 +511,13 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     input.manualSystemAssignments === undefined
       ? null
       : resolveManualAssignments(input.manualSystemAssignments, resolveDecisionRef);
+  // A derived attribute's `manual` rung is a person's own table, keyed by asset
+  // id exactly like a parent decision -- and until now the only stored decision
+  // that was NOT re-addressed through the ledger, so a re-keyed asset silently
+  // lost a hand-assigned boundary value. Same treatment, same review item.
+  const derivedAssignments = resolveDerivedAssignments(declaredDerived, resolveDecisionRef);
+  const derivedDefinitions: ReadonlyArray<DerivedAttributeDefinition> =
+    derivedAssignments.definitions;
 
   /** The one file this project was extracted from, or `null` once there are two. */
   const soleSource = sources.length === 1 ? sources[0] : undefined;
@@ -551,9 +646,59 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     grade: proposal.grade,
   }));
 
+  /**
+   * The identity bridge every tag-borne structural rung goes through.
+   *
+   * Two things it deliberately does NOT do. It does not resolve a tag several
+   * assets carry: identity answers "the first id in code-unit order", which is
+   * right for enrichment and wrong for a parent -- a profile row naming a
+   * duplicated tag has not said which copy, and picking one would nest a site's
+   * equipment under whichever spelling sorted first. Assembly is told
+   * `duplicate` and skips the input loudly.
+   *
+   * And it does not rank fuzzy proposals. Fuzzy never matches (§9.2), so for a
+   * caller that reads only "did it match" the tier changes no answer and costs a
+   * bounded Levenshtein against every asset in the index -- per unmatched tag,
+   * on every profile row, on a 40,000-asset site. Fuzzy stays where it is
+   * review-only: the connectivity endpoints, resolved by
+   * `buildElectricalFlowFromIndex`.
+   */
   const bridge: ResolveTag = (tag) => {
-    const outcome = resolveTag(identityIndex, tag);
-    return outcome.status === 'matched' ? outcome.assetId : null;
+    const outcome = resolveTag(identityIndex, tag, { includeFuzzy: false });
+    if (outcome.status !== 'matched') {
+      return null;
+    }
+    return outcome.sharingAssets > 1
+      ? { duplicate: true, sharingAssets: outcome.sharingAssets }
+      : outcome.assetId;
+  };
+
+  /**
+   * The MEL's rows, re-addressed onto the assets they are about.
+   *
+   * The join runs through identity rather than comparing strings, so the
+   * normalization, aliases and anatomy a site taught apply to its MEL exactly as
+   * they apply to its cable schedule. A row whose tag resolves to nothing, or to
+   * several assets, joins to nothing -- the same refusals every other tag-borne
+   * input takes.
+   */
+  const melByAsset = new Map<string, MelRecord[]>();
+  for (const [tag, records] of mel.byTag) {
+    const outcome = resolveTag(identityIndex, tag, { includeFuzzy: false });
+    if (outcome.status !== 'matched' || outcome.sharingAssets > 1) {
+      continue;
+    }
+    const bucket = melByAsset.get(outcome.assetId);
+    if (bucket === undefined) {
+      melByAsset.set(outcome.assetId, [...records]);
+    } else {
+      bucket.push(...records);
+    }
+  }
+  const melJoin: MelJoinIndex = {
+    byAsset: melByAsset,
+    sourceFile: mel.sourceFile,
+    sheet: mel.sheet,
   };
 
   const manualOverrides: ReadonlyArray<ManualRelationshipOverride> = manualParents.overrides;
@@ -568,6 +713,10 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     flowEdges,
     learned,
     manualOverrides,
+    // The MEL's own System Parent column (§11.1). Only reaches the ladder when
+    // the site's profile lists the `mel-parent` rung; the claims exist either
+    // way, because a claim nobody walked is still evidence.
+    ...(mel.parents.length === 0 ? {} : { melParents: mel.parents }),
     resolveTag: bridge,
     // Profile-borne claims address the published profile they came out of, so a
     // re-compile under a new version explains itself.
@@ -609,7 +758,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
                     resolution: resolutionOf(asset.assetId),
                     anatomy: anatomyResultOf(derivedAnatomy, asset.canonicalTag),
                   },
-                  mel.join,
+                  melJoin,
                 );
           if (values.length > 0) {
             derivedByAsset.set(asset.assetId, values);
@@ -674,6 +823,19 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     assets: generatedAssets,
   };
 
+  // --- 10b. how much of the site the compile actually described (B3) --------------
+  // Read off the fold's and the resolver's own decisions, never recomputed: a
+  // report that re-derived anything could disagree with the snapshot it
+  // describes, and a site would have two answers to "is my equipment nested".
+  const completeness = buildCompleteness({
+    hierarchy: migrateHierarchyConfig(profile.hierarchy),
+    subjects: compileSubjects,
+    snapshot,
+    systems,
+    structuralClaims: claims.structural,
+    melRowsDropped: mel.droppedRowCount,
+  });
+
   // --- 11. one review queue -------------------------------------------------------
   stage('review');
   const reviewItems = aggregateReviewItems([
@@ -683,12 +845,16 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     // is exactly what P0-9 forbids.
     manualParents.reviewItems,
     manualSystems?.reviewItems ?? [],
+    derivedAssignments.reviewItems,
     mel.reviewItems,
     systems.reviewItems,
     flow.reviewItems,
     claims.proposals,
     deadClaimRules(claims.skipped),
     snapshot.reviewItems,
+    // "34 assets have no system" used to be a number on a summary with nothing
+    // behind it. It is a queue row now, grouped by the reasons that explain it.
+    completeness.reviewItems,
   ]);
 
   const stats = statsOf({
@@ -727,6 +893,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     tree,
     generatedMel,
     reviewItems,
+    completeness: completeness.report,
     stats,
   };
 }

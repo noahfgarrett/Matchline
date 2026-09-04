@@ -146,3 +146,16 @@ test('the Electrical Flow projection is unaffected by the fold: the panel still 
   assert.equal(project.flow.nodes.get(PANEL).enrichment.systemKey, '603');
   assert.equal(project.flow.nodes.get(RIO).enrichment.systemKey, '650');
 });
+
+test('the demotion is counted per level and rung in the completeness report', () => {
+  assert.deepEqual(project.completeness.demotionsPerLevel, [
+    { levelId: 'system', ladderSource: 'flow-family', count: 1 },
+  ]);
+  // And the queue says it out loud, which it did not before: a rule-driven
+  // demotion used to be a stat with nothing behind it.
+  const item = project.reviewItems.find((candidate) => candidate.kind === 'boundary-demotion');
+  assert.equal(item.levelId, 'system');
+  assert.equal(item.ladderSource, 'flow-family');
+  assert.equal(item.pairCount, 1);
+  assert.deepEqual(item.exampleAssetIds, [RIO]);
+});

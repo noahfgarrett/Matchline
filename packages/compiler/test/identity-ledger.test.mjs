@@ -511,3 +511,67 @@ test('a compile with no previous ledger is unchanged by the ledger existing', ()
   assert.ok(project.catalog.assets.every((asset) => asset.assetId === idOf(asset.canonicalTag)));
   assert.deepEqual(project.reviewItems.filter((item) => item.kind === 'orphaned-decision'), []);
 });
+
+/* ------------------------------- derived-attribute assignments (P0-9) --- */
+
+/** A site-defined attribute assigned by hand, keyed however the caller spells it. */
+function zoneProfile(ref) {
+  return {
+    derivedAttributes: [
+      {
+        attributeId: 'zone',
+        displayName: 'Zone',
+        resolverChain: [{ kind: 'manual', assignments: [{ assetId: ref, value: 'Z9' }] }],
+      },
+    ],
+  };
+}
+
+test('a derived assignment recorded under the old tag survives the correction', () => {
+  // The third kind of stored decision, and the one that used to be positional:
+  // a hand-assigned Area or Turnover Package keyed by a spelling the model has
+  // since corrected. It is a value a boundary level may compare, so losing it
+  // silently moves equipment.
+  const first = firstCompile({ profile: siteProfile(zoneProfile(TYPO)) });
+  assert.equal(
+    first.derivedAttributes.find((entry) => entry.assetId === idOf(TYPO)).values[0].value,
+    'Z9',
+  );
+
+  const second = compileProject(
+    fullInput(plain.cache, {
+      profile: siteProfile(zoneProfile(TYPO)),
+      identityLedger: first.identityLedger,
+    }),
+  );
+
+  const corrected = second.catalog.assets.find((asset) => asset.canonicalTag === TAG);
+  assert.deepEqual(
+    second.derivedAttributes
+      .find((entry) => entry.assetId === corrected.assetId)
+      .values.map((value) => value.value),
+    ['Z9'],
+    'the ledger re-aimed the table, so the hand-made value is still on the asset',
+  );
+  assert.equal(
+    second.reviewItems.some((item) => item.kind === 'orphaned-decision'),
+    false,
+  );
+});
+
+test('a derived assignment nobody can re-aim is reported, never dropped', () => {
+  const project = firstCompile({ profile: siteProfile(zoneProfile('MAH009-99-99')) });
+
+  const orphaned = project.reviewItems.find(
+    (item) => item.kind === 'orphaned-decision' && item.decision === 'derived-attribute',
+  );
+  assert.equal(orphaned.childRef, 'MAH009-99-99');
+  assert.equal(orphaned.field, 'zone', 'two attributes are two rows to re-aim, not one');
+  assert.equal(orphaned.reason, 'unknown-child');
+  assert.equal(orphaned.note, 'Z9', "the person's own value survives its address");
+  assert.equal(
+    project.derivedAttributes.every((entry) => entry.values.length === 0),
+    true,
+    'and nothing was assigned to an asset nobody meant',
+  );
+});
