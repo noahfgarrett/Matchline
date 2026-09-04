@@ -456,3 +456,27 @@ inherits a working rule set as the donor did.
 - Six agents read in parallel; where two reached the same conclusion independently
   (launcher not shipped, NWF cache staleness, flat default tree) that is noted, and
   every Blocker plus the top High per stage was re-checked by hand.
+
+---
+
+## Status after the work packages (2026-09-04)
+
+Seven of the eight packages landed on this branch in 45 commits following the
+audit commit (`731c883`). Full suite after landing: build clean, renderer bundles,
+2305 tests / 0 failures. Per package:
+
+| WP | Landed | Notes |
+|----|--------|-------|
+| 1 Ship the toolchain | Yes | `stage-native.mjs` + `extraResources`; hosted Windows CI builds and packages the launcher, smoke executes it; proof workflow deploys and hash-checks the adapter; `--navisworks-dir` plumbed; anonymizer crash fixed; `.npmrc`; version stamped from `package.json`. |
+| 2 Launcher/service hardening | Yes, unverified on Windows | Stall timeout, end-record grace kill, Job Object, stdin-EOF cancel, `PLUGIN_NOT_DEPLOYED` / `PLUGIN_NOT_FOUND` / `NW_STALLED`, disk-full mapping, `Document.OpenFile`; service watchdog, quit prompt, pre-launch file re-check, `%LOCALAPPDATA%` cache, rejected caches moved aside. C# not compiled on the Mac. |
+| 3 First real Windows proof | **Not run** | Still requires Noah's Windows box. Everything in WP1/WP2 is a prerequisite that now exists. |
+| 4 Cache schema v3 | Yes, unverified on Windows | Authoring ids, structural keys, flags, set GUIDs, real set membership, nested models, units/language meta, NWF `ref` records + `SOURCE_MODEL_MISSING`, sets resolved before the walk. Reader accepts v1–v3. 2025 relabelled `stub-compiled-unverified`. |
+| 5 Compile completeness | Yes | `CompletenessReport`; aggregate `missing-boundary-level`, `unresolved-system`, `boundary-demotion`; case-folded boundary compare; duplicate-tag claims skipped; `mel-parent` rung; `unicodeFold`; `validateProfile`; indexed MEL lookup. |
+| 6 Workspace/outputs | Yes | Tree paged to total; SSM hierarchy workbook export; last compile restored on open; completeness on screens 8/9 and the workspace; boundary-value compile guard; review queue paged with stale decisions; save paths gated; failed recompile keeps the view; picker searches the full catalog. |
+| 7 Store robustness | Yes | `COMMIT` guarded, busy timeout; verified backup; read-only/locked open results; schema v7 (draft slot, `compile_assets`, retention); system overrides plumbed; stale decisions; override re-key; `possible-rematch`. |
+| 8 Quick Setup for real models | Yes | Revit-shaped fixture; building from Workset/Level/filename rules; bare-mark tag shape; no-system anatomy family; projected group counts; source-assignment, boundary and role-pair suggestions; starter profile. Accept-all over the Revit fixture now compiles a nested tree. |
+
+**Remaining gates:** the real Navisworks proof (14–16), code signing (18; release signs the
+wrong layer, see Packaging High), the updater (19), clean-machine install (21).
+Every C# change since the audit has been written without a compiler and is part of
+that proof.
