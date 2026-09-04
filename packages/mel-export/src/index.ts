@@ -19,7 +19,7 @@
  * rather than another package's output type, so the exporter stays independent
  * of how the catalog and the resolver evolve.
  *
- * Three further outputs read the same asset shape:
+ * Four further outputs describe the same assets:
  *
  * - {@link analyzeTemplate} / {@link writeTemplateMel} — the site's own MEL
  *   layout, filled (§12.2).
@@ -27,6 +27,10 @@
  *   disagree, as plain data. No review items are created here (§12.3).
  * - {@link diffMelRevisions} / {@link writeDiffWorkbook} — what a new model
  *   revision changed (§12.4).
+ * - {@link writeSsmHierarchyWorkbook} — the SSM hierarchy widened onto one
+ *   sheet, a column per configured level, for review in Excel. Like
+ *   {@link GeneratedMelAsset}, its {@link SsmHierarchyRow} is this package's
+ *   own flattened shape rather than the grouping engine's output type.
  */
 
 export {
@@ -88,3 +92,10 @@ export type {
 } from './diff.js';
 
 export { DIFF_SUMMARY_SHEET_NAME, writeDiffWorkbook } from './diffWorkbook.js';
+
+export {
+  SSM_HIERARCHY_SHEET_NAME,
+  SSM_LEVELS_SHEET_NAME,
+  writeSsmHierarchyWorkbook,
+} from './hierarchyWorkbook.js';
+export type { SsmHierarchyLevelConfig, SsmHierarchyRow } from './hierarchyWorkbook.js';
