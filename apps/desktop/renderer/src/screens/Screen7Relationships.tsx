@@ -107,6 +107,7 @@ export function Screen7Relationships({
 
   const nesting = learned.find((summary) => summary.kind === 'nesting') ?? null;
   const itemMaster = learned.find((summary) => summary.kind === 'item-master') ?? null;
+  const wbs = learned.find((summary) => summary.kind === 'wbs') ?? null;
 
   return (
     <div className="screen" data-testid="screen-7">
@@ -209,6 +210,17 @@ export function Screen7Relationships({
             >
               {training === 'item-master' ? 'Training…' : 'Train item masters'}
             </button>
+            <button
+              className="button button--small"
+              type="button"
+              data-testid="train-wbs"
+              disabled={training !== null}
+              onClick={(): void => {
+                void trainFrom('wbs');
+              }}
+            >
+              {training === 'wbs' ? 'Training…' : 'Train WBS codes'}
+            </button>
           </>
         }
       >
@@ -228,6 +240,11 @@ export function Screen7Relationships({
           title="Item masters"
           summary={itemMaster}
           empty="Nothing trained. The EXTO export's item-master column will be blank."
+        />
+        <LearnedPanel
+          title="WBS codes"
+          summary={wbs}
+          empty="Nothing trained. The EXTO export's WBS column will be blank unless a model property is mapped for it."
         />
       </Panel>
     </div>

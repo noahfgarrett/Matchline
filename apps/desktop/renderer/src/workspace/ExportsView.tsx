@@ -204,6 +204,38 @@ export function ExportsView({ projectName }: { readonly projectName: string }): 
       </Panel>
 
       <Panel
+        title="SSM hierarchy"
+        description="The tree itself rather than a flat list: one column per configured level, in stack order, so the shape the compile settled on is readable across the page."
+        actions={
+          <button
+            className="button button--small"
+            type="button"
+            data-testid="export-ssm-hierarchy"
+            disabled={busy !== null}
+            onClick={(): void => {
+              void runExport('ssm-hierarchy', 'SSM-Hierarchy', async (path) =>
+                call(window.matchline.export.ssmHierarchy({ path })),
+              );
+            }}
+          >
+            Export
+          </button>
+        }
+      >
+        <p className="muted">
+          Every configured level gets its own column under the name you gave it — a level this
+          site derived for itself included — and then each asset's tag, description, type,
+          disciplines, system, structural parent, dependencies, whether it is a root and its full
+          level path.
+        </p>
+        <p className="muted">
+          A second sheet says which of those levels are structural boundaries. “These two never
+          nest” is the most consequential thing the configuration says and the data columns cannot
+          show it, so it is stated outright rather than left to be inferred from what is missing.
+        </p>
+      </Panel>
+
+      <Panel
         title="Site-template MEL"
         description="Your own MEL layout, filled from the same data. Matchline reads the template's headers and suggests a binding for each column."
         actions={
