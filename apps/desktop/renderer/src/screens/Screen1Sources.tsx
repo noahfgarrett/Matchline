@@ -65,6 +65,15 @@ const STATUS_LABELS: Readonly<Record<WireSourceStatus, string>> = {
   failed: 'Extraction failed',
 };
 
+/**
+ * The error code a job settles with on a machine that cannot extract at all.
+ *
+ * Repeated rather than imported: `SERVICE_ERROR_CODES` lives in main's
+ * services, which the renderer never reaches into. The value is pinned in
+ * `electron/services/extraction-protocol.ts`.
+ */
+const PLATFORM_UNAVAILABLE_CODE = 'extraction-unavailable-on-this-platform';
+
 /** The statuses that mean something is still happening to this source. */
 const RUNNING_STATUSES: ReadonlySet<WireSourceStatus> = new Set<WireSourceStatus>([
   'queued',
@@ -73,6 +82,29 @@ const RUNNING_STATUSES: ReadonlySet<WireSourceStatus> = new Set<WireSourceStatus
   'extracting',
   'finalizing',
 ]);
+
+/**
+ * What the badge says for one source.
+ *
+ * Normally the status; on a machine that cannot extract, a plain statement of
+ * that instead. "Extraction failed" is a wrong word there — nothing was tried
+ * and nothing went wrong — and a row that reads like a fault sends the user
+ * looking for a fix that does not exist. Keyed on the job's error code rather
+ * than on a status of its own, because the *status* really is `failed`: the
+ * source is not usable and the compile must not read it.
+ */
+function statusLabel(
+  status: WireSourceStatus,
+  job: WireExtractionJob | undefined,
+  unavailableReason: string,
+): string {
+  if (job?.errorCode === PLATFORM_UNAVAILABLE_CODE) {
+    return unavailableReason.includes('darwin')
+      ? 'Not available on this Mac'
+      : 'Not available on this computer';
+  }
+  return STATUS_LABELS[status];
+}
 
 /**
  * "3 registered, 2 model sources" — the second half only once there are two,
@@ -98,6 +130,17 @@ export function Screen1Sources({
   const [rejected, setRejected] = useState<readonly WireAddSourceResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [jobs, setJobs] = useState<readonly WireExtractionJob[]>([]);
+  /**
+   * Whether this machine can extract at all, as main last reported it.
+   *
+   * Optimistic until the first poll answers: the callout is a warning, and
+   * flashing one up for a moment on every machine that CAN extract would be
+   * worse than showing it a second late on the ones that cannot.
+   */
+  const [extraction, setExtraction] = useState<{
+    readonly available: boolean;
+    readonly reason: string;
+  }>({ available: true, reason: '' });
 
   /**
    * Whether the last poll found work in flight.
@@ -132,6 +175,10 @@ export function Screen1Sources({
           return;
         }
         setJobs(page.rows);
+        setExtraction({
+          available: page.extractionAvailable,
+          reason: page.extractionUnavailableReason,
+        });
         if (page.active) {
           wasExtracting.current = true;
           timer = setTimeout((): void => {
@@ -303,6 +350,15 @@ export function Screen1Sources({
           </p>
         </div>
 
+        {extraction.available ? null : (
+          <Callout tone="info">
+            <strong>Models cannot be extracted on this computer.</strong> Navisworks runs on
+            Windows only, so a model added here is registered but not read. Extract it on a
+            Windows machine with Navisworks and drop the .matchline-cache that produces in
+            here — everything after extraction works the same on either. {extraction.reason}
+          </Callout>
+        )}
+
         {error === null ? null : <Callout tone="error">{error}</Callout>}
 
         {rejected.map((entry: WireAddSourceResult): JSX.Element | null =>
@@ -338,7 +394,7 @@ export function Screen1Sources({
                     <span className="source__role">{ROLE_LABELS[source.role] ?? source.role}</span>
                     <span className="source__name">{source.logicalName}</span>
                     <span className={`badge badge--${source.status}`} data-testid="source-status">
-                      {STATUS_LABELS[source.status]}
+                      {statusLabel(source.status, job, extraction.reason)}
                     </span>
                     <span className="source__size">{fileSize(source.rawByteSize)}</span>
                     {job === undefined || !job.cancellable ? null : (

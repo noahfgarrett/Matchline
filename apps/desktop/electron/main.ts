@@ -1,6 +1,14 @@
 import path from 'node:path';
 
-import { BrowserWindow, app, dialog, ipcMain, session, type WebContents } from 'electron';
+import {
+  BrowserWindow,
+  app,
+  dialog,
+  ipcMain,
+  session,
+  type MessageBoxSyncOptions,
+  type WebContents,
+} from 'electron';
 
 import { getVersion } from './handlers/app.js';
 import { ping } from './handlers/dev.js';
@@ -187,6 +195,31 @@ async function createMainWindow(): Promise<void> {
  * can leave a lock behind. Called on the way out of an uncaught exception as
  * well as on a normal quit.
  */
+/** The button index that means "go ahead and quit" in {@link QUIT_PROMPT}. */
+const QUIT_AND_CANCEL = 0;
+
+/**
+ * What quitting mid-extraction asks.
+ *
+ * "Keep working" is the default and the cancel action, so pressing Return or
+ * Escape by reflex is the answer that loses nothing.
+ */
+const QUIT_PROMPT: MessageBoxSyncOptions = {
+  type: 'question',
+  buttons: ['Quit and cancel it', 'Keep working'],
+  defaultId: 1,
+  cancelId: 1,
+  title: 'An extraction is running',
+  message: 'An extraction is running. Quit and cancel it?',
+  detail:
+    'Matchline will ask Navisworks to stop and will throw away the half-finished extraction. ' +
+    'Adding the model again later starts it from the beginning.',
+  noLink: true,
+};
+
+/** Set once the user has said yes to {@link QUIT_PROMPT}, so it is asked once. */
+let quitConfirmed = false;
+
 function releaseProjectFile(): void {
   try {
     projectService?.close();
@@ -286,8 +319,51 @@ if (!app.requestSingleInstanceLock()) {
     }
   });
 
+  /**
+   * Quitting in the middle of an extraction, asked rather than assumed.
+   *
+   * An extraction is minutes of a licensed Navisworks reading a multi-gigabyte
+   * model, and quitting throws all of it away — so the one thing the app must
+   * not do is discard it silently because a window was closed. Confirming is
+   * also what makes the shutdown sequence worth having: `close()` asks the
+   * launcher to stop and only signals it if it has not gone a couple of seconds
+   * later, which is the only path that takes the headless Navisworks with it.
+   *
+   * The flag is what stops the dialog reappearing: `app.quit()` fires
+   * `before-quit` again for windows that close afterwards, and asking the same
+   * question twice reads as the app not believing the answer.
+   */
+  app.on('before-quit', (event): void => {
+    if (quitConfirmed || projectService === null) {
+      return;
+    }
+    let running = false;
+    try {
+      running = projectService.extractionRunning();
+    } catch (error: unknown) {
+      // Never let the state of the queue be the reason the app cannot be
+      // closed. An unanswerable question is answered "nothing is running".
+      console.error('[matchline] could not ask whether an extraction is running', error);
+    }
+    if (!running) {
+      return;
+    }
+
+    const choice =
+      mainWindow === null
+        ? dialog.showMessageBoxSync(QUIT_PROMPT)
+        : dialog.showMessageBoxSync(mainWindow, QUIT_PROMPT);
+    if (choice === QUIT_AND_CANCEL) {
+      quitConfirmed = true;
+      return;
+    }
+    event.preventDefault();
+  });
+
   // The project file is SQLite; the handle is released deliberately rather than
   // left to process teardown, so a quit mid-write cannot leave a stale lock.
+  // This also shuts the extraction queue down, which is what asks the launcher
+  // to stop the Navisworks it started.
   app.on('will-quit', (): void => {
     releaseProjectFile();
   });

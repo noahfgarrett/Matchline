@@ -111,7 +111,9 @@ import {
 import { cacheFileName } from './extraction-protocol.js';
 import {
   defaultExtractorPath,
+  extractionCapability,
   resolveExtractorLauncher,
+  type ExtractionCapability,
   type ExtractorLauncher,
 } from './extractor-launcher.js';
 import { buildAssignmentPreview, type AssignmentDocument } from './assignment-preview.js';
@@ -267,6 +269,18 @@ export interface ExtractionStatusPage {
   /** True while anything is queued or running, so the UI knows to keep asking. */
   readonly active: boolean;
   readonly rows: readonly WireExtractionJob[];
+  /**
+   * False on a machine that cannot run the extractor at all.
+   *
+   * Carried with the queue rather than on its own channel because it is the
+   * same fact the queue is about, and because screen 1 is already asking this
+   * channel every second while anything is running. It lets the screen say "not
+   * here, and here is what to do instead" before a file is dropped, rather than
+   * only afterwards in a row that reads like a fault.
+   */
+  readonly extractionAvailable: boolean;
+  /** Why not, or `''` when extraction is available. */
+  readonly extractionUnavailableReason: string;
 }
 
 /**
@@ -313,6 +327,13 @@ export interface ProjectService {
 
   /** One page of the extraction jobs this session has run, oldest first. */
   extractionStatus(offset: number, limit: number): ExtractionStatusPage;
+  /**
+   * True while an extraction is queued or running.
+   *
+   * Asked by the quit path, which needs the answer before it decides whether to
+   * interrupt the user, and which must not throw when no project is open.
+   */
+  extractionRunning(): boolean;
   /** Stops one extraction. The source stays registered, as `cancelled`. */
   cancelExtraction(sourceId: string): boolean;
   /**
@@ -704,16 +725,53 @@ function openRefusal(error: unknown): WireProjectOpenResult | null {
   return null;
 }
 
+/**
+ * Where extraction caches go when nobody named a folder.
+ *
+ * On Windows that is `%LOCALAPPDATA%\\Matchline\\cache\\models`, not the
+ * `userData` folder every other piece of app state lives in. `userData` on
+ * Windows is `%APPDATA%` — the *roaming* profile — and on a domain-joined
+ * machine roaming means copied to and from a file server at every sign-in. An
+ * extraction cache is hundreds of megabytes to several gigabytes per model,
+ * re-creatable from the model at any time, and belongs to this machine; putting
+ * it on the roaming path is how a user ends up waiting ten minutes to log in.
+ * It is also the folder the launcher itself defaults to
+ * (`ExtractorArguments.DefaultCacheDirectory`) and the one every doc names.
+ *
+ * `userData` is still the fallback, for the one case where the environment
+ * variable is missing: a folder that is definitely writable beats a path built
+ * from an empty string.
+ */
+function defaultExtractionCacheDir(userDataDir: string): string {
+  if (process.platform === 'win32') {
+    const localAppData = process.env['LOCALAPPDATA'];
+    if (localAppData !== undefined && localAppData !== '') {
+      return path.join(localAppData, 'Matchline', 'cache', 'models');
+    }
+  }
+  return path.join(userDataDir, 'cache', 'models');
+}
+
 export function createProjectService(options: ProjectServiceOptions): ProjectService {
   const appState: AppStateStore = createAppStateStore(options.userDataDir);
-  const extractionCacheDir =
-    options.extractionCacheDir ?? path.join(options.userDataDir, 'cache', 'models');
+  const extractionCacheDir = options.extractionCacheDir ?? defaultExtractionCacheDir(options.userDataDir);
+  const launcherOptions = {
+    platform: process.platform,
+    executablePath: defaultExtractorPath(),
+  } as const;
   const extractionLauncher: ExtractorLauncher =
-    options.extractionLauncher ??
-    resolveExtractorLauncher({
-      platform: process.platform,
-      executablePath: defaultExtractorPath(),
-    });
+    options.extractionLauncher ?? resolveExtractorLauncher(launcherOptions);
+  /**
+   * What this machine can honestly offer, reported with the queue.
+   *
+   * A caller that supplied its own launcher is the tests and nothing else, and
+   * it has by definition supplied a working one — asking the real machine about
+   * it would answer for a launcher nobody is using.
+   */
+  const capability: ExtractionCapability =
+    options.extractionLauncher === undefined
+      ? extractionCapability(launcherOptions)
+      : { available: true, code: '', reason: '' };
   let session: Session | null = null;
   /**
    * The extraction queue for the open project, or `null` when none is open.
@@ -1151,6 +1209,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       fileName: source.rawFileName,
       inputPath: rawPath,
       rawSha256: source.rawSha256,
+      rawByteSize: source.rawByteSize,
     });
   }
 
@@ -2469,6 +2528,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
               fileName,
               inputPath: absolutePath,
               rawSha256: digest.sha256,
+              rawByteSize: digest.byteSize,
             });
           }
 
@@ -2492,7 +2552,15 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
           (job: WireExtractionJob): boolean => job.cancellable,
         ),
         rows: jobs.slice(offset, offset + limit),
+        extractionAvailable: capability.available,
+        extractionUnavailableReason: capability.reason,
       };
+    },
+
+    extractionRunning(): boolean {
+      // No project open is not "nothing is running" by accident: closing a
+      // project shuts its queue down, so there is genuinely nothing to lose.
+      return extraction !== null && extraction.jobs().some((job) => job.cancellable);
     },
 
     cancelExtraction(sourceId: string): boolean {

@@ -44,6 +44,24 @@ const FAILURE_COPY: Readonly<Record<string, string>> = {
     'Nothing was left half-made. Add the file again to retry; if it stops the same way, the ' +
     'launcher kept a diagnostic stream file named in the detail below.',
 
+  [LAUNCHER_ERROR_CODES.navisworksStalled]:
+    'Navisworks stopped responding while reading this model and was shut down. It had not ' +
+    'written anything for a long time, which almost always means it is sitting behind a ' +
+    'window nobody can see — an Autodesk sign-in, a licence prompt, or the "recover unsaved ' +
+    'work" question after a previous run was stopped. Open Navisworks by hand once, answer ' +
+    'whatever it asks and close it, then add the model again.',
+
+  [LAUNCHER_ERROR_CODES.pluginNotDeployed]:
+    'The Matchline add-in is not installed for the Navisworks on this machine, so Navisworks ' +
+    'has nothing to read the model with. The folder it has to go in is named in the detail ' +
+    'below. Reinstall Matchline to put it there, or copy it in by hand and add the model again.',
+
+  [LAUNCHER_ERROR_CODES.pluginNotFound]:
+    'Navisworks started and closed again without ever handing Matchline the model, so nothing ' +
+    'was read. That normally means the add-in is installed but Navisworks did not load it — ' +
+    'check the Navisworks log named in the detail below, open Navisworks once by hand to let ' +
+    'it settle any prompts, then add the file again.',
+
   [LAUNCHER_ERROR_CODES.cacheWriteFailed]:
     'The model was read but the extraction cache failed its integrity check, so it was thrown ' +
     'away rather than kept. Check there is free disk space, then add the file again.',
@@ -59,9 +77,15 @@ const FAILURE_COPY: Readonly<Record<string, string>> = {
     'The extractor stopped on an error it did not expect. Add the file again; if it happens ' +
     'twice, report the detail below.',
 
+  // Deliberately not "nothing was written": a cancel that lands in the last
+  // seconds of a run arrives after the cache has been committed, and the row
+  // used to claim otherwise. What is true either way is that the project has
+  // nothing associated and that adding the file again is the way to run it —
+  // and that if a cache did get written, doing so costs nothing.
   [LAUNCHER_ERROR_CODES.cancelled]:
-    'Extraction was cancelled. Nothing was written and nothing was left half-made. Add the ' +
-    'file again when you want to run it.',
+    'Extraction was cancelled and nothing was left half-made. Add the file again when you want ' +
+    'to run it — if the extraction had already finished writing, that work is kept and adding ' +
+    'it again costs nothing instead of reading the model a second time.',
 
   /* --------------------------------------------------- from Matchline */
 
@@ -89,6 +113,11 @@ const FAILURE_COPY: Readonly<Record<string, string>> = {
     'no model data in it rather than a failed run — check you added the right file, or open ' +
     'it in Navisworks to confirm it holds geometry.',
 
+  [SERVICE_ERROR_CODES.fileChangedBeforeLaunch]:
+    'This file changed on disk while it was waiting its turn to be read, so it is no longer ' +
+    'the file this project measured. Matchline stopped rather than read one version and ' +
+    'record another. Add it again to work with the version that is there now.',
+
   [SERVICE_ERROR_CODES.cacheMismatch]:
     'The extraction cache says it came from different bytes than the file this project ' +
     'recorded, so it was not associated. Add the file again to extract it fresh.',
@@ -108,6 +137,10 @@ const WARNING_COPY: Readonly<Record<string, string>> = {
   ADAPTER_VERSION_UNKNOWN:
     'Matchline could not tell which Navisworks release opened this file, so it cannot say ' +
     'which adapter produced the cache.',
+  JOB_OBJECT_UNAVAILABLE:
+    'Windows would not let Matchline tie the Navisworks it started to this extraction. The ' +
+    'extraction itself is unaffected; the only difference is that force-quitting Matchline ' +
+    'mid-run could leave Navisworks running in the background, where Task Manager can end it.',
   STALE_CACHE_DISCARDED:
     'An earlier cache for these bytes was there but did not pass its checks, so it was ' +
     'discarded and the model was extracted again.',

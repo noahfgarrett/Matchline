@@ -22,6 +22,7 @@ import {
   failureCodesWithCopy,
 } from '../dist/electron/services/extraction-messages.js';
 import {
+  DEFAULT_STALL_TIMEOUT_SECONDS,
   EXTRACTION_STAGES,
   LAUNCHER_ERROR_CODES,
   SERVICE_ERROR_CODES,
@@ -493,6 +494,11 @@ test('a launcher failure reaches the row as its own sentence, with the detail af
     [LAUNCHER_ERROR_CODES.openFailed, /Close it everywhere else/],
     [LAUNCHER_ERROR_CODES.extractFailed, /model walk did not finish/],
     [LAUNCHER_ERROR_CODES.cacheWriteFailed, /failed its integrity check/],
+    // The three the launcher gained when it learned to notice a Navisworks that
+    // had stopped moving and an add-in that was never deployed.
+    [LAUNCHER_ERROR_CODES.navisworksStalled, /window nobody can see/],
+    [LAUNCHER_ERROR_CODES.pluginNotDeployed, /add-in is not installed/],
+    [LAUNCHER_ERROR_CODES.pluginNotFound, /without ever handing Matchline the model/],
   ];
 
   for (const [code, expected] of cases) {
@@ -871,7 +877,15 @@ test('the service hands the launcher the hash it already streamed', async () => 
     '/caches',
     '--input-sha256',
     'a'.repeat(64),
+    '--stall-timeout-seconds',
+    String(DEFAULT_STALL_TIMEOUT_SECONDS),
   ]);
+  assert.equal(
+    DEFAULT_STALL_TIMEOUT_SECONDS,
+    900,
+    'and it is the same fifteen minutes ExtractorArguments.DefaultStallTimeoutSeconds uses, so ' +
+      'a hand run from a shell behaves the way the app does',
+  );
 });
 
 test('a supplied hash skips the hash stage and addresses the cache', async () => {
@@ -1059,5 +1073,394 @@ test('removing a source stops the extraction it started', async (t) => {
     readdirSync(cacheDir).filter((name) => name.endsWith('.sqlite')),
     [],
     'and the half-finished extraction committed nothing',
+  );
+});
+
+/* ------------------------------------------------- hardening: the launcher watch */
+
+/**
+ * What a run that has stopped moving looks like from the outside.
+ *
+ * The launcher reports a stage the moment it reaches one, so silence is
+ * information: a model walk emits a line a second, and a run that says nothing
+ * for ten minutes is not slow, it is stuck — nearly always behind a modal
+ * dialog on a desktop nobody can see (the audit's B6). The service cannot
+ * dismiss that dialog and does not pretend to; what it owes the user is to say
+ * what it looks like, keep the run cancellable, and leave the decision to them.
+ */
+test('a run that goes quiet says so in the row, and is still the user\'s to cancel', async (t) => {
+  const cacheDir = newCacheDir('watchdog');
+  const modelPath = writeModel('Dragon-Quiet.nwd', { mode: 'hang' });
+  const extraction = createExtractionService({
+    cacheDirectory: cacheDir,
+    launcher: fakeLauncher(),
+    onChanged: () => {},
+    onSettled: () => {},
+    // A tenth of the real ten minutes and then some: the promise under test is
+    // "silence is noticed and named", not the size of the number.
+    stallWarningMs: 1_200,
+    watchdogIntervalMs: 40,
+    cancelGraceMs: 200,
+  });
+  t.after(() => {
+    extraction.shutdown();
+  });
+
+  extraction.enqueue({
+    sourceId: 'model:quiet',
+    fileName: 'Dragon-Quiet.nwd',
+    inputPath: modelPath,
+    rawSha256: null,
+  });
+
+  await waitFor(
+    () => extraction.job('model:quiet')?.detail.includes('No progress for') === true,
+    'the watchdog to notice the silence',
+  );
+
+  const stalled = extraction.job('model:quiet');
+  assert.match(stalled.detail, /Navisworks may be waiting on a dialog/);
+  assert.match(stalled.detail, /Cancel to stop/, 'and it names the one thing the user can do');
+  assert.equal(stalled.status, 'opening', 'the run is still running, not failed');
+  assert.equal(stalled.cancellable, true, 'and the Cancel button it points at is still there');
+  assert.equal(stalled.errorCode, null, 'nothing has gone wrong yet — it only looks stuck');
+
+  // And cancelling is what actually ends it: the watchdog never does.
+  assert.equal(extraction.cancel('model:quiet'), true);
+  await extraction.whenIdle();
+  assert.equal(extraction.job('model:quiet').status, 'cancelled');
+});
+
+/**
+ * Quitting asks before it signals.
+ *
+ * `shutdown()` used to write `cancel` and kill in the same tick, which on
+ * Windows is `TerminateProcess` — the launcher died before its stdin listener
+ * had read the line, so the headless Navisworks it started kept its licence,
+ * its memory and its handle on a stream file Matchline had already deleted.
+ * The order is the whole fix, so the order is what is asserted.
+ */
+test('closing the app asks the launcher to stop before it signals it', async (t) => {
+  const cacheDir = newCacheDir('shutdown');
+  const modelPath = writeModel('Dragon-Quit.nwd', {
+    walkTicks: 400,
+    tickMs: 25,
+    // Ignores the polite request, so the signal is guaranteed to be needed and
+    // the two log lines are guaranteed to both exist.
+    ignoreCancel: true,
+  });
+  const extraction = createExtractionService({
+    cacheDirectory: cacheDir,
+    launcher: fakeLauncher({ killGraceMs: 400 }),
+    onChanged: () => {},
+    onSettled: () => {},
+    shutdownGraceMs: 150,
+  });
+  t.after(() => {
+    extraction.shutdown();
+  });
+
+  extraction.enqueue({
+    sourceId: 'model:quit',
+    fileName: 'Dragon-Quit.nwd',
+    inputPath: modelPath,
+    rawSha256: null,
+  });
+  await waitFor(
+    () => extraction.job('model:quit')?.status === 'extracting',
+    'the run to be well underway',
+  );
+
+  extraction.shutdown();
+  await waitFor(
+    () => launchLog(cacheDir).some((line) => line.startsWith('sigterm ')),
+    'the signal that follows the polite request',
+  );
+
+  const log = launchLog(cacheDir);
+  const askedAt = log.findIndex((line) => line.startsWith('cancel '));
+  const signalledAt = log.findIndex((line) => line.startsWith('sigterm '));
+  assert.ok(askedAt >= 0, `the cancel line was delivered (saw ${log.join(' / ')})`);
+  assert.ok(signalledAt > askedAt, 'and the signal came after it, not in the same breath');
+
+  await extraction.whenIdle();
+  assert.equal(extraction.job('model:quit').status, 'cancelled');
+});
+
+/* --------------------------------------------- hardening: proving the file again */
+
+/**
+ * The queue is serial, so "hashed" and "read" are two different moments.
+ *
+ * A model can wait an hour behind another. If it is re-issued in place while it
+ * waits, extracting it anyway would stamp the new bytes with the old hash: the
+ * cache would validate, the project would record it, and every number behind
+ * the compile would belong to a file nobody approved.
+ */
+test('a model that changed while it waited its turn is refused rather than extracted', async (t) => {
+  const cacheDir = newCacheDir('changed-in-queue');
+  const slowPath = writeModel('Queue-Slow.nwd', { walkTicks: 60, tickMs: 25 });
+  const reissuedPath = join(workDir, 'Queue-Reissued.nwd');
+  writeFileSync(reissuedPath, 'MATCHLINE-FAKE {}\nrevision A\n');
+
+  const extraction = createExtractionService({
+    cacheDirectory: cacheDir,
+    launcher: fakeLauncher(),
+    onChanged: () => {},
+    onSettled: () => {},
+  });
+  t.after(() => {
+    extraction.shutdown();
+  });
+
+  extraction.enqueue({
+    sourceId: 'model:slow',
+    fileName: 'Queue-Slow.nwd',
+    inputPath: slowPath,
+    rawSha256: null,
+  });
+  extraction.enqueue({
+    sourceId: 'model:reissued',
+    fileName: 'Queue-Reissued.nwd',
+    inputPath: reissuedPath,
+    rawSha256: null,
+  });
+
+  await waitFor(
+    () => extraction.job('model:slow')?.status === 'extracting',
+    'the first model to occupy the queue',
+  );
+  // Re-issued in place, exactly as a consultant re-exporting over the same
+  // path would do it.
+  writeFileSync(reissuedPath, 'MATCHLINE-FAKE {}\nrevision B, and rather longer than A\n');
+
+  await extraction.whenIdle();
+
+  const job = extraction.job('model:reissued');
+  assert.equal(job.status, 'failed');
+  assert.equal(job.errorCode, SERVICE_ERROR_CODES.fileChangedBeforeLaunch);
+  assert.match(job.note, /changed on disk while it was waiting/);
+  assert.match(job.note, /Add it again/, 'and says what to do about it');
+  assert.deepEqual(
+    launchLog(cacheDir).filter((line) => line.includes('Queue-Reissued')),
+    [],
+    'Navisworks was never started for the file that moved',
+  );
+  assert.equal(extraction.job('model:slow').status, 'ready', 'and the run in front finished');
+});
+
+/* ----------------------------------------- hardening: a cache that failed its checks */
+
+/**
+ * "Add the file again to extract it fresh" has to be true.
+ *
+ * A cache that fails validation used to be left exactly where the next run
+ * would look for it, and the launcher's own inspector — which checks a cache's
+ * integrity but has no way to know which model this project thinks it belongs
+ * to — handed it straight back. The row's advice could therefore never work.
+ */
+test('a cache that fails validation is moved aside so adding the file again re-extracts', async (t) => {
+  const cacheDir = newCacheDir('rejected');
+  const modelPath = writeModel('Dragon-Rejected.nwd', { mode: 'mismatch' });
+  const extraction = createExtractionService({
+    cacheDirectory: cacheDir,
+    launcher: fakeLauncher(),
+    onChanged: () => {},
+    onSettled: () => {},
+  });
+  t.after(() => {
+    extraction.shutdown();
+  });
+
+  const request = {
+    sourceId: 'model:rejected',
+    fileName: 'Dragon-Rejected.nwd',
+    inputPath: modelPath,
+    rawSha256: null,
+  };
+  extraction.enqueue(request);
+  await extraction.whenIdle();
+
+  const first = extraction.job('model:rejected');
+  assert.equal(first.errorCode, SERVICE_ERROR_CODES.cacheMismatch);
+  assert.match(first.note, /rejected cache was kept at/, 'the row says where it went');
+
+  const afterFirst = readdirSync(cacheDir);
+  assert.deepEqual(
+    afterFirst.filter((name) => name.endsWith('.sqlite')),
+    [],
+    'nothing is left at the name the next run would find',
+  );
+  assert.ok(
+    afterFirst.some((name) => name.includes('.rejected-')),
+    `the bad cache was kept for diagnosis (saw ${afterFirst.join(', ')})`,
+  );
+
+  // Which is the point: the second add really does run the extractor again
+  // rather than being served the cache that was just refused.
+  extraction.enqueue(request);
+  await extraction.whenIdle();
+  assert.equal(
+    launchLog(cacheDir).filter((line) => line.startsWith('start')).length,
+    2,
+    'adding the file again extracted it again',
+  );
+});
+
+/* ------------------------------------------------ hardening: re-adding the same file */
+
+/**
+ * Re-adding a model nobody has changed is a question, not an instruction.
+ *
+ * "Did that work?" is the commonest reason to drop the same file twice, and
+ * killing a run that is twenty minutes into a large model in order to start the
+ * identical run again is the one answer that is never what was meant.
+ */
+test('re-adding the same bytes while they are being read leaves the run alone', async (t) => {
+  const cacheDir = newCacheDir('same-bytes');
+  const modelPath = writeModel('Dragon-Same.nwd', { walkTicks: 40, tickMs: 25 });
+  const sha256 = (await digestFile(modelPath)).sha256;
+  const extraction = createExtractionService({
+    cacheDirectory: cacheDir,
+    launcher: fakeLauncher(),
+    onChanged: () => {},
+    onSettled: () => {},
+  });
+  t.after(() => {
+    extraction.shutdown();
+  });
+
+  const request = {
+    sourceId: 'model:same',
+    fileName: 'Dragon-Same.nwd',
+    inputPath: modelPath,
+    rawSha256: sha256,
+  };
+  extraction.enqueue(request);
+  await waitFor(
+    () => extraction.job('model:same')?.status === 'extracting',
+    'the run to be underway',
+  );
+  const startedAt = extraction.job('model:same').startedAt;
+
+  extraction.enqueue(request);
+  await extraction.whenIdle();
+
+  const job = extraction.job('model:same');
+  assert.equal(job.status, 'ready', 'the run that was already going is the one that finished');
+  assert.equal(job.startedAt, startedAt, 'and it was never replaced by a second job');
+  assert.equal(
+    launchLog(cacheDir).filter((line) => line.startsWith('start')).length,
+    1,
+    'the extractor ran once, not once killed and once again',
+  );
+});
+
+/* --------------------------------------------------- hardening: the hash stage line */
+
+/**
+ * A row must not walk backwards.
+ *
+ * The launcher announces the hash stage even when it was handed the hash and
+ * did not compute one — a single line, already complete, so a parent drawing
+ * progress from these lines does not see a stage go missing. Relaying it
+ * unchanged made the row read `opening` → `hashing 100%` → `opening` for work
+ * that never happened.
+ */
+test('the launcher\'s hash line is ignored for a job whose hash was supplied', async (t) => {
+  const cacheDir = newCacheDir('hash-line');
+  const modelPath = writeModel('Dragon-Prehashed.nwd', { walkTicks: 1 });
+  const sha256 = (await digestFile(modelPath)).sha256;
+
+  const statuses = [];
+  const extraction = createExtractionService({
+    cacheDirectory: cacheDir,
+    launcher: fakeLauncher(),
+    onChanged: (job) => statuses.push(job.status),
+    onSettled: () => {},
+  });
+  t.after(() => {
+    extraction.shutdown();
+  });
+
+  extraction.enqueue({
+    sourceId: 'model:prehashed',
+    fileName: 'Dragon-Prehashed.nwd',
+    inputPath: modelPath,
+    rawSha256: sha256,
+  });
+  await extraction.whenIdle();
+
+  assert.equal(extraction.job('model:prehashed').status, 'ready');
+  assert.equal(
+    statuses.includes('hashing'),
+    false,
+    `the row never claimed to be hashing a file nobody hashed (saw ${statuses.join(', ')})`,
+  );
+  assert.deepEqual(
+    [...new Set(statuses)],
+    ['queued', 'opening', 'extracting', 'finalizing', 'ready'],
+    'it steps forward through the stages and never back',
+  );
+});
+
+/* ------------------------------------------- hardening: a cancel at the last moment */
+
+/**
+ * A cancel that lands after the cache is written is still a cancel.
+ *
+ * The race is real: the row spends its last seconds in `finalizing` with a
+ * committed cache already on disk, and a Cancel pressed there used to settle
+ * `ready` — the app disagreeing with the button that was pressed. What it must
+ * do instead is agree, associate nothing, and say honestly that the finished
+ * work was kept.
+ */
+test('a cancel during the integrity check settles cancelled, and keeps what was written', async (t) => {
+  const cacheDir = newCacheDir('late-cancel');
+  const modelPath = writeModel('Dragon-Late.nwd', {
+    walkTicks: 1,
+    // The launcher is past the point of no return: the cache is committed and
+    // the result line is about to be written, and it is not listening any more.
+    lingerMs: 700,
+    ignoreCancel: true,
+  });
+
+  const settled = [];
+  const extraction = createExtractionService({
+    cacheDirectory: cacheDir,
+    launcher: fakeLauncher(),
+    onChanged: () => {},
+    onSettled: (job) => settled.push(job),
+    cancelGraceMs: 5_000,
+  });
+  t.after(() => {
+    extraction.shutdown();
+  });
+
+  extraction.enqueue({
+    sourceId: 'model:late',
+    fileName: 'Dragon-Late.nwd',
+    inputPath: modelPath,
+    rawSha256: null,
+  });
+  await waitFor(
+    () => extraction.job('model:late')?.status === 'finalizing',
+    'the run to reach the integrity check',
+  );
+  assert.equal(extraction.cancel('model:late'), true);
+  await extraction.whenIdle();
+
+  assert.equal(settled.length, 1);
+  assert.equal(settled[0].status, 'cancelled', 'the button that was pressed is what the row says');
+  assert.equal(extraction.job('model:late').objectCount, null, 'and nothing was associated');
+  assert.match(
+    settled[0].note,
+    /that work is kept/,
+    'the copy no longer claims nothing was written, because something was',
+  );
+  assert.equal(
+    readdirSync(cacheDir).filter((name) => name.endsWith('.sqlite')).length,
+    1,
+    'the committed cache is kept, so adding the file again costs nothing',
   );
 });

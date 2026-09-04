@@ -554,12 +554,26 @@ export const IPC_CHANNELS = {
       /** True while any job is queued or running, so the UI knows to keep polling. */
       active: z.boolean(),
       rows: z.array(extractionJobSchema),
+      /**
+       * False on a machine that cannot run the extractor at all — not Windows,
+       * or Windows with the launcher missing.
+       *
+       * It rides with the queue because it is the same subject and because
+       * screen 1 already polls this channel: the screen can then say "models
+       * cannot be extracted here, add a cache made on Windows instead" up
+       * front, rather than only after a dropped model has failed.
+       */
+      extractionAvailable: z.boolean(),
+      /** Why not, in one sentence. `''` when extraction is available. */
+      extractionUnavailableReason: z.string(),
     }),
     example: {
       request: { offset: 0, limit: 50 },
       response: {
         total: 1,
         active: true,
+        extractionAvailable: true,
+        extractionUnavailableReason: '',
         rows: [
           {
             sourceId: 'model:dragon-coordination.nwd',

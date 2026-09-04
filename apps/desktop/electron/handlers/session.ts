@@ -252,7 +252,13 @@ export function createSessionHandlers(
       request: IpcRequest<'extraction:status'>,
     ): Promise<IpcResponse<'extraction:status'>> {
       const page = guard(() => service.extractionStatus(request.offset, request.limit));
-      return { total: page.total, active: page.active, rows: [...page.rows] };
+      return {
+        total: page.total,
+        active: page.active,
+        rows: [...page.rows],
+        extractionAvailable: page.extractionAvailable,
+        extractionUnavailableReason: page.extractionUnavailableReason,
+      };
     },
 
     async 'extraction:cancel'(

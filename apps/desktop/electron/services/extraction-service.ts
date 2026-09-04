@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import { openExtractionCache } from '@matchline/model-schema';
@@ -17,6 +17,7 @@ import {
   describeExtractionWarning,
 } from './extraction-messages.js';
 import {
+  DEFAULT_STALL_TIMEOUT_SECONDS,
   LAUNCHER_ERROR_CODES,
   SERVICE_ERROR_CODES,
   cacheFileName,
@@ -82,6 +83,31 @@ const MAX_KEPT_WARNINGS = 20;
 /** How long a polite cancel has before the child is signalled. */
 const DEFAULT_CANCEL_GRACE_MS = 10_000;
 
+/**
+ * How long a closing app waits for the launcher to stop on its own.
+ *
+ * Short, because the window is already going. Long enough to matter: the
+ * launcher answers a cancel line by killing the Navisworks it started and
+ * deleting its partials, and a signal skips all three — on Windows `kill` is
+ * `TerminateProcess`, which runs no cleanup at all and used to leave a headless
+ * Navisworks holding a licence after Matchline had gone.
+ */
+const DEFAULT_SHUTDOWN_GRACE_MS = 2_000;
+
+/**
+ * How long a running job may say nothing before the row admits it looks stuck.
+ *
+ * Ten minutes. Only a sentence in the row, never an action: the extraction is
+ * still running and may still finish — a genuinely huge model can spend a long
+ * time between lines — so this offers the user the Cancel button rather than
+ * pressing it. The launcher's own `--stall-timeout-seconds` is what eventually
+ * gives up, and it is deliberately later than this.
+ */
+const DEFAULT_STALL_WARNING_MS = 600_000;
+
+/** How often running jobs are checked against {@link DEFAULT_STALL_WARNING_MS}. */
+const DEFAULT_WATCHDOG_INTERVAL_MS = 30_000;
+
 export interface ExtractionJobRequest {
   readonly sourceId: string;
   /** What the row calls this file — the raw document, never a cache. */
@@ -94,6 +120,16 @@ export interface ExtractionJobRequest {
    * no recorded hash falls back on.
    */
   readonly rawSha256: string | null;
+  /**
+   * The file's size in bytes when the caller measured it, or omitted to have
+   * the job measure it as it queues.
+   *
+   * Recorded so the file can be re-proved immediately before the launcher
+   * starts: the queue is serial, "measured at registration" can be an hour
+   * before "opened by Navisworks", and a model re-issued in place in between
+   * would otherwise be extracted and then stamped with the old hash.
+   */
+  readonly rawByteSize?: number;
 }
 
 /** What a finished job produced. Everything the session needs to associate it. */
@@ -118,6 +154,14 @@ export interface ExtractionServiceOptions {
   /** A job that has stopped. `outcome` is null unless a cache was associated. */
   readonly onSettled: (job: WireExtractionJob, outcome: ExtractionOutcome | null) => void;
   readonly cancelGraceMs?: number;
+  /** How long a closing app waits for a polite cancel before signalling. */
+  readonly shutdownGraceMs?: number;
+  /** Silence after which a running row says it may be waiting on a dialog. */
+  readonly stallWarningMs?: number;
+  /** How often the watchdog looks. Only worth setting in a test. */
+  readonly watchdogIntervalMs?: number;
+  /** Passed to the launcher as `--stall-timeout-seconds`. */
+  readonly stallTimeoutSeconds?: number;
 }
 
 export interface ExtractionService {
@@ -125,6 +169,10 @@ export interface ExtractionService {
    * Queues one file. A job already queued for this source is replaced and an
    * active one is cancelled first, so re-adding a changed model re-extracts it
    * under the same source id rather than racing the run it supersedes.
+   *
+   * The exception is re-adding the *same* bytes from the same path while they
+   * are already being read: that run is left alone, because stopping it to
+   * start an identical one is never what the person clicking meant.
    */
   enqueue(request: ExtractionJobRequest): void;
   /** True when there was something to cancel. */
@@ -134,7 +182,13 @@ export interface ExtractionService {
   job(sourceId: string): WireExtractionJob | null;
   /** Forgets a settled job — used when its source is removed. */
   forget(sourceId: string): void;
-  /** Cancels everything, in-flight children included. */
+  /**
+   * Cancels everything, in-flight children included.
+   *
+   * The active child is asked politely first and only signalled if it is still
+   * there a couple of seconds later, because the polite request is the only one
+   * that takes the headless Navisworks with it.
+   */
   shutdown(): void;
   /**
    * Resolves when nothing is queued or running.
@@ -161,6 +215,27 @@ interface Job {
   readonly startedAt: string;
   finishedAt: string | null;
   cancelRequested: boolean;
+  /**
+   * True when the caller supplied the hash, so the launcher will not compute
+   * one. Its `hash` stage line is then a formality — announced complete — and
+   * relaying it would walk the row backwards from `opening` to `hashing`.
+   */
+  readonly hashWasSupplied: boolean;
+  /** When this job last heard anything from the launcher. Epoch milliseconds. */
+  lastMessageAt: number;
+  /**
+   * Whole minutes of silence the row has already reported, or `-1` for none.
+   *
+   * It is what keeps the watchdog from announcing the same sentence every time
+   * it looks: the row is updated when the count of minutes changes and not
+   * otherwise, so a run that is stuck for an hour produces one line an hour
+   * rather than one every thirty seconds.
+   */
+  stallWarnedMinutes: number;
+  /** The file's size when the job was queued, or `null` when it could not be read. */
+  readonly expectedByteSize: number | null;
+  /** The file's mtime when the job was queued, or `null` when it could not be read. */
+  readonly expectedMtimeMs: number | null;
 }
 
 interface ActiveRun {
@@ -273,6 +348,10 @@ function detailForStage(stage: string, done: number, total: number, sent: string
 
 export function createExtractionService(options: ExtractionServiceOptions): ExtractionService {
   const cancelGraceMs = options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
+  const shutdownGraceMs = options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
+  const stallWarningMs = options.stallWarningMs ?? DEFAULT_STALL_WARNING_MS;
+  const watchdogIntervalMs = options.watchdogIntervalMs ?? DEFAULT_WATCHDOG_INTERVAL_MS;
+  const stallTimeoutSeconds = options.stallTimeoutSeconds ?? DEFAULT_STALL_TIMEOUT_SECONDS;
   /** Insertion-ordered, and the order the status list is reported in. */
   const jobs = new Map<string, Job>();
   const queue: string[] = [];
@@ -404,17 +483,54 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
    * belonging to a different model. Associating any of the three would put
    * numbers nobody produced behind a compile.
    */
-  function validateCache(cachePath: string, rawSha256: string): CacheValidation {
+  /**
+   * Moves a cache that failed validation out of the way, and answers where it
+   * went.
+   *
+   * Renamed rather than deleted, and renamed rather than left alone. Left
+   * alone, "add the file again to extract it fresh" could never work: the next
+   * run finds a file at exactly the name it would write, and the launcher's own
+   * inspector — which checks the cache's integrity but cannot know which model
+   * the app thinks it belongs to — hands it straight back. Deleted, the one
+   * artefact that could explain the mismatch would be gone before anyone looked
+   * at it.
+   */
+  function setAsideRejectedCache(cachePath: string): string | null {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const target = `${cachePath}.rejected-${stamp}`;
+    try {
+      renameSync(cachePath, target);
+      return target;
+    } catch {
+      // A cache that will not move is not a reason to fail differently: the
+      // failure being reported is the one the user needs to see.
+      return null;
+    }
+  }
+
+  /** True for the failures that mean the file on disk must not be reused. */
+  function isReplaceableCacheFailure(code: string): boolean {
+    return code === SERVICE_ERROR_CODES.cacheMismatch || code === SERVICE_ERROR_CODES.cacheEmpty;
+  }
+
+  function validateCache(
+    cachePath: string,
+    rawSha256: string,
+    expectedByteSize: number | null,
+  ): CacheValidation {
     let objectCount = 0;
     let sourceModelCount = 0;
     let inputSha256 = '';
+    let inputBytes = 0;
 
     try {
       const cache = openExtractionCache(cachePath);
       try {
         objectCount = cache.objectCount();
         sourceModelCount = cache.sourceModels().length;
-        inputSha256 = cache.meta().inputSha256;
+        const meta = cache.meta();
+        inputSha256 = meta.inputSha256;
+        inputBytes = meta.inputBytes;
       } finally {
         cache.close();
       }
@@ -433,6 +549,21 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
         ok: false,
         code: SERVICE_ERROR_CODES.cacheMismatch,
         detail: `The cache records input_sha256 ${inputSha256}; this file hashes to ${rawSha256}.`,
+        objectCount,
+        sourceModelCount,
+      };
+    }
+    // Cheap, and it catches the one case the hash cannot: a launcher that was
+    // handed `--input-sha256` trusts it, so a cache filed under the right hash
+    // can still have been built from a file of a different length. The size is
+    // the launcher's own measurement of what it actually opened.
+    if (expectedByteSize !== null && inputBytes !== expectedByteSize) {
+      return {
+        ok: false,
+        code: SERVICE_ERROR_CODES.cacheMismatch,
+        detail:
+          `The cache was built from ${String(inputBytes)} bytes; this file is ` +
+          `${String(expectedByteSize)} bytes.`,
         objectCount,
         sourceModelCount,
       };
@@ -468,6 +599,14 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
       );
       return;
     }
+    // Hashing the cache is the last asynchronous step in a run, and a cancel
+    // that arrives during it used to lose: the flag was checked before the
+    // await and never again, so a job cancelled while `finalizing` settled
+    // `ready`. The user pressed the button; the row has to agree with it.
+    if (job.cancelRequested) {
+      settleFailure(job, LAUNCHER_ERROR_CODES.cancelled, 'Extraction cancelled.');
+      return;
+    }
     settleSuccess(job, {
       sourceId: job.sourceId,
       cachePath,
@@ -488,17 +627,40 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
 
   /** Runs the launcher and resolves when the child has exited and been judged. */
   function runLauncher(job: Job, rawSha256: string): Promise<void> {
+    // The clock the watchdog reads starts here, not when the job was queued: a
+    // model that waited an hour behind another has been silent for an hour, and
+    // announcing that the moment it finally starts would be the queue working
+    // exactly as designed, reported as a fault.
+    job.lastMessageAt = Date.now();
+    job.stallWarnedMinutes = -1;
     return new Promise<void>((resolve): void => {
       let result: { readonly status: 'ok' | 'cache-hit'; readonly cachePath: string } | null = null;
       let failure: { readonly code: string; readonly message: string } | null = null;
       let settled = false;
 
       const child = options.launcher(
-        extractorArguments(job.inputPath, options.cacheDirectory, rawSha256),
+        extractorArguments(
+          job.inputPath,
+          options.cacheDirectory,
+          rawSha256,
+          stallTimeoutSeconds,
+        ),
         {
           onMessage(message: ExtractionMessage): void {
+            // Any line at all is proof of life, whether or not this build knows
+            // what to do with it. The watchdog reads nothing else.
+            job.lastMessageAt = Date.now();
+            job.stallWarnedMinutes = -1;
             switch (message.type) {
               case 'progress': {
+                // The launcher announces the hash stage even when it was handed
+                // the hash and did not compute one (ExtractionRunner.Run), and
+                // relaying that would walk the row backwards: `opening` →
+                // `hashing` at 100% → `opening` again, for a stage that never
+                // ran.
+                if (message.stage === 'hash' && job.hashWasSupplied) {
+                  return;
+                }
                 const status = statusForStage(message.stage);
                 if (status === null) {
                   return;
@@ -557,9 +719,24 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
               if (result !== null) {
                 const produced: { readonly status: 'ok' | 'cache-hit'; readonly cachePath: string } =
                   result;
-                const validation = validateCache(produced.cachePath, rawSha256);
+                const validation = validateCache(
+                  produced.cachePath,
+                  rawSha256,
+                  job.expectedByteSize,
+                );
                 if (!validation.ok) {
-                  settleFailure(job, validation.code, validation.detail);
+                  // Moved aside first, so that the "add the file again to
+                  // extract it fresh" the row is about to print is true.
+                  const setAside = isReplaceableCacheFailure(validation.code)
+                    ? setAsideRejectedCache(produced.cachePath)
+                    : null;
+                  settleFailure(
+                    job,
+                    validation.code,
+                    setAside === null
+                      ? validation.detail
+                      : `${validation.detail} The rejected cache was kept at ${setAside}.`,
+                  );
                   resolve();
                   return;
                 }
@@ -615,6 +792,46 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
     run.killTimer = timer;
   }
 
+  /**
+   * What changed about the input file since the job was queued, or `null` when
+   * nothing did.
+   *
+   * Size and mtime, not a re-hash: this runs on the main process immediately
+   * before a launch, and re-reading a multi-gigabyte model to prove it is
+   * unchanged would cost exactly what `--input-sha256` exists to save. The two
+   * cheap facts catch the case that matters — a model re-issued in place — and
+   * the launcher's own read is what would fail on anything subtler.
+   *
+   * A file that cannot be stat-ed at all is not reported here: it is either
+   * gone, which the launcher reports as INPUT_NOT_FOUND with the file name, or
+   * unreadable, which is an open failure. Inventing a third answer from a
+   * failed stat would put the wrong sentence in the row.
+   */
+  function describeFileChange(job: Job): string | null {
+    if (job.expectedByteSize === null) {
+      return null;
+    }
+    let current: { readonly size: number; readonly mtimeMs: number };
+    try {
+      current = statSync(job.inputPath);
+    } catch {
+      return null;
+    }
+    if (current.size !== job.expectedByteSize) {
+      return (
+        `${job.fileName} was ${String(job.expectedByteSize)} bytes when it was added and is ` +
+        `${String(current.size)} bytes now.`
+      );
+    }
+    if (job.expectedMtimeMs !== null && current.mtimeMs !== job.expectedMtimeMs) {
+      return (
+        `${job.fileName} was written again at ` +
+        `${new Date(current.mtimeMs).toISOString()}, after it was added to this project.`
+      );
+    }
+    return null;
+  }
+
   async function runJob(job: Job): Promise<void> {
     if (job.rawSha256 === null) {
       moveTo(job, 'hashing', null, '');
@@ -657,20 +874,37 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
       return;
     }
 
+    // The last moment the file can still be proved to be the one that was
+    // queued, and it comes before the cache-hit check on purpose: a stale cache
+    // for the bytes this project recorded is exactly what a re-issued file
+    // would be served, and serving it would leave a source looking ready while
+    // the file behind it says something else.
+    const changed = describeFileChange(job);
+    if (changed !== null) {
+      settleFailure(job, SERVICE_ERROR_CODES.fileChangedBeforeLaunch, changed);
+      return;
+    }
+
     // The cache-hit check happens here as well as inside the launcher, and
     // that is the point: a model that has not changed must never start
     // Navisworks at all (docs/EXTRACTION.md, "Cache reuse by content hash").
     const cachePath = path.join(options.cacheDirectory, cacheFileName(rawSha256));
     if (existsSync(cachePath)) {
-      const validation = validateCache(cachePath, rawSha256);
+      const validation = validateCache(cachePath, rawSha256, job.expectedByteSize);
       if (validation.ok) {
         await associate(job, cachePath, rawSha256, validation, true);
         return;
       }
-      // Present but not trustworthy. Left where it is: the launcher discards a
-      // stale cache itself and says so with STALE_CACHE_DISCARDED, and two
-      // processes deleting the same file is one race nobody needs.
+      // Present and not trustworthy. Moved aside rather than left where it is:
+      // the launcher's own inspector checks a cache's integrity but has no way
+      // to know which model this project thinks it belongs to, so a cache that
+      // failed the checks above would be handed straight back by the run that
+      // is about to start.
+      if (isReplaceableCacheFailure(validation.code)) {
+        setAsideRejectedCache(cachePath);
+      }
     }
+
 
     // The hash goes on the command line (`--input-sha256`), so the launcher
     // does not read the whole model again to work out what it already knows —
@@ -689,6 +923,76 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
       waiter();
     }
   }
+
+  /**
+   * The size and mtime the job will later be re-proved against.
+   *
+   * The caller's `rawByteSize` wins when it has one, because it is the size of
+   * the very bytes it hashed. The mtime can only be read here, and a stat that
+   * fails leaves both unknown rather than guessed — a job with nothing recorded
+   * simply skips the re-check.
+   */
+  function measureInput(
+    request: ExtractionJobRequest,
+  ): { readonly byteSize: number | null; readonly mtimeMs: number | null } {
+    try {
+      const stats = statSync(request.inputPath);
+      return {
+        byteSize: request.rawByteSize ?? stats.size,
+        mtimeMs: stats.mtimeMs,
+      };
+    } catch {
+      return { byteSize: request.rawByteSize ?? null, mtimeMs: null };
+    }
+  }
+
+  /**
+   * Says so, in the row, when a running job has gone quiet.
+   *
+   * The launcher reports a stage the moment it reaches one, so silence is
+   * information: a model walk emits a line a second, and nothing at all for ten
+   * minutes means Navisworks is not walking. The commonest cause by far is a
+   * modal dialog on a desktop nobody can see, which the launcher cannot dismiss
+   * and this process cannot even detect — so the row says what it looks like
+   * and points at the button the user does have.
+   *
+   * It never cancels anything. Deciding a run is dead is the launcher's job
+   * (`--stall-timeout-seconds`), and it waits longer than this on purpose.
+   */
+  /** "12 minutes", or seconds below a minute — which only a test ever sees. */
+  function describeSilence(silentForMs: number): string {
+    const minutes = Math.floor(silentForMs / 60_000);
+    if (minutes >= 1) {
+      return `${String(minutes)} ${minutes === 1 ? 'minute' : 'minutes'}`;
+    }
+    const seconds = Math.max(1, Math.round(silentForMs / 1000));
+    return `${String(seconds)} ${seconds === 1 ? 'second' : 'seconds'}`;
+  }
+
+  function checkForStall(): void {
+    const run = active;
+    if (run === null || !RUNNING_STATUSES.has(run.job.status)) {
+      return;
+    }
+    const silentFor = Date.now() - run.job.lastMessageAt;
+    if (silentFor < stallWarningMs) {
+      return;
+    }
+    const minutes = Math.floor(silentFor / 60_000);
+    if (minutes <= run.job.stallWarnedMinutes) {
+      return;
+    }
+    run.job.stallWarnedMinutes = minutes;
+    run.job.detail =
+      `No progress for ${describeSilence(silentFor)} — Navisworks may be waiting on a dialog. ` +
+      'Cancel to stop.';
+    announce(run.job, null, false);
+  }
+
+  const watchdog = setInterval(checkForStall, watchdogIntervalMs);
+  // A timer that watches for silence must never be the reason a process stays
+  // alive to hear it.
+  watchdog.unref();
 
   async function pump(): Promise<void> {
     if (pumping) {
@@ -721,6 +1025,18 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
       }
       const previous = jobs.get(request.sourceId);
       if (previous !== undefined && RUNNING_STATUSES.has(previous.status)) {
+        // The same file, byte for byte, asked for again while it is already
+        // being read. Re-adding a model the user has not changed is a common
+        // way to ask "did that work?", and killing a run that is minutes into a
+        // large model to start the identical run again is the one answer that
+        // is never what they meant.
+        if (
+          previous.rawSha256 !== null &&
+          previous.rawSha256 === request.rawSha256 &&
+          previous.inputPath === request.inputPath
+        ) {
+          return;
+        }
         // Same source, new bytes (or a retry). The run in flight is stopped
         // rather than left to finish and associate a cache for a file this
         // project no longer describes.
@@ -730,6 +1046,7 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
         }
       }
 
+      const measured = measureInput(request);
       const job: Job = {
         sourceId: request.sourceId,
         fileName: request.fileName,
@@ -746,6 +1063,11 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
         startedAt: new Date().toISOString(),
         finishedAt: null,
         cancelRequested: false,
+        hashWasSupplied: request.rawSha256 !== null,
+        lastMessageAt: Date.now(),
+        stallWarnedMinutes: -1,
+        expectedByteSize: measured.byteSize,
+        expectedMtimeMs: measured.mtimeMs,
       };
       // Re-inserted rather than updated, so a job that is being superseded can
       // still tell it is no longer the one for its source (see `announce`).
@@ -807,16 +1129,31 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
     shutdown(): void {
       stopped = true;
       queue.length = 0;
+      clearInterval(watchdog);
       for (const job of jobs.values()) {
         job.cancelRequested = true;
       }
       const run = active;
-      if (run !== null) {
-        // Closing a project is not the moment for a ten-second grace period:
-        // ask and signal together, so no Navisworks outlives the window.
-        run.child.requestCancel();
-        run.child.kill();
+      if (run === null) {
+        return;
       }
+      // Ask first, and give the answer a moment to land. Asking and signalling
+      // in the same tick meant the launcher was dead before its stdin listener
+      // had read the line — on Windows `kill` is `TerminateProcess`, which runs
+      // no cleanup — so the headless Navisworks it had started kept its licence,
+      // its memory and its write handle on a stream file Matchline had already
+      // deleted.
+      run.child.requestCancel();
+      const signal = setTimeout((): void => {
+        // Still the same run, still not exited: SIGTERM now, and the launcher's
+        // own escalation turns that into SIGKILL after its grace period.
+        if (active === run) {
+          run.child.kill();
+        }
+      }, shutdownGraceMs);
+      // Two seconds of grace must not become two seconds of a process that
+      // wanted to exit.
+      signal.unref();
     },
 
     whenIdle(): Promise<void> {

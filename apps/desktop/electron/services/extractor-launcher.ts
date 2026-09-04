@@ -277,17 +277,46 @@ export interface ResolveLauncherOptions {
  * start a process.
  */
 export function resolveExtractorLauncher(options: ResolveLauncherOptions): ExtractorLauncher {
-  if (options.platform !== 'win32') {
-    return createUnavailableExtractorLauncher(
-      SERVICE_ERROR_CODES.unavailableOnThisPlatform,
-      `Navisworks runs on Windows only, and this copy of Matchline is running on ${options.platform}.`,
-    );
-  }
-  if (!existsSync(options.executablePath)) {
-    return createUnavailableExtractorLauncher(
-      SERVICE_ERROR_CODES.extractorNotInstalled,
-      `${EXTRACTOR_EXECUTABLE} was not found at ${options.executablePath}.`,
-    );
+  const capability = extractionCapability(options);
+  if (!capability.available) {
+    return createUnavailableExtractorLauncher(capability.code, capability.reason);
   }
   return createProcessExtractorLauncher({ command: options.executablePath });
+}
+
+/**
+ * Whether this machine can extract at all, and why not when it cannot.
+ *
+ * The same question {@link resolveExtractorLauncher} answers, asked without
+ * starting anything — because the honest place to say "not here" is before a
+ * file is dropped, not in a row that says `failed` afterwards. A Mac is a
+ * perfectly good machine for everything else Matchline does; it simply has no
+ * Navisworks to drive, and telling the user that up front is the difference
+ * between a limitation and a fault.
+ */
+export interface ExtractionCapability {
+  readonly available: boolean;
+  /** The failure code a job would settle with, or `''` when extraction works. */
+  readonly code: string;
+  /** One sentence naming what is missing, or `''` when nothing is. */
+  readonly reason: string;
+}
+
+export function extractionCapability(options: ResolveLauncherOptions): ExtractionCapability {
+  if (options.platform !== 'win32') {
+    return {
+      available: false,
+      code: SERVICE_ERROR_CODES.unavailableOnThisPlatform,
+      reason:
+        `Navisworks runs on Windows only, and this copy of Matchline is running on ${options.platform}.`,
+    };
+  }
+  if (!existsSync(options.executablePath)) {
+    return {
+      available: false,
+      code: SERVICE_ERROR_CODES.extractorNotInstalled,
+      reason: `${EXTRACTOR_EXECUTABLE} was not found at ${options.executablePath}.`,
+    };
+  }
+  return { available: true, code: '', reason: '' };
 }

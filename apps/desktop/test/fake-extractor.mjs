@@ -25,8 +25,10 @@ import { writeDragonFixture } from '@matchline/model-schema/fixtures/dragon';
  * `native/extractor/ExitCodes.cs`) and speaking it byte for byte:
  *
  * - the same command line: `--input`, `--cache-dir`, `--navisworks-dir`,
- *   `--navisworks-version`, `--input-sha256`, and `INVALID_ARGS` for anything
- *   else — including a `--input-sha256` that is not 64 hex digits;
+ *   `--navisworks-version`, `--input-sha256`, `--stall-timeout-seconds`, and
+ *   `INVALID_ARGS` for anything else — including a `--input-sha256` that is not
+ *   64 hex digits and a `--stall-timeout-seconds` that is not a whole number of
+ *   seconds in range;
  * - the same trust in a supplied hash: the hash stage is reported complete and
  *   the file is not read for it, and the value addresses the cache;
  * - the same order of events: hash → cache-hit check → detect (+ the
@@ -64,6 +66,9 @@ const EXIT = {
   extractFailed: 7,
   cacheWriteFailed: 8,
   cancelled: 9,
+  navisworksStalled: 10,
+  pluginNotDeployed: 11,
+  pluginNotFound: 12,
 };
 
 /** `ExitCodes.ForErrorCode`, mirrored. */
@@ -76,6 +81,9 @@ const EXIT_FOR_CODE = {
   EXTRACT_FAILED: EXIT.extractFailed,
   CACHE_WRITE_FAILED: EXIT.cacheWriteFailed,
   CANCELLED: EXIT.cancelled,
+  NW_STALLED: EXIT.navisworksStalled,
+  PLUGIN_NOT_DEPLOYED: EXIT.pluginNotDeployed,
+  PLUGIN_NOT_FOUND: EXIT.pluginNotFound,
 };
 
 /**
@@ -89,7 +97,11 @@ const DRAGON_SAVED_SET_COUNT = 2;
 
 const USAGE =
   'Matchline.Extractor --input <file.nwd> [--cache-dir <dir>] [--navisworks-dir <dir>]\n' +
-  '                    [--navisworks-version <year>] [--input-sha256 <hex>]';
+  '                    [--navisworks-version <year>] [--input-sha256 <hex>]\n' +
+  '                    [--stall-timeout-seconds <n>]';
+
+/** `ExtractorArguments.MaxStallTimeoutSeconds`. */
+const MAX_STALL_TIMEOUT_SECONDS = 86400;
 
 /** `ExtractorArguments.TryNormaliseSha256`: 64 hex digits, folded to lower case. */
 function normaliseSha256(value) {
@@ -159,6 +171,17 @@ function parseArguments(argv) {
       case '--navisworks-version':
         takeValue('--navisworks-version');
         break;
+      case '--stall-timeout-seconds': {
+        const raw = takeValue('--stall-timeout-seconds');
+        if (!/^[0-9]+$/.test(raw) || Number(raw) > MAX_STALL_TIMEOUT_SECONDS) {
+          fail(
+            'INVALID_ARGS',
+            `--stall-timeout-seconds takes a whole number of seconds from 0 to ` +
+              `${MAX_STALL_TIMEOUT_SECONDS}, not '${raw}'.\n${USAGE}`,
+          );
+        }
+        break;
+      }
       case '--input-sha256': {
         const raw = takeValue('--input-sha256');
         inputSha256 = normaliseSha256(raw);
@@ -216,6 +239,15 @@ function readScenario(inputPath) {
     tickMs: 0,
     ignoreCancel: false,
     ignoreSigterm: false,
+    /**
+     * Milliseconds spent in `finalize` before the result line.
+     *
+     * What a real launcher spends there is the integrity check on a committed
+     * cache, and it is the window in which a cancel can arrive AFTER the cache
+     * exists — the case the service has to settle as `cancelled` rather than
+     * `ready` however the race goes.
+     */
+    lingerMs: 0,
   };
   // Only the head of the file: a fixture's scenario is its first line, and a
   // real NWD would be gigabytes.
@@ -285,14 +317,24 @@ async function main() {
   let cancelled = false;
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk) => {
-    if (!scenario.ignoreCancel && chunk.split('\n').some((line) => line.trim() === 'cancel')) {
+    if (!chunk.split('\n').some((line) => line.trim() === 'cancel')) {
+      return;
+    }
+    // Logged whether or not it is obeyed: the order of "cancel line" against
+    // "signal" is exactly what the shutdown sequence promises, and the only
+    // place it can be observed from outside is here.
+    log(`cancel ${path.basename(input)}`);
+    if (!scenario.ignoreCancel) {
       cancelled = true;
     }
   });
-  if (scenario.ignoreSigterm) {
+  process.on('SIGTERM', () => {
+    log(`sigterm ${path.basename(input)}`);
+    if (!scenario.ignoreSigterm) {
+      process.exit(EXIT.cancelled);
+    }
     // Only SIGKILL will stop this one, which is what the escalation is for.
-    process.on('SIGTERM', () => {});
-  }
+  });
 
   const sha256 = await hashInput(input, inputSha256);
   log(`start ${path.basename(input)}`);
@@ -360,6 +402,19 @@ async function main() {
     return;
   }
 
+  if (scenario.mode === 'hang') {
+    // Navisworks behind an invisible dialog: the process is alive, the stream
+    // never grows, and nothing is ever said again. The launcher's own
+    // --stall-timeout-seconds is what ends this in production; here it runs
+    // until the service's watchdog has had its say and the test cancels.
+    for (;;) {
+      await sleep(25);
+      if (stopIfCancelled(null)) {
+        return;
+      }
+    }
+  }
+
   for (let tick = 1; tick <= scenario.walkTicks; tick += 1) {
     await sleep(scenario.tickMs);
     if (stopIfCancelled(null)) {
@@ -392,6 +447,11 @@ async function main() {
 
   progress('finalize', 1, 1);
   renameSync(committed.partialPath, committed.cachePath);
+  // The cache is committed and the run is not over: a cancel that lands here
+  // has to settle `cancelled` even though a perfectly good cache now exists.
+  if (scenario.lingerMs > 0) {
+    await sleep(scenario.lingerMs);
+  }
   log(`end ${path.basename(input)}`);
   emit({
     type: 'result',

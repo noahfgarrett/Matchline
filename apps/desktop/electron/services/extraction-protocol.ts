@@ -56,6 +56,20 @@ export const LAUNCHER_ERROR_CODES = {
   invalidArguments: 'INVALID_ARGS',
   inputNotFound: 'INPUT_NOT_FOUND',
   extractFailed: 'EXTRACT_FAILED',
+  /**
+   * Navisworks stopped writing to the extraction stream and was killed.
+   *
+   * Its own code because its cause is almost never the model: a headless
+   * Navisworks that goes quiet is usually behind a modal dialog on a desktop
+   * nobody is looking at (a sign-in, a licence prompt, the autosave-recovery
+   * box after a previous run was killed), and no amount of re-adding the file
+   * will dismiss it.
+   */
+  navisworksStalled: 'NW_STALLED',
+  /** The add-in is not in the Plugins folder — decided before Navisworks starts. */
+  pluginNotDeployed: 'PLUGIN_NOT_DEPLOYED',
+  /** Navisworks ran and the add-in never wrote a stream at all. */
+  pluginNotFound: 'PLUGIN_NOT_FOUND',
   cacheWriteFailed: 'CACHE_WRITE_FAILED',
   internal: 'INTERNAL',
 } as const;
@@ -79,6 +93,16 @@ export const SERVICE_ERROR_CODES = {
   cacheEmpty: 'cache-empty',
   /** A readable cache that says it came from different bytes. */
   cacheMismatch: 'cache-mismatch',
+  /**
+   * The file on disk stopped being the file this job was queued for.
+   *
+   * The queue is serial and a model can wait behind another for a long time, so
+   * "hashed at registration" and "read by Navisworks" are two different moments
+   * — and a model re-issued in place between them would be extracted and then
+   * stamped with the old hash. Checked immediately before the launcher starts,
+   * which is the last moment the answer is still true.
+   */
+  fileChangedBeforeLaunch: 'file-changed-before-extraction',
 } as const;
 
 /** Process exit codes (`native/extractor/ExitCodes.cs`), by launcher code. */
@@ -92,6 +116,9 @@ const EXIT_CODE_TO_ERROR: ReadonlyMap<number, string> = new Map([
   [7, LAUNCHER_ERROR_CODES.extractFailed],
   [8, LAUNCHER_ERROR_CODES.cacheWriteFailed],
   [9, LAUNCHER_ERROR_CODES.cancelled],
+  [10, LAUNCHER_ERROR_CODES.navisworksStalled],
+  [11, LAUNCHER_ERROR_CODES.pluginNotDeployed],
+  [12, LAUNCHER_ERROR_CODES.pluginNotFound],
 ]);
 
 /**
@@ -107,6 +134,16 @@ export function errorCodeForExitCode(exitCode: number | null): string {
   }
   return EXIT_CODE_TO_ERROR.get(exitCode) ?? SERVICE_ERROR_CODES.extractorStopped;
 }
+
+/**
+ * How long the launcher waits for a silent Navisworks before killing it.
+ *
+ * Fifteen minutes, matching `ExtractorArguments.DefaultStallTimeoutSeconds`.
+ * Deliberately longer than the service's own `stallWarningMs`: the row says
+ * "this looks stuck, you can cancel" well before anything is killed, so the
+ * user gets the chance to decide before the launcher does.
+ */
+export const DEFAULT_STALL_TIMEOUT_SECONDS = 900;
 
 export interface ExtractionProgressMessage {
   readonly type: 'progress';
@@ -241,6 +278,13 @@ export function parseExtractionLine(line: string): ExtractionMessage | null {
  * year it has an adapter for and says which one on its `detect` line, and
  * second-guessing that from here would put the choice in two places.
  *
+ * `--stall-timeout-seconds` is passed explicitly rather than left to the
+ * launcher's default so that the two halves of the same promise are set in one
+ * place: this service warns in the row after `stallWarningMs`, and the launcher
+ * gives up and reports `NW_STALLED` after this. The launcher's own default is
+ * the same number (`ExtractorArguments.DefaultStallTimeoutSeconds`), so a hand
+ * run from a shell behaves the way the app does.
+ *
  * `inputSha256` is the hash the service has already streamed for this file, and
  * passing it is what stops the launcher reading a multi-gigabyte model a second
  * time to learn something main worked out minutes ago. The launcher trusts it —
@@ -253,6 +297,7 @@ export function extractorArguments(
   inputPath: string,
   cacheDirectory: string,
   inputSha256: string,
+  stallTimeoutSeconds: number = DEFAULT_STALL_TIMEOUT_SECONDS,
 ): readonly string[] {
   return [
     '--input',
@@ -261,6 +306,8 @@ export function extractorArguments(
     cacheDirectory,
     '--input-sha256',
     inputSha256,
+    '--stall-timeout-seconds',
+    String(Math.max(0, Math.round(stallTimeoutSeconds))),
   ];
 }
 
