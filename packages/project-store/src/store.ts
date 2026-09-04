@@ -887,13 +887,10 @@ function migrateProjectFile(path: string, found: number, clock: Clock): Migratio
 }
 
 /**
- * Opens a file and validates it, closing the handle on any refusal.
- *
- * `probe` is off for the handle a migration is about to use: `migrateProjectFile`
- * writes through its own connection and the caller has already been told
- * whether the file is writable.
+ * Opens a file, validates it and proves it can be written, closing the handle
+ * on any refusal.
  */
-function openValidated(path: string, probe = true): DatabaseSync {
+function openValidated(path: string): DatabaseSync {
   let db: DatabaseSync;
   try {
     db = openDatabase(path);
@@ -904,9 +901,7 @@ function openValidated(path: string, probe = true): DatabaseSync {
   try {
     db.exec('PRAGMA foreign_keys = ON');
     validateProject(db);
-    if (probe) {
-      probeWritable(db, path);
-    }
+    probeWritable(db, path);
   } catch (error) {
     db.close();
     if (error instanceof ProjectStoreError) {
