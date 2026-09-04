@@ -7,13 +7,17 @@ import test, { after, before } from 'node:test';
 import { buildUniversePropertyCatalog } from '@matchline/asset-catalog';
 import { openExtractionCache } from '@matchline/model-schema';
 import { writeDragonFixture } from '@matchline/model-schema/fixtures/dragon';
+import { REVIT_MARKS, writeRevitShapedFixture } from '@matchline/model-schema/fixtures/revit';
 
 import {
   inferAnatomy,
   inferSeparators,
+  preferredSystemProperty,
   resolverTemplates,
   suggestClasses,
   suggestFields,
+  suggestRolePairs,
+  suggestSourceAssignments,
 } from '../dist/electron/services/suggestions.js';
 
 /**
@@ -44,6 +48,8 @@ import {
 let workDir = '';
 let cache = null;
 let catalog = [];
+let revitCache = null;
+let revitCatalog = [];
 
 before(() => {
   workDir = mkdtempSync(join(tmpdir(), 'matchline-suggest-'));
@@ -51,10 +57,16 @@ before(() => {
   writeDragonFixture(cachePath);
   cache = openExtractionCache(cachePath);
   catalog = buildUniversePropertyCatalog([{ sourceId: 'model:dragon', cache }]);
+
+  const revitPath = join(workDir, 'Campus.matchline-cache');
+  writeRevitShapedFixture(revitPath);
+  revitCache = openExtractionCache(revitPath);
+  revitCatalog = buildUniversePropertyCatalog([{ sourceId: 'model:revit', cache: revitCache }]);
 });
 
 after(() => {
   cache?.close();
+  revitCache?.close();
   if (workDir !== '') {
     rmSync(workDir, { recursive: true, force: true });
   }
@@ -269,9 +281,27 @@ test('a separator only counts when a third of the tags use it', () => {
   );
 });
 
-test('tags with nothing to split on produce no proposal rather than a useless one', () => {
-  assert.equal(inferAnatomy(['MAH001', 'MAH002', 'PLC001']), null);
+test('tags with nothing to read produce no proposal rather than a useless one', () => {
   assert.equal(inferAnatomy([]), null);
+  assert.equal(
+    inferAnatomy(['1234', '5678']),
+    null,
+    'every shape Matchline tries needs letters at the front; these have none',
+  );
+
+  // A tag with no separator is NOT one of those. `MAH001` decomposes into a
+  // role and an instance, and refusing to say so left every Revit-shaped site
+  // with no anatomy at all (WP8, item 4).
+  const undivided = inferAnatomy(['MAH001', 'MAH002', 'PLC001']);
+  assert.ok(undivided !== null);
+  assert.deepEqual(undivided.anatomy.separators, []);
+  assert.deepEqual(
+    undivided.anatomy.segments.map((row) => [row.segment, row.extractor.kind]),
+    [
+      ['role', 'alphaPrefix'],
+      ['instance', 'digitSuffix'],
+    ],
+  );
 });
 
 /* ------------------------------------------------------- resolver templates */
@@ -329,4 +359,186 @@ test('classes are judged by whether their objects carry tags', () => {
   );
   assert.match(byName.get('Panel').why, /too mixed/);
   assert.equal(proposals[0].className, 'Equipment', 'ordered by size, so the big call is first');
+});
+
+/* ============================================ the Revit-shaped model (WP8) */
+
+/**
+ * The same engine over the fixture it was NOT written for.
+ *
+ * Every number below is read off `writeRevitShapedFixture`: 148 objects in
+ * three files, `Element > Mark` on 12 of them, no property called Building, and
+ * marks (`AHU-1`, `P101`, `MCC-2A`, `VFD-2A-1`) with no system in them. The
+ * audit's finding was that the engine proposed no building, called the instance
+ * number a system, and offered System Classification as the register's
+ * classification column. These are the four sentences that say it does not.
+ */
+
+test('Mark is the equipment tag, and neither Comments nor Family and Type is', () => {
+  const tag = fieldFor(suggestFields(revitCatalog), 'Equipment tag');
+
+  assert.deepEqual(tag.candidates[0].property, { category: 'Element', name: 'Mark' });
+  assert.equal(tag.confidence, 'strong');
+  assert.ok(
+    tag.candidates[0].coverage < 0.1,
+    'and it wins on 8% coverage, because a mark is only ever on equipment',
+  );
+
+  for (const rejected of ['Comments', 'Family and Type', 'Type Name']) {
+    assert.ok(
+      !tag.candidates.some((candidate) => candidate.property.name === rejected),
+      `${rejected} is not an equipment tag`,
+    );
+  }
+});
+
+test('a separator-less mark still scores as a tag, at less than a full point', () => {
+  const tag = fieldFor(suggestFields(revitCatalog), 'Equipment tag');
+  const reasons = tag.candidates[0].reasons.join(' | ');
+  // Four of the five sampled marks carry a separator and `P101` does not, so
+  // the shape signal lands between "every value" and zero — which is the whole
+  // change: under the old rule `P101` scored nothing at all.
+  assert.match(reasons, /fit the shape this field wants/);
+});
+
+test('the building is proposed from the workset, with the reason it is a guess', () => {
+  const building = fieldFor(suggestFields(revitCatalog), 'Building');
+
+  const workset = building.candidates.find(
+    (candidate) => candidate.property.name === 'Workset',
+  );
+  assert.ok(workset !== undefined, 'a Revit federation has no Building property; the workset is it');
+  assert.match(workset.reasons.join(' | '), /Revit models have no Building parameter/);
+
+  const level = building.candidates.find((candidate) => candidate.property.name === 'Level');
+  assert.ok(level !== undefined);
+  assert.match(level.reasons.join(' | '), /A level is a floor, not a building/);
+
+  assert.equal(
+    building.confidence,
+    'possible',
+    'a guess is never pre-ticked, however well it scores — accept-all must not make L01 a building',
+  );
+});
+
+test('the building is proposed from the file names, which is where it actually is', () => {
+  const rules = suggestSourceAssignments([
+    'B14-Mechanical.nwc',
+    'B14-Electrical.nwc',
+    'B22-Mechanical.nwc',
+  ]);
+
+  assert.deepEqual(
+    rules.map((entry) => [entry.rule.match, entry.rule.assign.building]),
+    [
+      ['B14-*', 'B14'],
+      ['B22-*', 'B22'],
+    ],
+  );
+  assert.equal(rules[0].rule.scope, 'filename-pattern');
+  assert.match(rules[0].why, /the file name is the only thing that does/);
+});
+
+test('a file list that does not carry a building code is left alone', () => {
+  assert.deepEqual(
+    suggestSourceAssignments(['Dragon-Mechanical.nwc', 'Dragon-Controls.nwc']),
+    [],
+    'Dragon is the site, not a building — a code people write on drawings has a number in it',
+  );
+  assert.deepEqual(
+    suggestSourceAssignments(['B14-Mechanical.nwc', 'Coordination.nwc']),
+    [],
+    'a rule that speaks for three files out of four leaves the fourth silently unassigned',
+  );
+  assert.deepEqual(
+    suggestSourceAssignments(['B14-Mechanical.nwc', 'B14-Electrical.nwc']),
+    [],
+    'one building is not a rule anybody needs',
+  );
+});
+
+test('the anatomy for role-and-number marks teaches no system at all', () => {
+  const suggestion = inferAnatomy(REVIT_MARKS);
+  assert.ok(suggestion !== null);
+
+  assert.deepEqual(suggestion.anatomy.segments, [
+    { segment: 'role', extractor: { kind: 'alphaPrefix', token: 0 } },
+  ]);
+  assert.ok(
+    !suggestion.anatomy.segments.some((row) => row.segment === 'system'),
+    'AHU-1 does not mean system 1, and this is the finding that says so',
+  );
+  assert.equal(suggestion.coverage, 1);
+  assert.match(suggestion.rationale, /the system comes from a model property instead/);
+  assert.deepEqual(
+    suggestion.segmentStats.map((stat) => [stat.segment, stat.distinctValueCount]),
+    [['role', 6]],
+    'AHU, P, EF, MCC, VFD, PNL — the role vocabulary the pairings are named in',
+  );
+});
+
+test('a separator-less mark decomposes too, into a role and nothing else', () => {
+  const suggestion = inferAnatomy(['P101', 'P102', 'P103', 'AHU1', 'AHU2']);
+  assert.ok(suggestion !== null, 'no separator is not the same as no shape');
+  assert.equal(suggestion.anatomy.separators.length, 0);
+  assert.equal(suggestion.coverage, 1);
+  assert.ok(
+    suggestion.anatomy.segments.some((row) => row.segment === 'instance'),
+    'with the digits in the first token there IS an instance to teach',
+  );
+});
+
+test('the system property a resolver keys on is the name, not the classification', () => {
+  const upn = fieldFor(suggestFields(revitCatalog), 'System / UPN');
+
+  assert.deepEqual(
+    upn.candidates[0].property,
+    { category: 'Element', name: 'System Classification' },
+    'the classification wins the ranking, because it has fewer distinct values',
+  );
+  assert.deepEqual(
+    preferredSystemProperty(upn.candidates),
+    { category: 'Element', name: 'System Name' },
+    'and loses the argument: keying on it would merge every supply-air system into one',
+  );
+});
+
+test('System Classification is not offered as the EXTO classification column', () => {
+  const classification = fieldFor(suggestFields(revitCatalog), 'Equipment Classification');
+
+  assert.deepEqual(classification.candidates[0].property, {
+    category: 'Element',
+    name: 'Category',
+  });
+  assert.ok(
+    !classification.candidates.some(
+      (candidate) => candidate.property.name === 'System Classification',
+    ),
+    'a duct’s air system is not what kind of thing a piece of equipment is',
+  );
+});
+
+test('role pairs are counted off the nestings the model draws, never invented', () => {
+  const roleOf = (tag) => /^[A-Za-z]+/.exec(tag)?.[0] ?? null;
+  const pairs = suggestRolePairs(
+    [
+      { parentTag: 'AHU-1', childTag: 'P101' },
+      { parentTag: 'AHU-2', childTag: 'P102' },
+      { parentTag: 'AHU-3', childTag: 'P103' },
+      { parentTag: 'MCC-2A', childTag: 'VFD-2A-1' },
+      { parentTag: 'MCC-2A', childTag: 'VFD-2A-2' },
+      { parentTag: 'AHU-1', childTag: 'AHU-9' },
+    ],
+    roleOf,
+  );
+
+  assert.deepEqual(
+    pairs.map((pair) => [pair.parentRole, pair.childRole, pair.count]),
+    [
+      ['AHU', 'P', 3],
+      ['MCC', 'VFD', 2],
+    ],
+    'AHU under AHU is a modelling accident, not a rule about a site',
+  );
+  assert.deepEqual(pairs[1].examples, ['MCC-2A → VFD-2A-1', 'MCC-2A → VFD-2A-2']);
 });

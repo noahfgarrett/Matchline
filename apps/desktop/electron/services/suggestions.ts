@@ -1008,10 +1008,13 @@ export function inferAnatomy(tags: readonly string[]): WireAnatomySuggestion | n
     return null;
   }
 
+  // No qualifying separator is not the same as no shape. `P101` is one token,
+  // and the role-and-instance family reads a role and an instance out of it —
+  // which is the whole of what a Revit `Mark` decomposes into (WP8, item 4).
+  // A site whose tags really are undivided and unstructured still gets `null`:
+  // every family here needs leading letters, so `1234` matches nothing and
+  // `matchedCount === 0` below refuses to propose anything.
   const separators = inferSeparators(sample);
-  if (separators.length === 0) {
-    return null;
-  }
   const tokenCount = commonTokenCount(sample, separators);
 
   let best: {

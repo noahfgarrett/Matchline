@@ -8,8 +8,10 @@ import {
   DRAGON_SOURCE_MODEL_IDS,
   writeDragonFixtureSubset,
 } from '@matchline/model-schema/fixtures/dragon';
+import { writeRevitShapedFixture } from '@matchline/model-schema/fixtures/revit';
 import { writeWorkbook } from '@matchline/spreadsheet-import';
 
+import { starterProfile } from '../dist/shared/starter-profile.js';
 import { createProjectService } from '../dist/electron/services/project-session.js';
 
 /**
@@ -333,6 +335,261 @@ test('Quick Setup and the numbered screens edit one draft, not two', async () =>
       },
     });
     assert.equal(edited.propertyMappings.equipmentTag.chain.length, 2);
+  } finally {
+    service.close();
+  }
+});
+
+/* ======================================= the Revit-shaped project (WP8, B3) */
+
+/**
+ * The same path over a model the engine was not written for.
+ *
+ * This is the audit's blocker B3 stated as a test. B3 is: with the shipped
+ * default profile, Building and System are hard boundaries, nothing states
+ * either, and every asset becomes a root under `(unassigned)` while the compile
+ * reports success. The Dragon walk above cannot catch it — Dragon states both.
+ *
+ * So: take a Revit federation with no building property anywhere, accept every
+ * suggestion the way the screens do, and ask the one question that decides
+ * whether the fast path produced a register or a flat list.
+ */
+
+let revitCache = '';
+
+before(() => {
+  revitCache = join(workDir, 'Campus.matchline-cache');
+  writeRevitShapedFixture(revitCache);
+});
+
+async function newRevitProject() {
+  projectSeq += 1;
+  const service = createProjectService({ userDataDir, appVersion: '1.0.0' });
+  service.create(
+    join(workDir, `Revit${String(projectSeq)}.matchline`),
+    `Revit ${String(projectSeq)}`,
+  );
+  await service.addSources([revitCache]);
+  return service;
+}
+
+/** Every Quick Setup step, accepted in the order the screens run them. */
+function acceptEverything(service) {
+  // Step 1 — fields, plus the starter rule set the screen merges with them.
+  const fields = service.quickSetupSuggestions();
+  service.updateDraft(starterProfile());
+  acceptFields(service, fields);
+
+  // Step 2 — the tag shape.
+  const anatomy = service.quickSetupSuggestions().anatomy;
+  if (anatomy !== null) {
+    service.updateDraft({ tagAnatomy: anatomy.anatomy });
+  }
+
+  // Step 3 — the first available resolver template, which is what the screen
+  // pre-selects.
+  const templates = service.quickSetupSuggestions().resolverTemplates;
+  const template = templates.find((entry) => entry.available);
+  service.updateDraft({ systemResolver: template.resolver });
+
+  // Step 4 — the class lists.
+  const classes = service.quickSetupSuggestions().classes;
+  service.updateDraft({
+    assetFilters: {
+      ...service.draftState().draft.assetFilters,
+      includedClasses: classes
+        .filter((entry) => entry.proposal === 'include')
+        .map((entry) => entry.className)
+        .sort(),
+      excludedClasses: classes
+        .filter((entry) => entry.proposal === 'exclude')
+        .map((entry) => entry.className)
+        .sort(),
+    },
+  });
+
+  // Step 5 — the file-name rules.
+  const assignments = service.quickSetupSuggestions().sourceAssignments;
+  service.updateDraft({
+    sourceAssignments: [
+      ...service.draftState().draft.sourceAssignments,
+      ...assignments.map((entry) => entry.rule),
+    ],
+  });
+
+  // Step 6 — the role pairings, through the starter profile, which is the only
+  // way a role rule ever enters a draft here.
+  const rolePairs = service.quickSetupSuggestions().rolePairs;
+  service.updateDraft(
+    starterProfile(
+      rolePairs.map((pair) => ({ parentRole: pair.parentRole, childRole: pair.childRole })),
+    ),
+  );
+
+  // Step 7 — the stack, with the boundary flags this project earned.
+  const last = service.quickSetupSuggestions();
+  service.updateDraft({ hierarchy: last.hierarchy });
+  return last;
+}
+
+test('the Revit path: a building nobody stated, read off the file names', async () => {
+  const service = await newRevitProject();
+  try {
+    const first = service.quickSetupSuggestions();
+
+    const building = first.fields.find(
+      (field) => field.target.kind === 'mapped-field' && field.target.field === 'building',
+    );
+    assert.equal(
+      building.confidence,
+      'possible',
+      'Workset and Level are guesses, so accept-all leaves the building unmapped',
+    );
+
+    assert.deepEqual(
+      first.sourceAssignments.map((entry) => [
+        entry.rule.match,
+        entry.rule.assign.building,
+        entry.matchedFileCount,
+        entry.matchedObjectCount,
+      ]),
+      [
+        ['B14-*', 'B14', 2, 108],
+        ['B22-*', 'B22', 1, 40],
+      ],
+    );
+
+    // Before the tag is accepted there are no assets, and the projection says
+    // so rather than reporting a site with nothing missing.
+    assert.equal(first.hierarchyProjection.state, 'blocked');
+
+    const last = acceptEverything(service);
+
+    assert.equal(last.hierarchyProjection.state, 'ready');
+    assert.deepEqual(
+      last.hierarchyProjection.levels.map((level) => [
+        level.displayName,
+        level.distinctValueCount,
+        level.assetsWithoutValue,
+      ]),
+      [
+        ['Building', 2, 0],
+        ['SSM Discipline', 0, 12],
+        ['System', 7, 0],
+      ],
+      'two buildings, nobody without one, and seven systems — none of it stated by a property',
+    );
+    assert.deepEqual(
+      last.hierarchy.levels.map((level) => [level.displayName, level.boundary]),
+      [
+        ['Building', true],
+        ['SSM Discipline', false],
+        ['System', true],
+      ],
+      'both boundaries survive, because this project can state both',
+    );
+    assert.ok(last.hierarchyNotes.some((note) => /Building stays structural/.test(note)));
+  } finally {
+    service.close();
+  }
+});
+
+test('the anatomy and the resolver agree that the system is not in the mark', async () => {
+  const service = await newRevitProject();
+  try {
+    acceptFields(service, service.quickSetupSuggestions());
+    const second = service.quickSetupSuggestions();
+
+    assert.deepEqual(second.anatomy.anatomy.segments, [
+      { segment: 'role', extractor: { kind: 'alphaPrefix', token: 0 } },
+    ]);
+    service.updateDraft({ tagAnatomy: second.anatomy.anatomy });
+
+    const templates = service.quickSetupSuggestions().resolverTemplates;
+    const byId = new Map(templates.map((template) => [template.templateId, template]));
+
+    assert.equal(
+      byId.get('tag-and-mel').available,
+      false,
+      'no system segment was taught, so the tag cannot be asked for one',
+    );
+    assert.match(byId.get('tag-and-mel').unavailableReason, /system.*segment/i);
+    assert.equal(byId.get('composite').available, false);
+
+    const modelField = byId.get('model-field');
+    assert.equal(modelField.available, true);
+    assert.deepEqual(modelField.resolver.keyChain, [
+      { kind: 'model-field', property: { category: 'Element', name: 'System Name' } },
+    ]);
+  } finally {
+    service.close();
+  }
+});
+
+test('accepting everything on a Revit model nests equipment and publishes', async () => {
+  const service = await newRevitProject();
+  try {
+    const last = acceptEverything(service);
+    assert.deepEqual(
+      last.rolePairs.map((pair) => [pair.parentRole, pair.childRole, pair.count]),
+      [
+        ['AHU', 'P', 3],
+        ['MCC', 'VFD', 2],
+      ],
+    );
+    assert.deepEqual(service.draftState().draft.roleGraph.rules, [
+      { parentRole: 'AHU', childRole: 'P' },
+      { parentRole: 'MCC', childRole: 'VFD' },
+    ]);
+    assert.deepEqual(
+      service.draftState().draft.identityConfig.tagNormalization,
+      [{ kind: 'trim' }, { kind: 'unicodeFold' }, { kind: 'uppercase' }],
+      'the starter profile, merged on the way through',
+    );
+    assert.ok(service.draftState().draft.ladder.tiers.includes('mel-parent'));
+
+    const saved = service.saveProfile('quick setup');
+    assert.equal(saved.revision, 1, 'the draft is publishable');
+
+    const compiled = await service.compile();
+    assert.equal(compiled.state, 'done');
+    assert.equal(compiled.summary.assetCount, 12);
+    assert.equal(compiled.summary.missingSystemCount, 0);
+
+    const completeness = compiled.summary.completeness;
+    assert.ok(
+      completeness.assetsNested > 0,
+      'the acceptance criterion for B3 on real-shaped data: something nests',
+    );
+    assert.equal(completeness.assetsNested, 5, 'three pumps in their air handlers, two drives in an MCC');
+
+    for (const level of completeness.levels) {
+      if (!level.boundary) {
+        continue;
+      }
+      assert.notEqual(
+        level.assetsWithoutValue,
+        completeness.assetCount,
+        `${level.displayName} is a boundary nobody can state — every asset would be a root`,
+      );
+      assert.equal(level.blocksNesting, false);
+    }
+  } finally {
+    service.close();
+  }
+});
+
+test('a project that never enters Quick Setup gets no starter rule set', async () => {
+  const service = await newRevitProject();
+  try {
+    const draft = service.draftState().draft;
+    assert.deepEqual(
+      draft.identityConfig.tagNormalization,
+      [{ kind: 'unicodeFold' }],
+      'the one step a new draft has always had, and no more',
+    );
+    assert.deepEqual(draft.roleGraph.rules, []);
+    assert.deepEqual(draft.sourceAssignments, []);
   } finally {
     service.close();
   }
