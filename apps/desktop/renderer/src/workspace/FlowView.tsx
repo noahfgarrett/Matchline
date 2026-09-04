@@ -43,27 +43,29 @@ export function FlowView(): JSX.Element {
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect((): (() => void) => {
-    let cancelled = false;
-    void call(window.matchline.flow.roots({ offset: 0, limit: PAGE_SIZE })).then(
-      (page): void => {
-        if (cancelled) {
-          return;
-        }
-        setRoots(page.rows);
-        setRootTotal(page.total);
+  /**
+   * `flow:roots` is paged like the walk below it, and for the same reason: a
+   * site with a few hundred incoming feeds and every ring segment that heads
+   * its own list can pass the cap. Keeping only the first page and printing the
+   * true total beside it would claim more sources than the chip row shows, so
+   * the count is honest only if the rest can actually be asked for.
+   */
+  const loadRoots = useCallback(async (offset: number): Promise<void> => {
+    try {
+      const page = await call(window.matchline.flow.roots({ offset, limit: PAGE_SIZE }));
+      setRootTotal(page.total);
+      setRoots((current) => (offset === 0 ? page.rows : [...current, ...page.rows]));
+      if (offset === 0) {
         setSelected(page.rows[0]?.nodeId ?? null);
-      },
-      (caught: unknown): void => {
-        if (!cancelled) {
-          setError(messageOf(caught));
-        }
-      },
-    );
-    return (): void => {
-      cancelled = true;
-    };
+      }
+    } catch (caught: unknown) {
+      setError(messageOf(caught));
+    }
   }, []);
+
+  useEffect((): void => {
+    void loadRoots(0);
+  }, [loadRoots]);
 
   const loadWalk = useCallback(async (rootNodeId: string, offset: number): Promise<void> => {
     try {
@@ -106,22 +108,36 @@ export function FlowView(): JSX.Element {
             and compile again.
           </Callout>
         ) : (
-          <div className="chip-row" data-testid="flow-roots">
-            {roots.map((root: WireFlowRoot): JSX.Element => (
+          <>
+            <div className="chip-row" data-testid="flow-roots">
+              {roots.map((root: WireFlowRoot): JSX.Element => (
+                <button
+                  key={root.nodeId}
+                  type="button"
+                  className={`chip${selected === root.nodeId ? ' chip--active' : ''}`}
+                  data-testid={`flow-root-${root.nodeId}`}
+                  onClick={(): void => {
+                    setSelected(root.nodeId);
+                  }}
+                >
+                  <span className="chip__label">{root.tag}</span>
+                  <span className="chip__hint">{count(root.reachableCount)} downstream</span>
+                </button>
+              ))}
+            </div>
+            {roots.length < rootTotal ? (
               <button
-                key={root.nodeId}
+                className="button button--small"
                 type="button"
-                className={`chip${selected === root.nodeId ? ' chip--active' : ''}`}
-                data-testid={`flow-root-${root.nodeId}`}
+                data-testid="flow-roots-more"
                 onClick={(): void => {
-                  setSelected(root.nodeId);
+                  void loadRoots(roots.length);
                 }}
               >
-                <span className="chip__label">{root.tag}</span>
-                <span className="chip__hint">{count(root.reachableCount)} downstream</span>
+                Show {count(Math.min(PAGE_SIZE, rootTotal - roots.length))} more
               </button>
-            ))}
-          </div>
+            ) : null}
+          </>
         )}
       </Panel>
 

@@ -38,16 +38,50 @@ import { Callout, Panel, TableScroll } from '../components/Panel';
  * node's children at a time and the expanded set decides what is asked for, so
  * the renderer holds the rows it is drawing and nothing else (APP.md "IPC
  * contract").
+ *
+ * ## Why an expanded node is paged rather than fetched whole
+ *
+ * `tree:children` is capped, and a switchboard with five thousand circuits is
+ * an ordinary thing for it to answer about. Asking for the node whole would
+ * therefore mean either raising that cap until one unlucky node can stall the
+ * main process and blow the virtualizer's row budget, or — what this view used
+ * to do — asking for the first page and keeping quiet about the rest, which is
+ * worse: equipment that is genuinely in the register simply is not in the tree,
+ * and nothing on screen says so. So the renderer keeps the `total` the main
+ * process already sends beside the rows it has, and every partially loaded node
+ * carries its own count and its own "show more" row. The tree can then be
+ * walked to the end of any node, one page at a time, and a node that has more
+ * to give always says so.
  */
 
 const ROW_HEIGHT = 40;
 const CHILD_PAGE = 200;
 const ROOT_KEY = '';
 
-interface FlatRow {
+/** The rows loaded for one node, and how many that node actually has. */
+interface ChildPage {
+  readonly rows: readonly WireTreeNode[];
+  readonly total: number;
+}
+
+interface FlatNodeRow {
+  readonly kind: 'node';
   readonly node: WireTreeNode;
   readonly depth: number;
 }
+
+/** The trailing "show more" row a partially loaded node earns. */
+interface FlatMoreRow {
+  readonly kind: 'more';
+  readonly nodeKey: string;
+  readonly depth: number;
+  /** Where the next page starts: how many of this node's children are loaded. */
+  readonly offset: number;
+  readonly remaining: number;
+  readonly loading: boolean;
+}
+
+type FlatRow = FlatNodeRow | FlatMoreRow;
 
 /** Marks a row as a drop target and names the droppable it belongs to. */
 const DROP_ATTRIBUTE = 'data-drop-id';
@@ -99,7 +133,8 @@ export function SsmTreeView({
   readonly onRecompile: () => Promise<void>;
   readonly recompiling: boolean;
 }): JSX.Element {
-  const [children, setChildren] = useState<ReadonlyMap<string, readonly WireTreeNode[]>>(new Map());
+  const [children, setChildren] = useState<ReadonlyMap<string, ChildPage>>(new Map());
+  const [loadingKeys, setLoadingKeys] = useState<ReadonlySet<string>>(new Set());
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set([ROOT_KEY]));
   const [search, setSearch] = useState<string>('');
   const [hits, setHits] = useState<readonly WireTreeNode[]>([]);
@@ -111,18 +146,49 @@ export function SsmTreeView({
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  const loadChildren = useCallback(async (nodeKey: string): Promise<void> => {
+  /**
+   * Node keys with a page in flight.
+   *
+   * Of the two ways to stop a double-click appending the same page twice, this
+   * is the one chosen: a ref read and written synchronously inside the call,
+   * rather than comparing the loaded length against the requested offset at
+   * merge time. Both would work, but the ref refuses the second request before
+   * it is ever sent, so the main process is not asked for a page that would be
+   * thrown away — and `loadingKeys` below only has to mirror it for rendering.
+   */
+  const inFlightRef = useRef<Set<string>>(new Set());
+
+  const loadChildren = useCallback(async (nodeKey: string, offset: number): Promise<void> => {
+    if (inFlightRef.current.has(nodeKey)) {
+      return;
+    }
+    inFlightRef.current.add(nodeKey);
+    setLoadingKeys((current): ReadonlySet<string> => {
+      const next = new Set(current);
+      next.add(nodeKey);
+      return next;
+    });
     try {
       const page = await call(
-        window.matchline.tree.children({ nodeKey, offset: 0, limit: CHILD_PAGE }),
+        window.matchline.tree.children({ nodeKey, offset, limit: CHILD_PAGE }),
       );
-      setChildren((current) => {
+      setChildren((current): ReadonlyMap<string, ChildPage> => {
         const next = new Map(current);
-        next.set(nodeKey, page.rows);
+        // offset 0 is a fresh read of the node — a recompile, or a first
+        // expand — so it replaces. Every later page appends to what is there.
+        const existing = offset === 0 ? [] : (current.get(nodeKey)?.rows ?? []);
+        next.set(nodeKey, { rows: [...existing, ...page.rows], total: page.total });
         return next;
       });
     } catch (caught: unknown) {
       setError(messageOf(caught));
+    } finally {
+      inFlightRef.current.delete(nodeKey);
+      setLoadingKeys((current): ReadonlySet<string> => {
+        const next = new Set(current);
+        next.delete(nodeKey);
+        return next;
+      });
     }
   }, []);
 
@@ -136,7 +202,7 @@ export function SsmTreeView({
   }, []);
 
   useEffect((): void => {
-    void loadChildren(ROOT_KEY);
+    void loadChildren(ROOT_KEY, 0);
     void refreshOverrides();
   }, [loadChildren, refreshOverrides]);
 
@@ -174,7 +240,7 @@ export function SsmTreeView({
       } else {
         next.add(nodeKey);
         if (!children.has(nodeKey)) {
-          void loadChildren(nodeKey);
+          void loadChildren(nodeKey, 0);
         }
       }
       return next;
@@ -184,16 +250,32 @@ export function SsmTreeView({
   const rows: readonly FlatRow[] = useMemo((): readonly FlatRow[] => {
     const flat: FlatRow[] = [];
     const walk = (nodeKey: string, depth: number): void => {
-      for (const node of children.get(nodeKey) ?? []) {
-        flat.push({ node, depth });
+      const page = children.get(nodeKey);
+      if (page === undefined) {
+        return;
+      }
+      for (const node of page.rows) {
+        flat.push({ kind: 'node', node, depth });
         if (expanded.has(node.nodeKey)) {
           walk(node.nodeKey, depth + 1);
         }
       }
+      // The rest of this node, offered at its children's indent so it reads as
+      // part of the list it continues rather than a sibling of the node itself.
+      if (page.rows.length < page.total) {
+        flat.push({
+          kind: 'more',
+          nodeKey,
+          depth,
+          offset: page.rows.length,
+          remaining: Math.min(CHILD_PAGE, page.total - page.rows.length),
+          loading: loadingKeys.has(nodeKey),
+        });
+      }
     };
     walk(ROOT_KEY, 0);
     return flat;
-  }, [children, expanded]);
+  }, [children, expanded, loadingKeys]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -258,7 +340,7 @@ export function SsmTreeView({
         setDirty(false);
         setChildren(new Map());
         setExpanded(new Set([ROOT_KEY]));
-        await loadChildren(ROOT_KEY);
+        await loadChildren(ROOT_KEY, 0);
         await refreshOverrides();
       }
     } catch (caught: unknown) {
@@ -282,7 +364,7 @@ export function SsmTreeView({
     setDirty(false);
     setChildren(new Map());
     setExpanded(new Set([ROOT_KEY]));
-    await loadChildren(ROOT_KEY);
+    await loadChildren(ROOT_KEY, 0);
     await refreshOverrides();
   };
 
@@ -436,15 +518,54 @@ export function SsmTreeView({
                 if (row === undefined) {
                   return null;
                 }
+                if (row.kind === 'more') {
+                  // Deliberately no DROP_ATTRIBUTE: this row sits inside the
+                  // DndContext so the drag overlay is not interrupted, but
+                  // dropping equipment on "show more" means nothing.
+                  return (
+                    <div
+                      key={item.key}
+                      className="tree__row"
+                      style={{
+                        height: `${String(item.size)}px`,
+                        transform: `translateY(${String(item.start)}px)`,
+                        paddingLeft: `${String(row.depth * 18 + 8)}px`,
+                      }}
+                    >
+                      <button
+                        className="button button--quiet button--small"
+                        type="button"
+                        data-testid={`tree-more-${row.nodeKey}`}
+                        disabled={row.loading}
+                        onClick={(): void => {
+                          void loadChildren(row.nodeKey, row.offset);
+                        }}
+                      >
+                        {row.loading ? 'Loading…' : `Show ${count(row.remaining)} more`}
+                      </button>
+                    </div>
+                  );
+                }
+                const nodeKey = row.node.nodeKey;
+                const page = children.get(nodeKey);
+                // Undefined unless this node is expanded and holding fewer
+                // rows than it has, which is what turns the badge into a
+                // loaded-of-total count.
+                const partial =
+                  page !== undefined && expanded.has(nodeKey) && page.rows.length < page.total
+                    ? page
+                    : undefined;
                 return (
                   <TreeRow
                     key={item.key}
                     row={row}
                     top={item.start}
                     height={item.size}
-                    expanded={expanded.has(row.node.nodeKey)}
+                    expanded={expanded.has(nodeKey)}
+                    loaded={partial?.rows.length}
+                    total={partial?.total}
                     onToggle={(): void => {
-                      toggle(row.node.nodeKey);
+                      toggle(nodeKey);
                     }}
                     onMakeRoot={(): void => {
                       void proposeMove(row.node.assetId, row.node.label, null, '');
@@ -519,13 +640,18 @@ function TreeRow({
   top,
   height,
   expanded,
+  loaded,
+  total,
   onToggle,
   onMakeRoot,
 }: {
-  readonly row: FlatRow;
+  readonly row: FlatNodeRow;
   readonly top: number;
   readonly height: number;
   readonly expanded: boolean;
+  /** Set only while this node is expanded and holding fewer rows than it has. */
+  readonly loaded?: number | undefined;
+  readonly total?: number | undefined;
   readonly onToggle: () => void;
   readonly onMakeRoot: () => void;
 }): JSX.Element {
@@ -587,8 +713,12 @@ function TreeRow({
       <span className="tree__detail muted">{node.detail}</span>
 
       <span className="tree__badges">
-        {node.childCount === 0 ? null : (
+        {node.childCount === 0 ? null : loaded === undefined || total === undefined ? (
           <span className="badge">{count(node.childCount)} under</span>
+        ) : (
+          <span className="badge" title="More of this node is available — use “Show more” below it">
+            {count(loaded)} of {count(total)} under
+          </span>
         )}
         {node.dependencyCount === 0 ? null : (
           <span className="badge" title="Additive dependencies: they order work, they never nest">
