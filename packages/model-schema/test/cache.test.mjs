@@ -29,13 +29,16 @@ after(() => {
 
 test('meta is typed, and its counts are numbers rather than decimal strings', () => {
   const meta = cache.meta();
-  assert.equal(meta.schemaVersion, '2');
+  assert.equal(meta.schemaVersion, '3');
   assert.equal(meta.inputFileName, 'Dragon-Coordination.nwd');
   assert.equal(meta.inputSha256.length, 64);
   assert.equal(meta.inputBytes, 104857600);
   assert.equal(meta.extractedAtUtc, '2026-01-15T09:30:00Z');
   assert.equal(meta.adapterVersion, 'navisworks-2025');
   assert.equal(meta.objectCount, 76);
+  // Optional in the DDL, present here because a v3 writer records them.
+  assert.equal(meta.units, 'Meters');
+  assert.equal(meta.uiLanguage, 'en-US');
 });
 
 test('every object is reachable depth-first from the roots', () => {

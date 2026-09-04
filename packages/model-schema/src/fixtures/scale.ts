@@ -170,10 +170,15 @@ export function writeScaleFixture(path: string, shape: ScaleFixtureShape): Scale
 
     const insertMeta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)');
     const insertObject = db.prepare(
+      // structural_key and authoring_id_kind stay NULL here, and deliberately:
+      // this fixture exists to measure how the pipeline behaves at a few hundred
+      // thousand objects, and a SHA-256 per row would be measuring the fixture
+      // generator instead. Dragon and the Revit-shaped fixture are where the v3
+      // identity columns are exercised.
       'INSERT INTO objects (id, source_model_id, parent_id, path_index, depth, display_name, ' +
-        'class_name, instance_guid, authoring_id, bbox_min_x, bbox_min_y, bbox_min_z, ' +
-        'bbox_max_x, bbox_max_y, bbox_max_z) ' +
-        'VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL)',
+        'class_name, instance_guid, authoring_id, authoring_id_kind, structural_key, flags, ' +
+        'bbox_min_x, bbox_min_y, bbox_min_z, bbox_max_x, bbox_max_y, bbox_max_z) ' +
+        'VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL)',
     );
     const insertProperty = db.prepare(
       'INSERT INTO properties (object_id, category, category_internal, name, name_internal, ' +
@@ -181,8 +186,9 @@ export function writeScaleFixture(path: string, shape: ScaleFixtureShape): Scale
     );
 
     db.prepare(
-      'INSERT INTO source_models (id, parent_id, file_name, display_name, guid) VALUES (?, ?, ?, ?, ?)',
-    ).run(1, null, shape.inputFileName, shape.inputFileName, guidFor(1));
+      'INSERT INTO source_models (id, parent_id, file_name, display_name, guid, source_file_name, ' +
+        'source_guid) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(1, null, shape.inputFileName, shape.inputFileName, guidFor(1), null, null);
 
     let nextId = 1;
     const addObject = (
@@ -275,7 +281,7 @@ export function writeScaleFixture(path: string, shape: ScaleFixtureShape): Scale
     });
 
     for (const [key, value] of [
-      ['schema_version', '2'],
+      ['schema_version', '3'],
       ['input_file_name', shape.inputFileName],
       // A stand-in, derived from the invented file name so two files of one
       // universe differ and two writes of one file do not. It is never the hash
@@ -286,6 +292,8 @@ export function writeScaleFixture(path: string, shape: ScaleFixtureShape): Scale
       ['extractor_version', '0.1.0'],
       ['adapter_version', 'navisworks-2025'],
       ['navisworks_version', '25.0.1234.56'],
+      ['units', 'Meters'],
+      ['ui_language', 'en-US'],
       ['object_count', String(objectCount)],
     ] as const) {
       insertMeta.run(key, value);

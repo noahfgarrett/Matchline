@@ -19,6 +19,8 @@ import {
   type SqlRow,
 } from './rows.js';
 import {
+  hasV3Columns,
+  isAuthoringIdKind,
   isSelectionSetKind,
   isSupportedSchemaVersion,
   isWarningSeverity,
@@ -26,10 +28,12 @@ import {
   REQUIRED_META_KEYS,
   REQUIRED_TABLES,
   SUPPORTED_SCHEMA_VERSIONS,
+  type AuthoringIdKind,
   type BoundingBox,
   type CacheWarning,
   type ExtractionCacheMeta,
   type ModelObject,
+  type ObjectFlags,
   type ObjectProperty,
   type ObjectPropertyRow,
   type SelectionSetNode,
@@ -37,12 +41,34 @@ import {
   type SourceModelNode,
 } from './schema.js';
 
-const OBJECT_COLUMNS =
+/**
+ * Column lists are chosen by declared schema version, never by probing.
+ *
+ * A v1/v2 cache does not have the v3 columns at all, so asking for them would
+ * fail the query rather than answer `null`; a file that declares v3 without
+ * them is corrupt and should say so. The same rule already governs
+ * `selection_sets.membership_resolved`.
+ */
+const OBJECT_COLUMNS_BASE =
   'id, source_model_id, parent_id, path_index, depth, display_name, class_name, instance_guid, authoring_id, ' +
   'bbox_min_x, bbox_min_y, bbox_min_z, bbox_max_x, bbox_max_y, bbox_max_z';
 
+const OBJECT_COLUMNS_V3 = `${OBJECT_COLUMNS_BASE}, authoring_id_kind, structural_key, flags`;
+
+const SOURCE_MODEL_COLUMNS_BASE = 'id, parent_id, file_name, display_name, guid';
+
+const SOURCE_MODEL_COLUMNS_V3 = `${SOURCE_MODEL_COLUMNS_BASE}, source_file_name, source_guid`;
+
 const PROPERTY_COLUMNS =
   'object_id, category, category_internal, name, name_internal, value_text, value_type';
+
+/** `objects.flags` bit positions. Mirrors `ObjectFlags` in the C# records. */
+const FLAG_HIDDEN = 1;
+const FLAG_LAYER = 2;
+const FLAG_INSERT = 4;
+const FLAG_COMPOSITE = 8;
+const FLAG_COLLECTION = 16;
+const FLAG_HAS_MODEL = 32;
 
 /** A validated, read-only extraction cache. */
 export interface ExtractionCache {
@@ -176,6 +202,11 @@ function validate(db: DatabaseSync): ExtractionCacheMeta {
     adapterVersion: requiredEntry(entries, 'adapter_version'),
     navisworksVersion: requiredEntry(entries, 'navisworks_version'),
     objectCount: requiredCount(entries, 'object_count'),
+    // Optional keys: absent from every cache written before schema v3, and
+    // therefore never required — refusing an older cache over them would turn
+    // an addition into a breaking change.
+    units: entries.get('units') ?? null,
+    uiLanguage: entries.get('ui_language') ?? null,
   };
 
   const countRow = db.prepare('SELECT COUNT(*) AS n FROM objects').get();
@@ -220,13 +251,66 @@ function requiredCount(entries: ReadonlyMap<string, string>, key: string): numbe
   return parsed;
 }
 
-function readSourceModel(row: SqlRow): SourceModel {
+function readSourceModel(row: SqlRow, withV3: boolean): SourceModel {
   return {
     id: requireInteger(row, 'source_models', 'id'),
     parentId: optionalInteger(row, 'source_models', 'parent_id'),
     fileName: optionalText(row, 'source_models', 'file_name'),
     displayName: optionalText(row, 'source_models', 'display_name'),
     guid: optionalText(row, 'source_models', 'guid'),
+    sourceFileName: withV3 ? optionalText(row, 'source_models', 'source_file_name') : null,
+    sourceGuid: withV3 ? optionalText(row, 'source_models', 'source_guid') : null,
+  };
+}
+
+/**
+ * `objects.authoring_id_kind`, refused rather than coerced when it is a spelling
+ * this build does not know.
+ *
+ * Guessing would be worse than failing: the kind is what stops a Revit element
+ * id and an AutoCAD handle with the same digits from matching each other, so a
+ * value read as "some other kind" would silently widen identity.
+ */
+function readAuthoringIdKind(row: SqlRow): AuthoringIdKind | null {
+  const value = optionalText(row, 'objects', 'authoring_id_kind');
+  if (value === null) {
+    return null;
+  }
+  if (!isAuthoringIdKind(value)) {
+    throw new CacheValidationError({
+      kind: 'malformed-row',
+      table: 'objects',
+      column: 'authoring_id_kind',
+      detail: `'${value}' is not an authoring id kind this reader knows`,
+    });
+  }
+  return value;
+}
+
+/**
+ * `objects.flags`, unpacked into named booleans.
+ *
+ * Bits this build does not know are ignored rather than refused: the DDL
+ * declares the field append-only, so an unknown bit is a newer writer rather
+ * than a corrupt row.
+ */
+function readFlags(row: SqlRow): ObjectFlags {
+  const bits = requireInteger(row, 'objects', 'flags');
+  if (bits < 0) {
+    throw new CacheValidationError({
+      kind: 'malformed-row',
+      table: 'objects',
+      column: 'flags',
+      detail: `${String(bits)} is not a bitfield`,
+    });
+  }
+  return {
+    isHidden: (bits & FLAG_HIDDEN) !== 0,
+    isLayer: (bits & FLAG_LAYER) !== 0,
+    isInsert: (bits & FLAG_INSERT) !== 0,
+    isComposite: (bits & FLAG_COMPOSITE) !== 0,
+    isCollection: (bits & FLAG_COLLECTION) !== 0,
+    hasModel: (bits & FLAG_HAS_MODEL) !== 0,
   };
 }
 
@@ -265,7 +349,7 @@ function readBoundingBox(row: SqlRow): BoundingBox | null {
   return { minX, minY, minZ, maxX, maxY, maxZ };
 }
 
-function readObject(row: SqlRow): ModelObject {
+function readObject(row: SqlRow, withV3: boolean): ModelObject {
   return {
     id: requireInteger(row, 'objects', 'id'),
     sourceModelId: optionalInteger(row, 'objects', 'source_model_id'),
@@ -276,6 +360,9 @@ function readObject(row: SqlRow): ModelObject {
     className: optionalText(row, 'objects', 'class_name'),
     instanceGuid: optionalText(row, 'objects', 'instance_guid'),
     authoringId: optionalText(row, 'objects', 'authoring_id'),
+    authoringIdKind: withV3 ? readAuthoringIdKind(row) : null,
+    structuralKey: withV3 ? optionalText(row, 'objects', 'structural_key') : null,
+    flags: withV3 ? readFlags(row) : null,
     bbox: readBoundingBox(row),
   };
 }
@@ -309,6 +396,7 @@ interface SelectionSetRow {
   readonly name: string;
   readonly kind: SelectionSetNode['kind'];
   readonly membershipResolved: boolean;
+  readonly guid: string | null;
 }
 
 interface MutableSelectionSetNode extends SelectionSetRow {
@@ -322,7 +410,11 @@ interface MutableSelectionSetNode extends SelectionSetRow {
  * `hasMembershipColumn` is false for a v1 cache, which has no such column: the
  * value is then derived from the kind, which is what the v1 writer meant by it.
  */
-function readSelectionSet(row: SqlRow, hasMembershipColumn: boolean): SelectionSetRow {
+function readSelectionSet(
+  row: SqlRow,
+  hasMembershipColumn: boolean,
+  withV3: boolean,
+): SelectionSetRow {
   const kind = requireText(row, 'selection_sets', 'kind');
   if (!isSelectionSetKind(kind)) {
     throw new CacheValidationError({
@@ -340,6 +432,7 @@ function readSelectionSet(row: SqlRow, hasMembershipColumn: boolean): SelectionS
     membershipResolved: hasMembershipColumn
       ? readMembershipResolved(row)
       : readV1MembershipResolved(kind),
+    guid: withV3 ? optionalText(row, 'selection_sets', 'guid') : null,
   };
 }
 
@@ -388,10 +481,18 @@ class SqliteExtractionCache implements ExtractionCache {
   #db: DatabaseSync | null;
   readonly #meta: ExtractionCacheMeta;
 
+  /** Whether this file carries the v3 columns. Decided once, at open time. */
+  readonly #withV3: boolean;
+  readonly #objectColumns: string;
+  readonly #sourceModelColumns: string;
+
   constructor(db: DatabaseSync, path: string, meta: ExtractionCacheMeta) {
     this.#db = db;
     this.path = path;
     this.#meta = meta;
+    this.#withV3 = hasV3Columns(meta.schemaVersion);
+    this.#objectColumns = this.#withV3 ? OBJECT_COLUMNS_V3 : OBJECT_COLUMNS_BASE;
+    this.#sourceModelColumns = this.#withV3 ? SOURCE_MODEL_COLUMNS_V3 : SOURCE_MODEL_COLUMNS_BASE;
   }
 
   #open(): DatabaseSync {
@@ -411,9 +512,9 @@ class SqliteExtractionCache implements ExtractionCache {
 
   sourceModels(): readonly SourceModelNode[] {
     const rows = this.#open()
-      .prepare('SELECT id, parent_id, file_name, display_name, guid FROM source_models ORDER BY id')
+      .prepare(`SELECT ${this.#sourceModelColumns} FROM source_models ORDER BY id`)
       .all()
-      .map(readSourceModel);
+      .map((row) => readSourceModel(row, this.#withV3));
 
     const nodes = new Map<number, MutableSourceModelNode>();
     for (const row of rows) {
@@ -443,25 +544,25 @@ class SqliteExtractionCache implements ExtractionCache {
 
   object(id: number): ModelObject | undefined {
     const row = this.#open()
-      .prepare(`SELECT ${OBJECT_COLUMNS} FROM objects WHERE id = ?`)
+      .prepare(`SELECT ${this.#objectColumns} FROM objects WHERE id = ?`)
       .get(id);
-    return row === undefined ? undefined : readObject(row);
+    return row === undefined ? undefined : readObject(row, this.#withV3);
   }
 
   rootObjects(): readonly ModelObject[] {
     return this.#open()
       .prepare(
-        `SELECT ${OBJECT_COLUMNS} FROM objects WHERE parent_id IS NULL ORDER BY path_index, id`,
+        `SELECT ${this.#objectColumns} FROM objects WHERE parent_id IS NULL ORDER BY path_index, id`,
       )
       .all()
-      .map(readObject);
+      .map((row) => readObject(row, this.#withV3));
   }
 
   childrenOf(objectId: number): readonly ModelObject[] {
     return this.#open()
-      .prepare(`SELECT ${OBJECT_COLUMNS} FROM objects WHERE parent_id = ? ORDER BY path_index, id`)
+      .prepare(`SELECT ${this.#objectColumns} FROM objects WHERE parent_id = ? ORDER BY path_index, id`)
       .all(objectId)
-      .map(readObject);
+      .map((row) => readObject(row, this.#withV3));
   }
 
   *walk(): IterableIterator<ModelObject> {
@@ -492,9 +593,9 @@ class SqliteExtractionCache implements ExtractionCache {
   }
 
   *allObjects(): IterableIterator<ModelObject> {
-    const statement = this.#open().prepare(`SELECT ${OBJECT_COLUMNS} FROM objects ORDER BY id`);
+    const statement = this.#open().prepare(`SELECT ${this.#objectColumns} FROM objects ORDER BY id`);
     for (const row of statement.iterate()) {
-      yield readObject(row);
+      yield readObject(row, this.#withV3);
     }
   }
 
@@ -522,13 +623,16 @@ class SqliteExtractionCache implements ExtractionCache {
     // table: a v1 cache would fail the query outright, and a file that declares
     // v2 without the column is corrupt and should say so.
     const hasMembershipColumn = this.#meta.schemaVersion !== '1';
-    const columns = hasMembershipColumn
+    let columns = hasMembershipColumn
       ? 'id, parent_id, name, kind, membership_resolved'
       : 'id, parent_id, name, kind';
+    if (this.#withV3) {
+      columns += ', guid';
+    }
     const rows = db
       .prepare(`SELECT ${columns} FROM selection_sets ORDER BY id`)
       .all()
-      .map((row) => readSelectionSet(row, hasMembershipColumn));
+      .map((row) => readSelectionSet(row, hasMembershipColumn, this.#withV3));
 
     const members = new Map<number, number[]>();
     for (const row of db

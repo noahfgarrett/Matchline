@@ -13,6 +13,7 @@ import {
 import {
   DRAGON_UNRESOLVED_SET_NAME,
   EXTRACTION_CACHE_DDL_V1,
+  EXTRACTION_CACHE_DDL_V2,
   writeDragonFixture,
   writeDragonFixtureWithUnresolvedSearch,
 } from '../dist/fixtures/dragon.js';
@@ -22,7 +23,9 @@ import { makeTempDirectory } from './support.mjs';
  * Schema v2 added one column, `selection_sets.membership_resolved`, to record a
  * distinction v1 could not make: a set that resolved to nothing versus a set
  * nobody managed to resolve. This file is the contract for both halves of that
- * — what a v2 cache says, and what a v1 cache is taken to have meant.
+ * — what a v2 cache says, and what a v1 cache is taken to have meant — and for
+ * the thing that has to stay true forever after: caches in both of those older
+ * shapes still open. `schema-v3.test.mjs` covers what v3 added.
  */
 
 let directory = '';
@@ -89,9 +92,91 @@ function setsByName(roots) {
   return found;
 }
 
-test('this reader accepts both schema versions and writes the newer one', () => {
-  assert.deepEqual([...SUPPORTED_SCHEMA_VERSIONS], ['1', '2']);
-  assert.equal(CURRENT_SCHEMA_VERSION, '2');
+/**
+ * A cache exactly as a v2 writer left it: v2 tables and nothing v3 added.
+ *
+ * Written from the frozen v2 DDL rather than by labelling a v3 file, which is
+ * the whole point — the reader picks its column list from the declared version,
+ * and a v3 file wearing a v2 label would answer queries the real thing cannot.
+ */
+function writeV2Cache(name) {
+  const path = join(directory, `${name}.sqlite`);
+  rmSync(path, { force: true });
+  const db = new DatabaseSync(path);
+  try {
+    db.exec(EXTRACTION_CACHE_DDL_V2);
+    const meta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)');
+    for (const [key, value] of [
+      ['schema_version', '2'],
+      ['input_file_name', 'Dragon-V2.nwd'],
+      ['input_sha256', '2'.repeat(64)],
+      ['input_bytes', '4096'],
+      ['extracted_at_utc', '2026-01-15T09:30:00Z'],
+      ['extractor_version', '0.1.0'],
+      ['adapter_version', 'navisworks-2025'],
+      ['navisworks_version', '25.0.1234.56'],
+      ['object_count', '1'],
+    ]) {
+      meta.run(key, value);
+    }
+    db.exec(
+      "INSERT INTO source_models (id, parent_id, file_name, display_name, guid) " +
+        "VALUES (1, NULL, 'Dragon-V2.nwc', 'Dragon V2', '00000000-0000-4000-8000-000000000001')",
+    );
+    db.exec(
+      "INSERT INTO objects (id, source_model_id, parent_id, path_index, depth, display_name, " +
+        "class_name, instance_guid, authoring_id) " +
+        "VALUES (1, 1, NULL, 0, 0, 'V2 root', 'File', " +
+        "'00000000-0000-4000-8000-000000000002', 'id-1')",
+    );
+    db.exec("INSERT INTO selection_sets (id, parent_id, name, kind, membership_resolved) " +
+      "VALUES (1, NULL, 'V2 Fixed', 'selection', 1)");
+    db.exec('INSERT INTO selection_set_members (set_id, object_id) VALUES (1, 1)');
+  } finally {
+    db.close();
+  }
+  return path;
+}
+
+test('this reader accepts every schema version it has ever written, and writes the newest', () => {
+  assert.deepEqual([...SUPPORTED_SCHEMA_VERSIONS], ['1', '2', '3']);
+  assert.equal(CURRENT_SCHEMA_VERSION, '3');
+});
+
+test('a real v2 cache still opens, and says nothing it was never asked', () => {
+  const cache = openExtractionCache(writeV2Cache('v2-opens'));
+  try {
+    assert.equal(cache.meta().schemaVersion, '2');
+    assert.equal(cache.objectCount(), 1);
+
+    // The v2 columns answer as they always did.
+    const [object] = cache.rootObjects();
+    assert.equal(object.displayName, 'V2 root');
+    assert.equal(object.authoringId, 'id-1');
+    assert.equal(object.instanceGuid, '00000000-0000-4000-8000-000000000002');
+
+    // The v3 columns are absent from the file, so they read as null rather than
+    // as a failed query — and `flags` is null rather than "nothing is set",
+    // because a v2 writer never looked.
+    assert.equal(object.authoringIdKind, null);
+    assert.equal(object.structuralKey, null);
+    assert.equal(object.flags, null);
+
+    const [model] = cache.sourceModels();
+    assert.equal(model.fileName, 'Dragon-V2.nwc');
+    assert.equal(model.sourceFileName, null);
+    assert.equal(model.sourceGuid, null);
+
+    const [set] = cache.selectionSets();
+    assert.equal(set.membershipResolved, true);
+    assert.deepEqual([...set.memberObjectIds], [1]);
+    assert.equal(set.guid, null);
+
+    assert.equal(cache.meta().units, null);
+    assert.equal(cache.meta().uiLanguage, null);
+  } finally {
+    cache.close();
+  }
 });
 
 test('a v1 cache still opens', () => {
@@ -99,6 +184,10 @@ test('a v1 cache still opens', () => {
   try {
     assert.equal(cache.meta().schemaVersion, '1');
     assert.equal(cache.objectCount(), 1);
+
+    const [object] = cache.rootObjects();
+    assert.equal(object.structuralKey, null);
+    assert.equal(object.flags, null);
   } finally {
     cache.close();
   }

@@ -10,10 +10,11 @@
  * same call produces byte-identical table contents every run, which is what
  * lets tests assert exact catalog numbers.
  */
+import { createHash } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import type { BoundingBox } from '../schema.js';
+import type { AuthoringIdKind, BoundingBox } from '../schema.js';
 
 /**
  * The canonical DDL from `schemas/extraction-cache.sql`, comments stripped.
@@ -26,23 +27,28 @@ CREATE TABLE meta (
 ) WITHOUT ROWID;
 
 CREATE TABLE source_models (
-  id           INTEGER PRIMARY KEY,
-  parent_id    INTEGER REFERENCES source_models(id),
-  file_name    TEXT,
-  display_name TEXT,
-  guid         TEXT
+  id               INTEGER PRIMARY KEY,
+  parent_id        INTEGER REFERENCES source_models(id),
+  file_name        TEXT,
+  display_name     TEXT,
+  guid             TEXT,
+  source_file_name TEXT,
+  source_guid      TEXT
 );
 
 CREATE TABLE objects (
-  id              INTEGER PRIMARY KEY,
-  source_model_id INTEGER REFERENCES source_models(id),
-  parent_id       INTEGER REFERENCES objects(id),
-  path_index      INTEGER NOT NULL,
-  depth           INTEGER NOT NULL,
-  display_name    TEXT,
-  class_name      TEXT,
-  instance_guid   TEXT,
-  authoring_id    TEXT,
+  id                INTEGER PRIMARY KEY,
+  source_model_id   INTEGER REFERENCES source_models(id),
+  parent_id         INTEGER REFERENCES objects(id),
+  path_index        INTEGER NOT NULL,
+  depth             INTEGER NOT NULL,
+  display_name      TEXT,
+  class_name        TEXT,
+  instance_guid     TEXT,
+  authoring_id      TEXT,
+  authoring_id_kind TEXT,
+  structural_key    TEXT,
+  flags             INTEGER NOT NULL DEFAULT 0,
   bbox_min_x REAL, bbox_min_y REAL, bbox_min_z REAL,
   bbox_max_x REAL, bbox_max_y REAL, bbox_max_z REAL
 );
@@ -65,7 +71,8 @@ CREATE TABLE selection_sets (
   parent_id INTEGER REFERENCES selection_sets(id),
   name      TEXT NOT NULL,
   kind      TEXT NOT NULL CHECK (kind IN ('folder', 'selection', 'search')),
-  membership_resolved INTEGER NOT NULL DEFAULT 1 CHECK (membership_resolved IN (0, 1))
+  membership_resolved INTEGER NOT NULL DEFAULT 1 CHECK (membership_resolved IN (0, 1)),
+  guid      TEXT
 );
 
 CREATE TABLE selection_set_members (
@@ -88,9 +95,9 @@ CREATE TABLE warnings (
  *
  * This is what v1 caches on disk actually look like: no
  * `selection_sets.membership_resolved`, because a v1 writer never resolved a
- * saved search. It exists so a test can write a real v1 file rather than a v2
- * file wearing a v1 label, and it must never be edited — the project store
- * keeps frozen per-version DDL for the same reason.
+ * saved search. It exists so a test can write a real v1 file rather than a
+ * newer file wearing a v1 label, and it must never be edited — the project
+ * store keeps frozen per-version DDL for the same reason.
  */
 export const EXTRACTION_CACHE_DDL_V1 = `
 CREATE TABLE meta (
@@ -155,9 +162,84 @@ CREATE TABLE warnings (
 );
 `;
 
+/**
+ * The schema-version-2 DDL, frozen.
+ *
+ * v2 is v1 plus `selection_sets.membership_resolved`, and nothing else: no
+ * `objects.authoring_id_kind`, no `structural_key`, no `flags`, no
+ * `source_models.source_file_name` or `source_guid`, no `selection_sets.guid`.
+ * It exists so a test can open a REAL v2 file — the shape thousands of caches
+ * on disk actually have — rather than a v3 file with a v2 label, which would
+ * prove nothing about the reader's version-dependent column lists. Never edit
+ * it.
+ */
+export const EXTRACTION_CACHE_DDL_V2 = `
+CREATE TABLE meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE source_models (
+  id           INTEGER PRIMARY KEY,
+  parent_id    INTEGER REFERENCES source_models(id),
+  file_name    TEXT,
+  display_name TEXT,
+  guid         TEXT
+);
+
+CREATE TABLE objects (
+  id              INTEGER PRIMARY KEY,
+  source_model_id INTEGER REFERENCES source_models(id),
+  parent_id       INTEGER REFERENCES objects(id),
+  path_index      INTEGER NOT NULL,
+  depth           INTEGER NOT NULL,
+  display_name    TEXT,
+  class_name      TEXT,
+  instance_guid   TEXT,
+  authoring_id    TEXT,
+  bbox_min_x REAL, bbox_min_y REAL, bbox_min_z REAL,
+  bbox_max_x REAL, bbox_max_y REAL, bbox_max_z REAL
+);
+CREATE UNIQUE INDEX idx_objects_parent_pos ON objects(parent_id, path_index);
+
+CREATE TABLE properties (
+  object_id         INTEGER NOT NULL REFERENCES objects(id),
+  category          TEXT NOT NULL,
+  category_internal TEXT,
+  name              TEXT NOT NULL,
+  name_internal     TEXT,
+  value_text        TEXT,
+  value_type        TEXT NOT NULL
+);
+CREATE INDEX idx_properties_object   ON properties(object_id);
+CREATE INDEX idx_properties_cat_name ON properties(category, name);
+
+CREATE TABLE selection_sets (
+  id        INTEGER PRIMARY KEY,
+  parent_id INTEGER REFERENCES selection_sets(id),
+  name      TEXT NOT NULL,
+  kind      TEXT NOT NULL CHECK (kind IN ('folder', 'selection', 'search')),
+  membership_resolved INTEGER NOT NULL DEFAULT 1 CHECK (membership_resolved IN (0, 1))
+);
+
+CREATE TABLE selection_set_members (
+  set_id    INTEGER NOT NULL REFERENCES selection_sets(id),
+  object_id INTEGER NOT NULL REFERENCES objects(id),
+  PRIMARY KEY (set_id, object_id)
+) WITHOUT ROWID;
+
+CREATE TABLE warnings (
+  id        INTEGER PRIMARY KEY,
+  severity  TEXT NOT NULL CHECK (severity IN ('info', 'warning', 'error')),
+  code      TEXT NOT NULL,
+  message   TEXT NOT NULL,
+  object_id INTEGER REFERENCES objects(id)
+);
+`;
+
 /** Meta values that do not depend on the generated content. */
 const DRAGON_META: readonly (readonly [string, string])[] = [
-  ['schema_version', '2'],
+  ['schema_version', '3'],
   ['input_file_name', 'Dragon-Coordination.nwd'],
   ['input_sha256', '5f2c1a9d4b7e0836c5d19af42b6e8730914cad5b2e7f60381c9a4de5f7b02c68'],
   ['input_bytes', '104857600'],
@@ -166,6 +248,10 @@ const DRAGON_META: readonly (readonly [string, string])[] = [
   ['extractor_version', '0.1.0'],
   ['adapter_version', 'navisworks-2025'],
   ['navisworks_version', '25.0.1234.56'],
+  // Schema v3's two optional keys. Fixed, like everything else here: a clock or
+  // a host culture reading would make the fixture non-deterministic.
+  ['units', 'Meters'],
+  ['ui_language', 'en-US'],
 ];
 
 const SOURCE_MODEL_MECHANICAL = 1;
@@ -215,8 +301,20 @@ interface FixtureObject {
   readonly className: string;
   readonly instanceGuid: string;
   readonly authoringId: string | null;
+  readonly authoringIdKind: AuthoringIdKind | null;
+  /** Filled in by {@link assignStructuralKeys}, never by hand. */
+  readonly structuralKey: string;
+  readonly flags: number;
   readonly bbox: BoundingBox | null;
 }
+
+/** `objects.flags` bits, as the DDL defines them. */
+const FLAG_HIDDEN = 1;
+const FLAG_LAYER = 2;
+const FLAG_INSERT = 4;
+const FLAG_COMPOSITE = 8;
+const FLAG_COLLECTION = 16;
+const FLAG_HAS_MODEL = 32;
 
 interface FixtureProperty {
   readonly objectId: number;
@@ -233,6 +331,7 @@ interface FixtureSelectionSet {
   readonly parentId: number | null;
   readonly name: string;
   readonly kind: string;
+  readonly guid: string;
   /** Defaults to true; only an unresolved saved search sets it false. */
   readonly membershipResolved?: boolean;
   readonly memberObjectIds: readonly number[];
@@ -252,6 +351,9 @@ interface FixtureSourceModel {
   readonly fileName: string;
   readonly displayName: string;
   readonly guid: string;
+  /** The file the `.nwc` was converted from — a different name, on purpose. */
+  readonly sourceFileName: string;
+  readonly sourceGuid: string;
 }
 
 interface FixtureContent {
@@ -270,6 +372,8 @@ const DRAGON_SOURCE_MODELS: readonly FixtureSourceModel[] = [
     fileName: 'Dragon-Mechanical.nwc',
     displayName: 'Dragon Mechanical',
     guid: guidFor(1001),
+    sourceFileName: 'Dragon-Mechanical.rvt',
+    sourceGuid: guidFor(2001),
   },
   {
     id: SOURCE_MODEL_CONTROLS,
@@ -277,6 +381,8 @@ const DRAGON_SOURCE_MODELS: readonly FixtureSourceModel[] = [
     fileName: 'Dragon-Controls.nwc',
     displayName: 'Dragon Controls',
     guid: guidFor(1002),
+    sourceFileName: 'Dragon-Controls.rvt',
+    sourceGuid: guidFor(2002),
   },
   {
     id: SOURCE_MODEL_CONTROLS_PLC,
@@ -284,6 +390,8 @@ const DRAGON_SOURCE_MODELS: readonly FixtureSourceModel[] = [
     fileName: 'Dragon-Controls-PLC.nwc',
     displayName: 'Dragon Controls PLC',
     guid: guidFor(1003),
+    sourceFileName: 'Dragon-Controls-PLC.dwg',
+    sourceGuid: guidFor(2003),
   },
 ];
 
@@ -303,6 +411,76 @@ function twoDigits(value: number): string {
 
 function guidFor(id: number): string {
   return `00000000-0000-4000-8000-${String(id).padStart(12, '0')}`;
+}
+
+const UNIT_SEPARATOR = '\u001f';
+const RECORD_SEPARATOR = '\u001e';
+
+/**
+ * The extractor's own structural-key algorithm, restated.
+ *
+ * Deliberately the same computation as `DocumentWalker.StructuralKey` in the
+ * C# adapter rather than an invented stand-in: a fixture that hashed something
+ * else would let the reader and the writer disagree about what the column means
+ * without any test noticing. Shape and naming only — class, display name,
+ * sibling position — chained through the parent's digest, so inserting a
+ * sibling changes that sibling and every one after it and nothing before it.
+ */
+function structuralKeyOf(
+  parentKey: string,
+  className: string,
+  displayName: string,
+  pathIndex: number,
+): string {
+  const material =
+    `${parentKey}${RECORD_SEPARATOR}${className}${UNIT_SEPARATOR}${displayName}` +
+    `${UNIT_SEPARATOR}${String(pathIndex)}`;
+  return createHash('sha256').update(material, 'utf8').digest('hex');
+}
+
+/**
+ * Fills in every object's structural key, parents before children.
+ *
+ * Run as a pass rather than at construction because the key depends on the
+ * whole chain above an object: a subset that re-roots an object changes its
+ * position, and a key left over from the federated fixture would then describe
+ * a tree that file does not have.
+ */
+function assignStructuralKeys(objects: readonly FixtureObject[]): FixtureObject[] {
+  const keys = new Map<number, string>();
+  return objects.map((object): FixtureObject => {
+    const parentKey = object.parentId === null ? '' : (keys.get(object.parentId) ?? '');
+    const structuralKey = structuralKeyOf(
+      parentKey,
+      object.className,
+      object.displayName,
+      object.pathIndex,
+    );
+    keys.set(object.id, structuralKey);
+    return { ...object, structuralKey };
+  });
+}
+
+/**
+ * The structure bits a Navisworks item of this class would carry.
+ *
+ * Invented, like everything else in Dragon, but consistent: a reader that asks
+ * "which objects are layers" gets the layer nodes, which is what makes the
+ * column worth exercising.
+ */
+function flagsForClass(className: string): number {
+  switch (className) {
+    case 'File':
+      return FLAG_HAS_MODEL | FLAG_COLLECTION;
+    case 'Layer':
+      return FLAG_LAYER | FLAG_COLLECTION;
+    case 'Equipment':
+      return FLAG_INSERT | FLAG_COMPOSITE;
+    case 'Module':
+      return FLAG_INSERT;
+    default:
+      return 0;
+  }
 }
 
 /** Bounds derived from the object id: arbitrary, but the same every run. */
@@ -327,10 +505,20 @@ function buildDragonContent(): FixtureContent {
   const properties: FixtureProperty[] = [];
   let nextObjectId = 1;
 
-  const addObject = (object: Omit<FixtureObject, 'id' | 'instanceGuid'>): FixtureObject => {
+  const addObject = (
+    object: Omit<FixtureObject, 'id' | 'instanceGuid' | 'structuralKey' | 'flags'>,
+  ): FixtureObject => {
     const id = nextObjectId;
     nextObjectId += 1;
-    const created: FixtureObject = { ...object, id, instanceGuid: guidFor(id) };
+    const created: FixtureObject = {
+      ...object,
+      id,
+      instanceGuid: guidFor(id),
+      // Left empty here and filled by assignStructuralKeys once the whole tree
+      // exists: the key is the chain above the object, not the object alone.
+      structuralKey: '',
+      flags: flagsForClass(object.className),
+    };
     objects.push(created);
     return created;
   };
@@ -377,6 +565,7 @@ function buildDragonContent(): FixtureContent {
     displayName: 'Dragon-Mechanical.nwc',
     className: 'File',
     authoringId: null,
+    authoringIdKind: null,
     bbox: null,
   });
   addItemProperties(mechanicalRoot);
@@ -390,6 +579,7 @@ function buildDragonContent(): FixtureContent {
       displayName: building.name,
       className: 'Layer',
       authoringId: null,
+      authoringIdKind: null,
       bbox: null,
     });
     addItemProperties(buildingObject);
@@ -407,6 +597,7 @@ function buildDragonContent(): FixtureContent {
           displayName: tag,
           className: 'Equipment',
           authoringId: `id-${tag}`,
+          authoringIdKind: 'revit-element-id',
           bbox: bboxFor(nextObjectId),
         });
         pathIndex += 1;
@@ -442,6 +633,7 @@ function buildDragonContent(): FixtureContent {
           displayName: 'Solid',
           className: 'Solid',
           authoringId: null,
+          authoringIdKind: null,
           bbox: bboxFor(nextObjectId),
         });
         const isLastMechanicalNode =
@@ -466,6 +658,7 @@ function buildDragonContent(): FixtureContent {
     displayName: 'Dragon-Controls.nwc',
     className: 'File',
     authoringId: null,
+    authoringIdKind: null,
     bbox: null,
   });
   addItemProperties(controlsRoot);
@@ -479,6 +672,7 @@ function buildDragonContent(): FixtureContent {
       displayName: building.name,
       className: 'Layer',
       authoringId: null,
+      authoringIdKind: null,
       bbox: null,
     });
     addItemProperties(buildingObject);
@@ -496,6 +690,7 @@ function buildDragonContent(): FixtureContent {
           displayName: tag,
           className: 'Equipment',
           authoringId: `id-${tag}`,
+          authoringIdKind: 'revit-element-id',
           bbox: bboxFor(nextObjectId),
         });
         pathIndex += 1;
@@ -518,6 +713,7 @@ function buildDragonContent(): FixtureContent {
               displayName: `Module ${twoDigits(slot)}`,
               className: 'Module',
               authoringId: null,
+              authoringIdKind: null,
               bbox: null,
             });
             addItemProperties(module);
@@ -539,6 +735,7 @@ function buildDragonContent(): FixtureContent {
             displayName: 'Terminal',
             className: 'Terminal',
             authoringId: null,
+            authoringIdKind: null,
             bbox: null,
           });
           addItemProperties(terminal);
@@ -548,15 +745,30 @@ function buildDragonContent(): FixtureContent {
   }
 
   const selectionSets: readonly FixtureSelectionSet[] = [
-    { id: 1, parentId: null, name: 'Dragon Systems', kind: 'folder', memberObjectIds: [] },
+    {
+      id: 1,
+      parentId: null,
+      name: 'Dragon Systems',
+      kind: 'folder',
+      guid: guidFor(3001),
+      memberObjectIds: [],
+    },
     {
       id: 2,
       parentId: 1,
       name: 'Air Handling',
       kind: 'selection',
+      guid: guidFor(3002),
       memberObjectIds: mahEquipmentIds,
     },
-    { id: 3, parentId: null, name: 'PLC Panels', kind: 'search', memberObjectIds: plcIds },
+    {
+      id: 3,
+      parentId: null,
+      name: 'PLC Panels',
+      kind: 'search',
+      guid: guidFor(3003),
+      memberObjectIds: plcIds,
+    },
   ];
 
   const warnings: readonly FixtureWarning[] = [
@@ -576,7 +788,13 @@ function buildDragonContent(): FixtureContent {
     },
   ];
 
-  return { sourceModels: DRAGON_SOURCE_MODELS, objects, properties, selectionSets, warnings };
+  return {
+    sourceModels: DRAGON_SOURCE_MODELS,
+    objects: assignStructuralKeys(objects),
+    properties,
+    selectionSets,
+    warnings,
+  };
 }
 
 /**
@@ -624,6 +842,7 @@ export function writeDragonFixtureWithUnresolvedSearch(path: string): void {
           parentId: null,
           name: DRAGON_UNRESOLVED_SET_NAME,
           kind: 'search',
+          guid: guidFor(3004),
           membershipResolved: false,
           memberObjectIds: [],
         },
@@ -764,7 +983,10 @@ function subsetOfContent(content: FixtureContent, opts: DragonFixtureSubset): Fi
 
   return {
     sourceModels,
-    objects,
+    // Recomputed, not inherited: a re-rooted object sits at a different depth
+    // and a different sibling position, and a key carried over from the
+    // federated fixture would describe a tree this file does not have.
+    objects: assignStructuralKeys(objects),
     properties: content.properties.filter((property) => keptObjectIds.has(property.objectId)),
     selectionSets,
     // A warning about an object this file does not hold would point at nothing.
@@ -833,7 +1055,8 @@ function writeFixtureContent(
     insertMeta.run('object_count', String(content.objects.length));
 
     const insertSourceModel = db.prepare(
-      'INSERT INTO source_models (id, parent_id, file_name, display_name, guid) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO source_models (id, parent_id, file_name, display_name, guid, source_file_name, ' +
+        'source_guid) VALUES (?, ?, ?, ?, ?, ?, ?)',
     );
     for (const model of content.sourceModels) {
       insertSourceModel.run(
@@ -842,13 +1065,16 @@ function writeFixtureContent(
         model.fileName,
         model.displayName,
         model.guid,
+        model.sourceFileName,
+        model.sourceGuid,
       );
     }
 
     const insertObject = db.prepare(
       'INSERT INTO objects (id, source_model_id, parent_id, path_index, depth, display_name, class_name, ' +
-        'instance_guid, authoring_id, bbox_min_x, bbox_min_y, bbox_min_z, bbox_max_x, bbox_max_y, bbox_max_z) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'instance_guid, authoring_id, authoring_id_kind, structural_key, flags, ' +
+        'bbox_min_x, bbox_min_y, bbox_min_z, bbox_max_x, bbox_max_y, bbox_max_z) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     for (const object of content.objects) {
       insertObject.run(
@@ -861,6 +1087,9 @@ function writeFixtureContent(
         object.className,
         object.instanceGuid,
         object.authoringId,
+        object.authoringIdKind,
+        object.structuralKey,
+        object.flags,
         object.bbox === null ? null : object.bbox.minX,
         object.bbox === null ? null : object.bbox.minY,
         object.bbox === null ? null : object.bbox.minZ,
@@ -887,14 +1116,15 @@ function writeFixtureContent(
     }
 
     const insertSelectionSet = db.prepare(
-      'INSERT INTO selection_sets (id, parent_id, name, kind, membership_resolved) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO selection_sets (id, parent_id, name, kind, membership_resolved, guid) ' +
+        'VALUES (?, ?, ?, ?, ?, ?)',
     );
     const insertMember = db.prepare(
       'INSERT INTO selection_set_members (set_id, object_id) VALUES (?, ?)',
     );
     for (const set of content.selectionSets) {
       const resolved = set.membershipResolved ?? true;
-      insertSelectionSet.run(set.id, set.parentId, set.name, set.kind, resolved ? 1 : 0);
+      insertSelectionSet.run(set.id, set.parentId, set.name, set.kind, resolved ? 1 : 0, set.guid);
       // An unresolved set gets no member rows even if one were listed: the
       // fixture has to be able to produce the shape the schema promises.
       if (!resolved) {

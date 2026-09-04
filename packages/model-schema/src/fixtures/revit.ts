@@ -28,16 +28,17 @@
  * The DDL is Dragon's — that is `schemas/extraction-cache.sql`, and there is one
  * of it. Only the content differs.
  */
+import { createHash } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import type { BoundingBox } from '../schema.js';
+import type { AuthoringIdKind, BoundingBox } from '../schema.js';
 
 import { EXTRACTION_CACHE_DDL } from './dragon.js';
 
 /** Meta values that do not depend on the generated content. */
 const REVIT_META: readonly (readonly [string, string])[] = [
-  ['schema_version', '2'],
+  ['schema_version', '3'],
   ['input_file_name', 'Campus-Federated.nwd'],
   ['input_sha256', 'a41d6f0b93c27e5849d0bb17c62f3a8e5d704169bb2c83f5a90e7d41c6b28035'],
   ['input_bytes', '268435456'],
@@ -45,6 +46,8 @@ const REVIT_META: readonly (readonly [string, string])[] = [
   ['extractor_version', '0.1.0'],
   ['adapter_version', 'navisworks-2025'],
   ['navisworks_version', '25.0.1234.56'],
+  ['units', 'Feet'],
+  ['ui_language', 'en-US'],
 ];
 
 const SOURCE_MODEL_B14_MECHANICAL = 1;
@@ -89,6 +92,10 @@ interface FixtureObject {
   readonly className: string;
   readonly instanceGuid: string;
   readonly authoringId: string | null;
+  readonly authoringIdKind: AuthoringIdKind | null;
+  /** Filled in by {@link assignStructuralKeys}, never by hand. */
+  readonly structuralKey: string;
+  readonly flags: number;
   readonly bbox: BoundingBox | null;
 }
 
@@ -108,6 +115,9 @@ interface FixtureSourceModel {
   readonly fileName: string;
   readonly displayName: string;
   readonly guid: string;
+  /** The `.rvt` the `.nwc` was published from. */
+  readonly sourceFileName: string;
+  readonly sourceGuid: string;
 }
 
 interface FixtureContent {
@@ -124,6 +134,64 @@ function bboxFor(id: number): BoundingBox {
   return { minX: id * 4, minY: 0, minZ: 0, maxX: id * 4 + 3, maxY: 2, maxZ: 2 };
 }
 
+const UNIT_SEPARATOR = '\u001f';
+const RECORD_SEPARATOR = '\u001e';
+
+/** `objects.flags` bits, as the DDL defines them. */
+const FLAG_LAYER = 2;
+const FLAG_INSERT = 4;
+const FLAG_COMPOSITE = 8;
+const FLAG_COLLECTION = 16;
+const FLAG_HAS_MODEL = 32;
+
+/**
+ * The extractor's own structural-key algorithm — see the same function in
+ * `dragon.ts`, which explains why it is restated rather than invented.
+ */
+function structuralKeyOf(
+  parentKey: string,
+  className: string,
+  displayName: string,
+  pathIndex: number,
+): string {
+  const material =
+    `${parentKey}${RECORD_SEPARATOR}${className}${UNIT_SEPARATOR}${displayName}` +
+    `${UNIT_SEPARATOR}${String(pathIndex)}`;
+  return createHash('sha256').update(material, 'utf8').digest('hex');
+}
+
+/** Fills in every object's structural key, parents before children. */
+function assignStructuralKeys(objects: readonly FixtureObject[]): FixtureObject[] {
+  const keys = new Map<number, string>();
+  return objects.map((object): FixtureObject => {
+    const parentKey = object.parentId === null ? '' : (keys.get(object.parentId) ?? '');
+    const structuralKey = structuralKeyOf(
+      parentKey,
+      object.className,
+      object.displayName,
+      object.pathIndex,
+    );
+    keys.set(object.id, structuralKey);
+    return { ...object, structuralKey };
+  });
+}
+
+/** The structure bits a Navisworks item of this class would carry. */
+function flagsForClass(className: string): number {
+  switch (className) {
+    case 'File':
+      return FLAG_HAS_MODEL | FLAG_COLLECTION;
+    case 'Layer':
+      return FLAG_LAYER | FLAG_COLLECTION;
+    case 'Composite Object':
+      return FLAG_COMPOSITE;
+    case 'Insert Geometry':
+      return FLAG_INSERT;
+    default:
+      return 0;
+  }
+}
+
 /** The three files, and what each one is called on disk. */
 const REVIT_SOURCE_MODELS: readonly FixtureSourceModel[] = [
   {
@@ -132,6 +200,8 @@ const REVIT_SOURCE_MODELS: readonly FixtureSourceModel[] = [
     fileName: 'B14-Mechanical.nwc',
     displayName: 'B14 Mechanical',
     guid: guidFor(2001),
+    sourceFileName: 'B14-Mechanical.rvt',
+    sourceGuid: guidFor(2101),
   },
   {
     id: SOURCE_MODEL_B14_ELECTRICAL,
@@ -139,6 +209,8 @@ const REVIT_SOURCE_MODELS: readonly FixtureSourceModel[] = [
     fileName: 'B14-Electrical.nwc',
     displayName: 'B14 Electrical',
     guid: guidFor(2002),
+    sourceFileName: 'B14-Electrical.rvt',
+    sourceGuid: guidFor(2102),
   },
   {
     id: SOURCE_MODEL_B22_MECHANICAL,
@@ -146,6 +218,8 @@ const REVIT_SOURCE_MODELS: readonly FixtureSourceModel[] = [
     fileName: 'B22-Mechanical.nwc',
     displayName: 'B22 Mechanical',
     guid: guidFor(2003),
+    sourceFileName: 'B22-Mechanical.rvt',
+    sourceGuid: guidFor(2103),
   },
 ];
 
@@ -433,13 +507,26 @@ function buildRevitContent(): FixtureContent {
   // out per parent rather than tracked by each caller.
   const nextPathIndex = new Map<number | null, number>();
   const addObject = (
-    object: Omit<FixtureObject, 'id' | 'instanceGuid' | 'pathIndex'>,
+    object: Omit<
+      FixtureObject,
+      'id' | 'instanceGuid' | 'pathIndex' | 'structuralKey' | 'flags' | 'authoringIdKind'
+    >,
   ): FixtureObject => {
     const id = nextObjectId;
     nextObjectId += 1;
     const pathIndex = nextPathIndex.get(object.parentId) ?? 0;
     nextPathIndex.set(object.parentId, pathIndex + 1);
-    const created: FixtureObject = { ...object, pathIndex, id, instanceGuid: guidFor(id) };
+    const created: FixtureObject = {
+      ...object,
+      pathIndex,
+      id,
+      instanceGuid: guidFor(id),
+      // An authoring id here is always a Revit element id: that is what this
+      // fixture is a model of.
+      authoringIdKind: object.authoringId === null ? null : 'revit-element-id',
+      structuralKey: '',
+      flags: flagsForClass(object.className),
+    };
     objects.push(created);
     return created;
   };
@@ -531,7 +618,10 @@ function buildRevitContent(): FixtureContent {
           depth: host === undefined ? 2 : 3,
           displayName: `${spec.family} [${String(700000 + nextObjectId)}]`,
           className: 'Composite Object',
-          authoringId: null,
+          // Navisworks shows the Revit element id in the node name and also
+          // publishes it as a property; the extractor promotes it into the
+          // column, so the fixture records it in both places.
+          authoringId: String(700000 + nextObjectId),
           bbox: bboxFor(nextObjectId),
         });
         equipmentByMark.set(spec.mark, equipment);
@@ -593,7 +683,7 @@ function buildRevitContent(): FixtureContent {
     }
   }
 
-  return { sourceModels: REVIT_SOURCE_MODELS, objects, properties };
+  return { sourceModels: REVIT_SOURCE_MODELS, objects: assignStructuralKeys(objects), properties };
 }
 
 /**
@@ -619,16 +709,26 @@ export function writeRevitShapedFixture(path: string): void {
     insertMeta.run('object_count', String(content.objects.length));
 
     const insertSourceModel = db.prepare(
-      'INSERT INTO source_models (id, parent_id, file_name, display_name, guid) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO source_models (id, parent_id, file_name, display_name, guid, source_file_name, ' +
+        'source_guid) VALUES (?, ?, ?, ?, ?, ?, ?)',
     );
     for (const model of content.sourceModels) {
-      insertSourceModel.run(model.id, model.parentId, model.fileName, model.displayName, model.guid);
+      insertSourceModel.run(
+        model.id,
+        model.parentId,
+        model.fileName,
+        model.displayName,
+        model.guid,
+        model.sourceFileName,
+        model.sourceGuid,
+      );
     }
 
     const insertObject = db.prepare(
       'INSERT INTO objects (id, source_model_id, parent_id, path_index, depth, display_name, class_name, ' +
-        'instance_guid, authoring_id, bbox_min_x, bbox_min_y, bbox_min_z, bbox_max_x, bbox_max_y, bbox_max_z) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'instance_guid, authoring_id, authoring_id_kind, structural_key, flags, ' +
+        'bbox_min_x, bbox_min_y, bbox_min_z, bbox_max_x, bbox_max_y, bbox_max_z) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     for (const object of content.objects) {
       insertObject.run(
@@ -641,6 +741,9 @@ export function writeRevitShapedFixture(path: string): void {
         object.className,
         object.instanceGuid,
         object.authoringId,
+        object.authoringIdKind,
+        object.structuralKey,
+        object.flags,
         object.bbox === null ? null : object.bbox.minX,
         object.bbox === null ? null : object.bbox.minY,
         object.bbox === null ? null : object.bbox.minZ,

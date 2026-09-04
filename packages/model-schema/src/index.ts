@@ -19,7 +19,10 @@ export { CacheValidationError, describeCacheValidationReason } from './errors.js
 export type { CacheValidationReason } from './errors.js';
 
 export {
+  AUTHORING_ID_KINDS,
   CURRENT_SCHEMA_VERSION,
+  hasV3Columns,
+  isAuthoringIdKind,
   isSelectionSetKind,
   isSupportedSchemaVersion,
   isWarningSeverity,
@@ -29,10 +32,12 @@ export {
   SUPPORTED_SCHEMA_VERSIONS,
 } from './schema.js';
 export type {
+  AuthoringIdKind,
   BoundingBox,
   CacheWarning,
   ExtractionCacheMeta,
   ModelObject,
+  ObjectFlags,
   ObjectProperty,
   ObjectPropertyRow,
   SelectionSet,
