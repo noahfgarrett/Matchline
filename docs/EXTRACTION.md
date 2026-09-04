@@ -88,6 +88,7 @@ a real cache.
 ```
 Matchline.Extractor --input <file.nwd> [--cache-dir <dir>] [--navisworks-dir <dir>]
                     [--navisworks-version <year>] [--input-sha256 <hex>]
+                    [--stall-timeout-seconds <n>]
 ```
 
 `--input` is the only required argument. `--navisworks-dir` and `--navisworks-version` both
@@ -107,10 +108,20 @@ Absent, the launcher hashes the input itself, exactly as it always did — which
 person running it by hand from a shell gets, and what docs/WINDOWS-RUNBOOK.md's manual
 invocation exercises.
 
+`--stall-timeout-seconds` is how long Navisworks may write nothing before it is killed and
+the run fails with `NW_STALLED`. Default 900 (fifteen minutes); `0` waits forever. "Writing
+nothing" means the NDJSON stream has not grown and no plugin-side progress record has
+arrived — the two things the launcher can see from outside the Navisworks process. It is
+not "no CPU" and not "no window": a Navisworks sitting on a modal dialog is perfectly busy,
+and that dialog is the commonest reason a headless run goes quiet. The desktop app passes
+this flag explicitly, with the same default, and warns in the row after ten minutes of
+silence — earlier than the kill on purpose, so the user gets the chance to decide before
+the launcher does.
+
 ## Protocol (launcher stdout, JSON lines)
 
 ```
-{"type":"progress","stage":"hash|detect|open|walk|convert|finalize","done":123,"total":4096}
+{"type":"progress","stage":"hash|detect|open|walk|sets|convert|finalize","done":123,"total":4096}
 {"type":"progress","stage":"detect","done":1,"total":1,"detail":"Navisworks Manage 2025 (C:\\...) will open this file; expecting adapter navisworks-2025."}
 {"type":"warning","code":"...","message":"...","objectId":123}
 {"type":"result","status":"ok|cache-hit","cachePath":"...","objects":131000,"warnings":2}
@@ -119,6 +130,64 @@ invocation exercises.
 
 `detail` is optional and carries a human-readable sentence; only the `detect` stage emits one
 today, and a reader must not require it on any stage.
+
+`sets` is saved-set resolution, between the walk and the convert. It is its own stage because
+resolving one saved search re-runs that search over the whole model: a set-heavy document sits
+there for minutes after the last object record was written, and without a line of its own the
+walk counter simply stops moving and the run looks hung. Unlike the walk and the convert it
+knows its total, because the set tree is counted before the first one is resolved.
+
+### Error codes
+
+| Code | Exit | What it means |
+| ---- | ---- | ------------- |
+| `NW_VERSION_TOO_NEW` | 5 | Published by a newer Navisworks than the installed adapter. Mandatory messaging (below). |
+| `NW_NOT_INSTALLED` | 4 | No licensed Manage/Simulate found, or none with an adapter. |
+| `OPEN_FAILED` | 6 | Navisworks could not open the file, for any other reason. |
+| `EXTRACT_FAILED` | 7 | The stream started and did not finish. |
+| `NW_STALLED` | 10 | Navisworks wrote nothing for `--stall-timeout-seconds` and was killed. Nearly always a hidden dialog. |
+| `PLUGIN_NOT_DEPLOYED` | 11 | Pre-flight: the adapter DLL is not in either Plugins root for the chosen install. Navisworks is never started. |
+| `PLUGIN_NOT_FOUND` | 12 | Navisworks ran and exited without the plugin creating the stream at all. |
+| `CACHE_WRITE_FAILED` | 8 | The stream was complete and the cache could not be written or verified — SQLite errors included. |
+| `INPUT_NOT_FOUND` | 3 | The input was gone by the time the run reached it. |
+| `INVALID_ARGS` | 2 | A wrong command line. |
+| `CANCELLED` | 9 | A `cancel` line on stdin, or — when stdin was redirected — its EOF, which is a parent that has died. |
+| `INTERNAL` | 1 | Anything else. |
+
+Every one of these has a plain-language sentence naming an action in
+`apps/desktop/electron/services/extraction-messages.ts`, and a test refuses to let a code
+exist without one.
+
+### Ending the run
+
+The launcher stops waiting on Roamer for one of four reasons, and they are different facts:
+
+1. Roamer exits by itself.
+2. The **terminator record** appears in the stream. The extraction is then complete whatever
+   Roamer does next, so it gets a 30-second grace period to close on its own and is killed
+   after that. A GUI executable that will not exit is not a reason to hold the queue behind a
+   cache that is already written.
+3. The stream stops growing for `--stall-timeout-seconds` → `NW_STALLED`.
+4. A cancel arrives → `CANCELLED`.
+
+The Navisworks process is assigned to a Windows **Job Object** with
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` immediately after it starts, so a launcher that is
+terminated outright — which runs no cleanup at all — cannot leave a headless Navisworks
+holding a licence. A machine where the job cannot be created still extracts; it emits a
+`JOB_OBJECT_UNAVAILABLE` warning and loses only the backstop.
+
+Roamer is also given `-log "<cacheDir>\<sha>.roamer.log"` (VERIFY-ON-WINDOWS: the switch is
+assumed, and dropping it is the first thing to try if Roamer refuses the command line). It is
+Navisworks's own diagnostic log and the only channel that can say anything about a run that
+produced no stream, so it is deleted on success and kept — and named in the error detail — on
+failure.
+
+Before Navisworks is started at all, the launcher checks that the adapter DLL is deployed:
+`<install>\Plugins\Matchline.Extraction.Navisworks<year>\Matchline.Extraction.Navisworks<year>.dll`,
+or the same path under the per-user root
+`%APPDATA%\Autodesk Navisworks <Product> <year>\Plugins\`. Either is accepted; which one
+Navisworks actually scans is what the proof run settles. An install whose year cannot be read
+(only reachable through `--navisworks-dir`) skips the check rather than failing it.
 
 The `hash` stage is always announced, whether the launcher computed the hash or was given
 one: with `--input-sha256` it is a single line already at `done == total`, and without it the

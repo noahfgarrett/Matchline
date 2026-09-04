@@ -96,7 +96,7 @@ data. Never copy the NWD into the repo folder, never commit a cache file, never
 paste a real file name, project name, or equipment tag into an issue, a commit
 message, or a chat. Everything in this runbook happens *outside* the repo tree:
 the model stays where it already lives, and caches are written under the app's
-own folder (`%APPDATA%\Matchline\cache\models`) or wherever `--cache-dir`
+own folder (`%LOCALAPPDATA%\Matchline\cache\models`) or wherever `--cache-dir`
 says — neither of which is in the repo or in git.
 
 ---
@@ -505,7 +505,7 @@ launcher each own half of the promise.
 The app writes caches under its own folder:
 
 ```
-dir "%APPDATA%\Matchline\cache\models"
+dir "%LOCALAPPDATA%\Matchline\cache\models"
 ```
 
 and a by-hand run writes them wherever `--cache-dir` said. Either way, expect
@@ -723,7 +723,7 @@ Grouped by what would go wrong:
 
 | Where                    | Assumed API                                                                       |
 | ------------------------ | --------------------------------------------------------------------------------- |
-| `MatchlineExtractAddIn`  | `[Plugin(name, developerId, ...)]`, `[AddInPlugin(AddInLocation.AddIn)]`, `Document.TryOpenFile(string)`, `Document.FileName` |
+| `MatchlineExtractAddIn`  | `[Plugin(name, developerId, ...)]`, `[AddInPlugin(AddInLocation.AddIn)]`, `Document.OpenFile(string)` (throwing; its message is what makes `NW_VERSION_TOO_NEW` reachable), `Document.FileName` |
 | `DocumentWalker`         | `Document.Models` of `Model`, `Model.RootItem`, `Model.FileName`, `ModelItem.Children`, `.DisplayName`, `.ClassDisplayName`, `.ClassName`, `.InstanceGuid`, `.HasGeometry`, `.BoundingBox()`, `.PropertyCategories` |
 | `DocumentWalker`         | `PropertyCategory.DisplayName` / `.Name` / `.Properties`, `DataProperty.DisplayName` / `.Name` / `.Value` |
 | `DocumentWalker`         | `Document.SelectionSets.RootItem`, `GroupItem.Children`, `SelectionSet.HasExplicitModelItems`, `.ExplicitModelItems` |

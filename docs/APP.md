@@ -177,6 +177,13 @@ from `file-missing`) and refuses to compile until it is added again.
 
 Extraction caches stay in `%LOCALAPPDATA%/Matchline/cache/models/` (or the platform
 equivalent via `app.getPath`) — referenced by hash from `sources`, never embedded.
+`%LOCALAPPDATA%` rather than the `userData` folder every other piece of app state lives
+in, and deliberately: on Windows `userData` is `%APPDATA%`, the *roaming* profile, and a
+domain-joined machine copies that to and from a file server at every sign-in. A cache is
+hundreds of megabytes to several gigabytes per model and is re-creatable from the model at
+any time, so it belongs to the machine (`project-session.ts`,
+`defaultExtractionCacheDir`). The launcher's own default is the same path
+(`ExtractorArguments.DefaultCacheDirectory`).
 
 ## Install-script policy
 

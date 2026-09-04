@@ -154,7 +154,7 @@ bug report.
 |---|---|---|
 | Your project | Wherever you saved `<YourSite>.matchline` | The whole project. Back this up. |
 | App settings | `C:\Users\<you>\AppData\Roaming\Matchline\app-state.json` | Only the recent-projects list and a "I last saw this file here" index. Safe to delete; you lose nothing but the recents list. |
-| Extraction caches | `C:\Users\<you>\AppData\Roaming\Matchline\cache\models` | Written by the extractor, not by the app — the app just tells it where. Named by content hash. Re-creatable by re-running the extractor. The manual launcher path (docs/WINDOWS-RUNBOOK.md) writes wherever you pass `--cache-dir` instead; that only matters for the diagnostic route, not a normal in-app extraction. |
+| Extraction caches | `C:\Users\<you>\AppData\Local\Matchline\cache\models` | Written by the extractor, not by the app — the app just tells it where. Named by content hash. Re-creatable by re-running the extractor. The manual launcher path (docs/WINDOWS-RUNBOOK.md) writes wherever you pass `--cache-dir` instead; that only matters for the diagnostic route, not a normal in-app extraction. |
 | Exports | Wherever you chose in the save dialog | Generated MEL, EXTO, predecessor matrices, revision diffs. |
 | The app itself | `C:\Users\<you>\AppData\Local\Programs\Matchline` (installer) or wherever you unzipped it | |
 
@@ -175,8 +175,8 @@ app and its shortcuts.
 Neither touches your data. To remove that too, delete by hand:
 
 - `C:\Users\<you>\AppData\Roaming\Matchline` — the app's settings and recents.
+- `C:\Users\<you>\AppData\Local\Matchline` — the extraction caches. This is the big one.
 - your `.matchline` project files, wherever you put them.
-- your extraction cache folder.
 
 ---
 
