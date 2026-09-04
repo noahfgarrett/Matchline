@@ -19,6 +19,15 @@ namespace Matchline.Extraction.Extractor
         internal const int CacheWriteFailed = 8;
         internal const int Cancelled = 9;
 
+        /// <summary>Navisworks stopped responding and was killed (NW_STALLED).</summary>
+        internal const int NavisworksStalled = 10;
+
+        /// <summary>The adapter DLL is not in the Plugins folder (PLUGIN_NOT_DEPLOYED).</summary>
+        internal const int PluginNotDeployed = 11;
+
+        /// <summary>Navisworks ran but the plugin never wrote a stream (PLUGIN_NOT_FOUND).</summary>
+        internal const int PluginNotFound = 12;
+
         internal static int ForErrorCode(string code)
         {
             switch (code)
@@ -35,6 +44,12 @@ namespace Matchline.Extraction.Extractor
                     return OpenFailed;
                 case ExtractionErrorCodes.ExtractFailed:
                     return ExtractFailed;
+                case ExtractionErrorCodes.NavisworksStalled:
+                    return NavisworksStalled;
+                case ExtractionErrorCodes.PluginNotDeployed:
+                    return PluginNotDeployed;
+                case ExtractionErrorCodes.PluginNotFound:
+                    return PluginNotFound;
                 case ExtractionErrorCodes.CacheWriteFailed:
                     return CacheWriteFailed;
                 case ExtractionErrorCodes.Cancelled:

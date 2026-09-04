@@ -68,8 +68,16 @@ namespace Autodesk.Navisworks.Api
             get { throw new NotImplementedException(StubMessage.Text); }
         }
 
-        /// <summary>Assumed: bool TryOpenFile(string), no other required arguments.</summary>
-        public bool TryOpenFile(string fileName)
+        /// <summary>
+        /// Assumed: void OpenFile(string), no other required arguments, which
+        /// throws on failure carrying Navisworks's own message.
+        /// <para>
+        /// The throwing form rather than the bool-returning TryOpenFile on
+        /// purpose: the message is what tells a too-new file from an unreadable
+        /// one, and a bool has nowhere to put it (see MatchlineExtractAddIn).
+        /// </para>
+        /// </summary>
+        public void OpenFile(string fileName)
         {
             throw new NotImplementedException(StubMessage.Text);
         }

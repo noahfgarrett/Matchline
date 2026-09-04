@@ -80,6 +80,31 @@ namespace Matchline.Extraction.Protocol
         /// <summary>The plugin ran but did not produce a complete stream.</summary>
         public const string ExtractFailed = "EXTRACT_FAILED";
 
+        /// <summary>
+        /// Navisworks stopped making progress and was killed.
+        /// <para>
+        /// Distinct from EXTRACT_FAILED because the cause is almost never the
+        /// model: a headless Navisworks that has stopped writing to the stream
+        /// is usually sitting behind a modal dialog nobody can see -- a sign-in,
+        /// a licence prompt, or the autosave-recovery box after a previous run
+        /// was killed. The launcher cannot dismiss it, so it says so.
+        /// </para>
+        /// </summary>
+        public const string NavisworksStalled = "NW_STALLED";
+
+        /// <summary>
+        /// The extraction plugin is not in the Plugins folder of the install
+        /// that would open the file. Decided before Navisworks is started.
+        /// </summary>
+        public const string PluginNotDeployed = "PLUGIN_NOT_DEPLOYED";
+
+        /// <summary>
+        /// Navisworks ran and exited without the plugin ever creating the
+        /// stream file. Distinct from EXTRACT_FAILED, which is a stream that
+        /// started and did not finish.
+        /// </summary>
+        public const string PluginNotFound = "PLUGIN_NOT_FOUND";
+
         /// <summary>The stream was complete but the cache could not be written or verified.</summary>
         public const string CacheWriteFailed = "CACHE_WRITE_FAILED";
 

@@ -117,16 +117,34 @@ namespace Matchline.Extraction.NavisworksAdapter
 
             if (document.Models.Count == 0 && !string.IsNullOrEmpty(inputPath))
             {
-                // VERIFY-ON-WINDOWS (shape pinned by the stub build:
-                // TryOpenFile takes one string and returns bool -- the result is
-                // assigned to a bool here, so nothing else compiles). If the real
-                // API differs, the alternatives are OpenFile / TryOpenFile with
-                // extra arguments.
-                bool opened = document.TryOpenFile(inputPath);
-                if (!opened)
+                // OpenFile rather than TryOpenFile, and the difference is the
+                // whole point: TryOpenFile answers a bool and throws Navisworks's
+                // own message away, which is the one sentence that can say the
+                // file was published by a newer release. Without it
+                // NW_VERSION_TOO_NEW was unreachable -- the launcher classifies
+                // from text, a headless GUI executable writes none, and the
+                // adapter's own "could not open" was classified OPEN_FAILED and
+                // never revisited (docs/DECISIONS.md calls the too-new message
+                // mandatory).
+                //
+                // VERIFY-ON-WINDOWS (shape pinned by the stub build: OpenFile
+                // takes one string and returns nothing). If the real API needs
+                // more arguments, add them here; the try/catch stays either way.
+                try
                 {
+                    document.OpenFile(inputPath);
+                }
+                catch (Exception ex)
+                {
+                    // Navisworks's own words are carried into the message, and
+                    // FailureClassifier reads the whole of it: the too-new
+                    // fragments are checked before the "could not open" ones, so
+                    // a version failure keeps its own code and everything else
+                    // still falls back to OPEN_FAILED.
                     throw new InvalidOperationException(
-                        "Navisworks could not open the file: " + Path.GetFileName(inputPath));
+                        "Navisworks could not open the file: " + Path.GetFileName(inputPath) +
+                        " -- " + FailureClassifier.Describe(ex),
+                        ex);
                 }
             }
 

@@ -46,7 +46,9 @@ namespace Matchline.Extraction.Extractor
 
             string streamPath = null;
             string partialCachePath = null;
+            string roamerLogPath = null;
             bool keepStream = false;
+            bool keepRoamerLog = false;
 
             try
             {
@@ -112,6 +114,12 @@ namespace Matchline.Extraction.Extractor
                 streamPath = Path.Combine(_arguments.CacheDirectory, sha256 + ".ndjson.tmp");
                 partialCachePath = cachePath + ".partial";
 
+                // Navisworks's own log for this run. It is the only place a GUI
+                // executable says anything about a failure -- nothing reaches
+                // the stdout the launcher captures -- so it is kept whenever the
+                // run fails and deleted whenever it does not.
+                roamerLogPath = Path.Combine(_arguments.CacheDirectory, sha256 + ".roamer.log");
+
                 CacheValidation existing = CacheInspector.Validate(cachePath);
                 if (existing.IsValid)
                 {
@@ -134,7 +142,24 @@ namespace Matchline.Extraction.Extractor
                     return Fail(ExtractionErrorCodes.NavisworksNotInstalled, locateFailure);
                 }
 
-                ReportDetected(install);
+                // Before Navisworks is started, not after: a missing add-in
+                // produces either no stream at all or an invisible message box,
+                // and neither of those failures is about the model or fixable by
+                // adding the file again (the audit's B2). It also comes before
+                // the detect line so that line can name the add-in it found --
+                // which of the two Plugins roots Navisworks honours is one of
+                // the things the first proof run is there to settle
+                // (docs/WINDOWS-RUNBOOK.md).
+                string pluginPath;
+                string pluginSearched;
+                if (!PluginDeployment.IsDeployed(install, out pluginPath, out pluginSearched))
+                {
+                    return Fail(
+                        ExtractionErrorCodes.PluginNotDeployed,
+                        PluginDeployment.DescribeMissing(install, pluginSearched));
+                }
+
+                ReportDetected(install, pluginPath);
 
                 ThrowIfCancelled();
                 DeleteIfExists(streamPath);
@@ -142,12 +167,32 @@ namespace Matchline.Extraction.Extractor
 
                 _reporter.Progress(ExtractionStages.Open, 0, 1);
 
+                DeleteIfExists(roamerLogPath);
+
                 NavisworksRunResult run;
                 using (NdjsonProgressMonitor monitor = new NdjsonProgressMonitor(streamPath, _reporter))
                 {
                     monitor.Start();
                     run = new NavisworksProcessRunner().Run(
-                        install, _arguments.InputPath, streamPath, IsCancelled);
+                        install,
+                        _arguments.InputPath,
+                        streamPath,
+                        roamerLogPath,
+                        IsCancelled,
+                        monitor,
+                        _arguments.StallTimeoutSeconds);
+                }
+
+                if (!string.IsNullOrEmpty(run.JobObjectFailure))
+                {
+                    // Never fatal: the run is fine, it just has no operating
+                    // system backstop if this launcher is killed outright.
+                    _reporter.Warning(
+                        "JOB_OBJECT_UNAVAILABLE",
+                        "Windows would not let Matchline tie the Navisworks process to this run (" +
+                        run.JobObjectFailure + "). The extraction is unaffected, but if Matchline " +
+                        "is force-quit, Navisworks may keep running in the background.",
+                        null);
                 }
 
                 if (run.WasKilled || _cancelRequested)
@@ -155,16 +200,35 @@ namespace Matchline.Extraction.Extractor
                     throw new OperationCanceledException();
                 }
 
+                if (run.WasStalled)
+                {
+                    keepRoamerLog = true;
+                    return Fail(
+                        ExtractionErrorCodes.NavisworksStalled,
+                        "Navisworks stopped responding: nothing was written to the extraction " +
+                        "stream for " +
+                        _arguments.StallTimeoutSeconds.ToString(CultureInfo.InvariantCulture) +
+                        " seconds, so it was stopped. A headless Navisworks that goes quiet is " +
+                        "usually waiting on a dialog nobody can see. " +
+                        DescribeRoamerLog(roamerLogPath) + " " +
+                        FirstLines(run.CapturedOutput, 5));
+                }
+
                 if (!File.Exists(streamPath))
                 {
-                    // The plugin never wrote anything: either it was not found,
-                    // or Navisworks failed before it ran.
+                    // Navisworks ran and the plugin never wrote a byte: either
+                    // the add-in was not loaded, or Navisworks failed before it
+                    // reached it. PLUGIN_NOT_FOUND rather than EXTRACT_FAILED,
+                    // which is a stream that started and did not finish -- the
+                    // two need different sentences and different fixes.
+                    keepRoamerLog = true;
                     string code = FailureClassifier.ClassifyMessage(
-                        run.CapturedOutput, ExtractionErrorCodes.ExtractFailed);
+                        run.CapturedOutput, ExtractionErrorCodes.PluginNotFound);
                     return Fail(
                         code,
                         "Navisworks produced no extraction stream (exit code " +
                         run.ExitCode.ToString(CultureInfo.InvariantCulture) + "). " +
+                        DescribeRoamerLog(roamerLogPath) + " " +
                         FirstLines(run.CapturedOutput, 5));
                 }
 
@@ -176,6 +240,7 @@ namespace Matchline.Extraction.Extractor
                 if (!outcome.Ok)
                 {
                     keepStream = true;
+                    keepRoamerLog = true;
                     string code = outcome.ErrorCode;
                     if (code == ExtractionErrorCodes.ExtractFailed)
                     {
@@ -186,7 +251,8 @@ namespace Matchline.Extraction.Extractor
 
                     return Fail(
                         code,
-                        outcome.ErrorMessage + " Stream kept for diagnosis at: " + streamPath);
+                        outcome.ErrorMessage + " Stream kept for diagnosis at: " + streamPath + ". " +
+                        DescribeRoamerLog(roamerLogPath));
                 }
 
                 _reporter.Progress(ExtractionStages.Finalize, 1, 1);
@@ -196,6 +262,18 @@ namespace Matchline.Extraction.Extractor
             catch (OperationCanceledException)
             {
                 return Fail(ExtractionErrorCodes.Cancelled, "Extraction cancelled.");
+            }
+            catch (Microsoft.Data.Sqlite.SqliteException ex)
+            {
+                // A full disk, a read-only cache directory or a database locked
+                // by something else all arrive here rather than as IOException:
+                // SQLite reports its own errors. Reporting them as INTERNAL made
+                // "the disk is full" read as a bug in Matchline.
+                keepStream = true;
+                keepRoamerLog = true;
+                return Fail(
+                    ExtractionErrorCodes.CacheWriteFailed,
+                    "The cache database could not be written: " + ex.Message);
             }
             catch (IOException ex)
             {
@@ -222,6 +300,14 @@ namespace Matchline.Extraction.Extractor
                 if (!keepStream)
                 {
                     DeleteIfExists(streamPath);
+                }
+
+                // Navisworks's log is evidence for a failure and litter after a
+                // success, and it is written on every run, so it is deleted here
+                // rather than left to accumulate one file per extraction.
+                if (!keepRoamerLog)
+                {
+                    DeleteIfExists(roamerLogPath);
                 }
             }
         }
@@ -314,9 +400,18 @@ namespace Matchline.Extraction.Extractor
         /// SupportedAdapters records a year as verified.
         /// </para>
         /// </summary>
-        private void ReportDetected(NavisworksInstall install)
+        /// <param name="pluginPath">
+        /// The add-in DLL the pre-flight found, or null when the check could not
+        /// be made. Named in the detect line because "which Plugins folder was
+        /// this loaded from" is a question the proof run has to answer and
+        /// nothing else records the answer.
+        /// </param>
+        private void ReportDetected(NavisworksInstall install, string pluginPath)
         {
             AdapterSupport adapter = install.Adapter;
+            string foundAt = string.IsNullOrEmpty(pluginPath)
+                ? string.Empty
+                : " Add-in found at " + pluginPath + ".";
 
             if (adapter == null)
             {
@@ -341,7 +436,8 @@ namespace Matchline.Extraction.Extractor
                 ExtractionStages.Detect,
                 1,
                 1,
-                install.Describe() + " will open this file; expecting adapter " + adapter.AdapterVersion + ".");
+                install.Describe() + " will open this file; expecting adapter " +
+                adapter.AdapterVersion + "." + foundAt);
 
             if (!adapter.IsVerified)
             {
@@ -549,6 +645,18 @@ namespace Matchline.Extraction.Extractor
                     string line = Console.In.ReadLine();
                     if (line == null)
                     {
+                        // End of stdin. When it was redirected, the only thing
+                        // on the other end was the parent process, and its
+                        // going away is a cancel nobody got to send: carrying on
+                        // would leave a headless Navisworks running for a result
+                        // nobody will ever read. A console run has a
+                        // non-redirected stdin and never reaches EOF this way,
+                        // so running the launcher by hand is unaffected.
+                        if (Console.IsInputRedirected)
+                        {
+                            _cancelRequested = true;
+                        }
+
                         return;
                     }
 
@@ -602,6 +710,20 @@ namespace Matchline.Extraction.Extractor
             catch (UnauthorizedAccessException)
             {
             }
+        }
+
+        /// <summary>
+        /// Names Navisworks's own log when there is one, so a person reporting
+        /// a failure has the file to send. Empty when Navisworks wrote nothing.
+        /// </summary>
+        private static string DescribeRoamerLog(string logPath)
+        {
+            if (string.IsNullOrEmpty(logPath) || !File.Exists(logPath))
+            {
+                return string.Empty;
+            }
+
+            return "Navisworks kept its own log at: " + logPath + ".";
         }
 
         private static string FirstLines(string text, int count)

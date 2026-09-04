@@ -39,6 +39,9 @@ export const EXIT_CODES = {
   extractFailed: 7,
   cacheWriteFailed: 8,
   cancelled: 9,
+  navisworksStalled: 10,
+  pluginNotDeployed: 11,
+  pluginNotFound: 12,
 };
 
 /** Stage names, from `native/navisworks-common/Protocol/ExtractionProtocol.cs`. */

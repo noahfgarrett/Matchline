@@ -11,6 +11,7 @@ namespace Matchline.Extraction.Extractor
         internal static readonly string UsageText =
             "Matchline.Extractor --input <file.nwd> [--cache-dir <dir>] [--navisworks-dir <dir>]\n" +
             "                    [--navisworks-version <year>] [--input-sha256 <hex>]\n" +
+            "                    [--stall-timeout-seconds <n>]\n" +
             "\n" +
             "  --input               NWD/NWF/NWC file to extract. Required.\n" +
             "  --cache-dir           Cache root. Default: %LOCALAPPDATA%\\Matchline\\cache\\models\n" +
@@ -21,8 +22,28 @@ namespace Matchline.Extraction.Extractor
             "  --input-sha256        The input's SHA-256, already computed by the caller. Skips\n" +
             "                        the hash stage and is TRUSTED: pass it only when you hashed\n" +
             "                        the same bytes this run will read. 64 hex digits.\n" +
+            "  --stall-timeout-seconds  Kill Navisworks and fail with NW_STALLED after this many\n" +
+            "                        seconds with no new bytes in the extraction stream. Default " +
+            DefaultStallTimeoutSeconds.ToString(CultureInfo.InvariantCulture) + ";\n" +
+            "                        0 disables it. A stall is almost always a hidden dialog.\n" +
             "\n" +
             "Emits JSON lines on stdout. Send a line reading 'cancel' on stdin to abort.";
+
+        /// <summary>
+        /// How long Navisworks may write nothing before the launcher gives up
+        /// on it. Fifteen minutes: long enough that a genuinely slow stage on a
+        /// huge federated model is never killed (the plugin emits a progress
+        /// record per saved set and a stream line per object, so silence really
+        /// does mean silence), short enough that a run waiting behind an
+        /// invisible sign-in dialog does not block the serial queue all night.
+        /// </summary>
+        internal const int DefaultStallTimeoutSeconds = 900;
+
+        /// <summary>
+        /// Upper bound on --stall-timeout-seconds: 24 hours. Anything larger is
+        /// a typo rather than a policy, and 0 already means "never give up".
+        /// </summary>
+        private const int MaxStallTimeoutSeconds = 86400;
 
         private ExtractorArguments()
         {
@@ -63,6 +84,13 @@ namespace Matchline.Extraction.Extractor
         /// </summary>
         internal string InputSha256 { get; private set; }
 
+        /// <summary>
+        /// Seconds of no growth in the extraction stream before Navisworks is
+        /// killed and the run fails with NW_STALLED, or 0 to wait forever.
+        /// Always a value parsing has already bounded.
+        /// </summary>
+        internal int StallTimeoutSeconds { get; private set; }
+
         internal static bool TryParse(string[] args, out ExtractorArguments parsed, out string error)
         {
             parsed = null;
@@ -73,6 +101,7 @@ namespace Matchline.Extraction.Extractor
             string navisworksDir = null;
             string navisworksVersion = null;
             string inputSha256 = null;
+            string stallTimeout = null;
 
             if (args == null)
             {
@@ -119,6 +148,15 @@ namespace Matchline.Extraction.Extractor
 
                     case "--input-sha256":
                         if (!TryTakeValue(args, ref i, "--input-sha256", ref inputSha256, out error))
+                        {
+                            return false;
+                        }
+
+                        break;
+
+                    case "--stall-timeout-seconds":
+                        if (!TryTakeValue(
+                                args, ref i, "--stall-timeout-seconds", ref stallTimeout, out error))
                         {
                             return false;
                         }
@@ -179,6 +217,27 @@ namespace Matchline.Extraction.Extractor
                 year = parsedYear;
             }
 
+            int stallTimeoutSeconds = DefaultStallTimeoutSeconds;
+            // `!= null` for the same reason as --input-sha256 below: passing the
+            // flag with an empty value is a caller that meant to set a timeout
+            // and set nothing, which is a wrong command line rather than the
+            // same fact as never passing it.
+            if (stallTimeout != null)
+            {
+                int parsedTimeout;
+                if (!int.TryParse(
+                        stallTimeout, NumberStyles.None, CultureInfo.InvariantCulture, out parsedTimeout) ||
+                    parsedTimeout > MaxStallTimeoutSeconds)
+                {
+                    error = "--stall-timeout-seconds takes a whole number of seconds from 0 to " +
+                        MaxStallTimeoutSeconds.ToString(CultureInfo.InvariantCulture) +
+                        ", not '" + stallTimeout + "'.\n" + UsageText;
+                    return false;
+                }
+
+                stallTimeoutSeconds = parsedTimeout;
+            }
+
             string normalisedSha = null;
             // `!= null` rather than `IsNullOrEmpty`: passing the flag with an
             // empty value is a caller that meant to supply a hash and supplied
@@ -196,6 +255,7 @@ namespace Matchline.Extraction.Extractor
             ExtractorArguments result = new ExtractorArguments();
             result.NavisworksYear = year;
             result.InputSha256 = normalisedSha;
+            result.StallTimeoutSeconds = stallTimeoutSeconds;
 
             try
             {

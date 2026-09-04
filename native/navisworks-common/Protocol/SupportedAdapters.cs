@@ -136,6 +136,23 @@ namespace Matchline.Extraction.Protocol
             return "navisworks-" + year.ToString(CultureInfo.InvariantCulture);
         }
 
+        /// <summary>
+        /// The adapter assembly's name for a year, e.g.
+        /// "Matchline.Extraction.Navisworks2025".
+        /// <para>
+        /// It is also the name of the folder the DLL must sit in, because
+        /// Navisworks insists the plugin folder name matches the assembly name
+        /// (native/navisworks-adapter/Matchline.Navisworks.Adapter.props, which
+        /// derives the same string from MatchlineNavisworksYear). The launcher's
+        /// pre-flight check builds the expected path from this, so the build and
+        /// the check cannot spell it differently.
+        /// </para>
+        /// </summary>
+        public static string PluginAssemblyNameForYear(int year)
+        {
+            return "Matchline.Extraction.Navisworks" + year.ToString(CultureInfo.InvariantCulture);
+        }
+
         /// <summary>Supported years for a message, oldest first: "2024, 2025, 2026".</summary>
         public static string YearList()
         {

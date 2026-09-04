@@ -33,6 +33,16 @@ namespace Matchline.Extraction.Extractor
     /// parsed; everything else is counted and discarded byte by byte, so
     /// tailing a multi-gigabyte stream costs no more than it did.
     /// </para>
+    /// <para>
+    /// The same byte-by-byte sniff answers the other question the launcher has
+    /// no other way to ask: has the plugin finished? The terminator record's
+    /// prefix is watched alongside the progress one, and once a complete
+    /// <c>end</c> line has gone past, <see cref="EndRecordSeen"/> is true and
+    /// the stream is known to be complete whatever Roamer does next. Two
+    /// counters -- <see cref="BytesSeen"/> and <see cref="ProgressLinesSeen"/>
+    /// -- are published for the same caller, which is what lets it tell a slow
+    /// run from a stalled one.
+    /// </para>
     /// </summary>
     internal sealed class NdjsonProgressMonitor : IDisposable
     {
@@ -48,6 +58,9 @@ namespace Matchline.Extraction.Extractor
         /// <summary>What a progress line starts with, asked of the writer's own assembly.</summary>
         private readonly byte[] _progressPrefix = NdjsonProgressLine.PrefixBytes();
 
+        /// <summary>What the terminator line starts with, asked the same way.</summary>
+        private readonly byte[] _endPrefix = NdjsonEndLine.PrefixBytes();
+
         private readonly string _path;
         private readonly ProgressReporter _reporter;
         private readonly ManualResetEvent _stop = new ManualResetEvent(false);
@@ -57,11 +70,31 @@ namespace Matchline.Extraction.Extractor
         private long _offset;
         private long _lines;
 
+        /// <summary>
+        /// <see cref="_offset"/>, republished for the runner thread.
+        /// <para>
+        /// Its own field, written and read through Interlocked, because a long
+        /// is not read atomically on every architecture and the reader is
+        /// another thread entirely. A torn value here would show up as a stall
+        /// that never happened.
+        /// </para>
+        /// </summary>
+        private long _publishedOffset;
+
+        /// <summary>Progress records relayed. Volatile: written here, read by the runner.</summary>
+        private volatile int _progressLines;
+
+        /// <summary>Set once a complete terminator line has gone past.</summary>
+        private volatile bool _endSeen;
+
         /// <summary>Bytes seen on the current line, whether or not they were kept.</summary>
         private int _lineBytes;
 
-        /// <summary>False once the current line has ruled itself out.</summary>
-        private bool _candidateAlive = true;
+        /// <summary>False once the current line has ruled itself out as a progress record.</summary>
+        private bool _progressAlive = true;
+
+        /// <summary>False once the current line has ruled itself out as the terminator.</summary>
+        private bool _endAlive = true;
 
         private bool _disposed;
 
@@ -72,6 +105,31 @@ namespace Matchline.Extraction.Extractor
             _thread = new Thread(Loop);
             _thread.IsBackground = true;
             _thread.Name = "matchline-walk-progress";
+        }
+
+        /// <summary>
+        /// True once the plugin has written its terminator record.
+        /// <para>
+        /// The launcher stops waiting on Roamer when this turns true: the
+        /// stream is complete, so the exit code of a GUI executable that may
+        /// never exit has nothing left to tell anyone (docs/EXTRACTION.md).
+        /// </para>
+        /// </summary>
+        internal bool EndRecordSeen
+        {
+            get { return _endSeen; }
+        }
+
+        /// <summary>Bytes of the stream consumed so far. Safe to read from another thread.</summary>
+        internal long BytesSeen
+        {
+            get { return Interlocked.Read(ref _publishedOffset); }
+        }
+
+        /// <summary>Progress records relayed so far. Safe to read from another thread.</summary>
+        internal int ProgressLinesSeen
+        {
+            get { return _progressLines; }
         }
 
         internal void Start()
@@ -148,6 +206,7 @@ namespace Matchline.Extraction.Extractor
                         }
 
                         _offset += read;
+                        Interlocked.Exchange(ref _publishedOffset, _offset);
                     }
                 }
             }
@@ -166,49 +225,64 @@ namespace Matchline.Extraction.Extractor
         }
 
         /// <summary>
-        /// One byte of the stream: counts lines, and keeps the bytes of a line
-        /// that still looks like a progress record.
+        /// One byte of the stream: counts lines, keeps the bytes of a line that
+        /// still looks like a progress record, and notices the terminator.
         /// </summary>
         private void Consume(byte value)
         {
             if (value == (byte)'\n')
             {
                 _lines++;
-                if (_candidateAlive && _candidate.Count >= _progressPrefix.Length)
+                if (_progressAlive && _lineBytes >= _progressPrefix.Length)
                 {
                     RelayProgress(_candidate.ToArray());
                 }
 
+                // Only a line that is complete counts as the terminator: half a
+                // record is what a plugin killed mid-write leaves behind, and
+                // treating that as "finished" is the one mistake this sniff
+                // must never make.
+                if (_endAlive && _lineBytes >= _endPrefix.Length)
+                {
+                    _endSeen = true;
+                }
+
                 _candidate.Clear();
                 _lineBytes = 0;
-                _candidateAlive = true;
+                _progressAlive = true;
+                _endAlive = true;
                 return;
             }
 
-            if (!_candidateAlive)
+            if (_progressAlive)
             {
-                return;
+                // A byte that disagrees with the prefix ends this line's
+                // candidacy; so does a line long enough that it cannot be a
+                // progress record.
+                if (_lineBytes < _progressPrefix.Length && value != _progressPrefix[_lineBytes])
+                {
+                    _progressAlive = false;
+                    _candidate.Clear();
+                }
+                else if (_lineBytes >= MaxCandidateBytes)
+                {
+                    _progressAlive = false;
+                    _candidate.Clear();
+                }
+                else
+                {
+                    _candidate.Add(value);
+                }
             }
 
-            // A byte that disagrees with the prefix ends this line's candidacy;
-            // so does a line long enough that it cannot be a progress record.
-            if (_lineBytes < _progressPrefix.Length && value != _progressPrefix[_lineBytes])
+            if (_endAlive && _lineBytes < _endPrefix.Length && value != _endPrefix[_lineBytes])
             {
-                _candidateAlive = false;
-                _candidate.Clear();
-                _lineBytes++;
-                return;
+                _endAlive = false;
             }
 
-            if (_lineBytes >= MaxCandidateBytes)
-            {
-                _candidateAlive = false;
-                _candidate.Clear();
-                _lineBytes++;
-                return;
-            }
-
-            _candidate.Add(value);
+            // Counted for every byte of the line, candidate or not: the two
+            // prefixes are matched against this position, and a counter that
+            // stopped when one of them gave up would misalign the other.
             _lineBytes++;
         }
 
@@ -240,6 +314,7 @@ namespace Matchline.Extraction.Extractor
                 return;
             }
 
+            _progressLines++;
             _reporter.Progress(record.Stage, record.Done, record.Total);
         }
     }
