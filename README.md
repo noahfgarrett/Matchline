@@ -60,14 +60,19 @@ more than it does:
 
 | Version | Adapter | Status today | What that means |
 | --- | --- | --- | --- |
-| 2025 | `navisworks-2025` | `pending-real-proof` | Compiles against the real Autodesk assembly in the self-hosted CI job. The proof run against a real model has **not** been completed. |
-| 2024 | `navisworks-2024` | `stub-compiled-unverified` | Type-checks against `native/navisworks-stubs`, a hand-written stand-in. Never run against the real API. Not support — a compile check. |
+| 2025 | `navisworks-2025` | `stub-compiled-unverified` | Type-checks against `native/navisworks-stubs`, a hand-written stand-in. Never built against, or run on, a real Navisworks. Not support — a compile check. |
+| 2024 | `navisworks-2024` | `stub-compiled-unverified` | Same. |
 | 2026 | `navisworks-2026` | `stub-compiled-unverified` | Same. |
 
-No version is in the `verified` state. Moving one there is a deliberate act taken
-with a recorded proof run in hand (docs/WINDOWS-RUNBOOK.md, hard gates 14–17 in
-docs/RELEASE-1.0-PLAN.md). Until then: 2025 is the version being brought to proof,
-and 2024/2026 are unverified.
+Every version is `stub-compiled-unverified`, 2025 included. It was labelled
+`pending-real-proof` until this table was checked against what that state means —
+"compiles against the real Autodesk assembly" — and no build in this repository's
+history has ever seen the real assembly. The stronger label was the one thing this
+table exists to prevent, so it is gone.
+
+No version is in the `verified` state. Moving one to `pending-real-proof`, and then
+to `verified`, is a deliberate act taken with a real build and a recorded proof run
+in hand (docs/WINDOWS-RUNBOOK.md, hard gates 14–17 in docs/RELEASE-1.0-PLAN.md).
 
 All three years compile from one shared source tree, `native/navisworks-adapter/`,
 into one assembly per year. NWD has no forward compatibility — an adapter built
@@ -249,7 +254,7 @@ an unsigned release; there is no unsigned release path on purpose.
 | `.matchline` project file (SQLite) | schema **v7** | `packages/project-store/src/schema.ts`, migrations in `migrations.ts` |
 | Site Profile | **`SiteProfileV2`** | `packages/domain/src/profile-v2.ts` |
 | Portable profile package | format **v2** | `apps/desktop/electron/services/profile-package.ts` |
-| Extraction cache (SQLite) | schema **v1** | `schemas/extraction-cache.sql` |
+| Extraction cache (SQLite) | schema **v3** | `schemas/extraction-cache.sql` |
 
 A project file opened by a newer build is migrated only after explicit
 confirmation, and only after an automatic backup copy is written; a version the

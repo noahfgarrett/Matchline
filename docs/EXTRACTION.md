@@ -121,7 +121,7 @@ the launcher does.
 ## Protocol (launcher stdout, JSON lines)
 
 ```
-{"type":"progress","stage":"hash|detect|open|walk|sets|convert|finalize","done":123,"total":4096}
+{"type":"progress","stage":"hash|detect|open|sets|walk|convert|finalize","done":123,"total":4096}
 {"type":"progress","stage":"detect","done":1,"total":1,"detail":"Navisworks Manage 2025 (C:\\...) will open this file; expecting adapter navisworks-2025."}
 {"type":"warning","code":"...","message":"...","objectId":123}
 {"type":"result","status":"ok|cache-hit","cachePath":"...","objects":131000,"warnings":2}
@@ -131,11 +131,14 @@ the launcher does.
 `detail` is optional and carries a human-readable sentence; only the `detect` stage emits one
 today, and a reader must not require it on any stage.
 
-`sets` is saved-set resolution, between the walk and the convert. It is its own stage because
-resolving one saved search re-runs that search over the whole model: a set-heavy document sits
-there for minutes after the last object record was written, and without a line of its own the
-walk counter simply stops moving and the run looks hung. Unlike the walk and the convert it
-knows its total, because the set tree is counted before the first one is resolved.
+`sets` is saved-set resolution, between the open and the walk. Every set is resolved BEFORE the
+tree walk starts, so the walk can write each item's membership row as it reaches that item —
+which is what keeps the plugin from holding a live handle on every object in the model until
+the last set is done. It is its own stage because resolving one saved search runs that search
+over the whole document: a set-heavy model sits there for minutes before a single object
+record is written, and without a line of its own the run looks like an open that never
+finished. Unlike the walk and the convert it knows its total, because the set tree is counted
+before the first one is resolved.
 
 ### Error codes
 
@@ -148,6 +151,7 @@ knows its total, because the set tree is counted before the first one is resolve
 | `NW_STALLED` | 10 | Navisworks wrote nothing for `--stall-timeout-seconds` and was killed. Nearly always a hidden dialog. |
 | `PLUGIN_NOT_DEPLOYED` | 11 | Pre-flight: the adapter DLL is not in either Plugins root for the chosen install. Navisworks is never started. |
 | `PLUGIN_NOT_FOUND` | 12 | Navisworks ran and exited without the plugin creating the stream at all. |
+| `SOURCE_MODEL_MISSING` | 13 | The document opened without one or more of the files it references. The stream is complete and correct and describes less than the input does, so no cache is committed. |
 | `CACHE_WRITE_FAILED` | 8 | The stream was complete and the cache could not be written or verified — SQLite errors included. |
 | `INPUT_NOT_FOUND` | 3 | The input was gone by the time the run reached it. |
 | `INVALID_ARGS` | 2 | A wrong command line. |
@@ -201,11 +205,73 @@ process, deletes partials, exits with `{"type":"error","code":"CANCELLED"}`.
 installed adapter supports must produce this error verbatim-mapped to a plain-language UI
 string ("This file needs a newer Navisworks"), never a generic open failure.
 
+## NWF inputs
+
+An NWF holds a **list of references**, not a model, and that changes two things.
+
+**It is never served from cache without being opened again.** Its bytes can be identical while
+the models behind them have moved, been replaced or gone missing, so the content hash addresses
+the wrong thing. The launcher skips its pre-run cache-hit check for a `.nwf`
+(`ExtractionRunner.IsReferencingInput`) and so does the desktop service
+(`isReferencingInput` in `extraction-protocol.ts`) — both, because skipping it in one place
+would leave the other serving the stale answer. The cache is still **filed** under the input
+hash, because that is what the caller asked about.
+
+**A document that opened without one of its models is a failure, not a smaller success.** The
+plugin cannot report this to the launcher any other way — the launcher has no way to open an
+NWF without the Navisworks it is starting — so it writes one `ref` record per
+`Document.Models` entry before anything else:
+
+```
+{"t":"ref","sfile":"B14-Electrical.nwc","loaded":true}
+```
+
+A reference counts as **not loaded** only when its model's root item has no children AND its
+source file is not on disk. Either alone is ordinary (an appended file may legitimately be
+empty; a file loaded from a path that has since moved is still loaded), and a check that
+cannot be made answers "loaded" — this decides whether a whole extraction is thrown away, so
+it never guesses towards failure. Each one that did not load also produces an
+**error-severity** `SOURCE_MODEL_MISSING` warning naming the file.
+
+The launcher collects every error-severity warning as it converts the stream and refuses to
+commit the cache when there is one, failing `SOURCE_MODEL_MISSING`. Nothing else catches this:
+the walk did not fail, so the terminator says `ok` and every integrity check the cache runs
+against itself passes — on a document with a whole discipline absent. The `ref` records
+themselves are not a cache table; what reaches the cache is the warning.
+
 ## Cache schema
 
-Canonical DDL: [`schemas/extraction-cache.sql`](../schemas/extraction-cache.sql). Version 1.
-Writers stamp `meta.schema_version`; readers hard-refuse unknown versions. No geometry beyond
-optional bounding boxes (PRODUCT.md §6.4 — no geometry in first production).
+Canonical DDL: [`schemas/extraction-cache.sql`](../schemas/extraction-cache.sql). **Version 3.**
+Writers stamp `meta.schema_version`; readers hard-refuse unknown versions and
+`packages/model-schema` still opens v1 and v2. No geometry beyond optional bounding boxes
+(PRODUCT.md §6.4 — no geometry in first production).
+
+- **v1** — the original shape.
+- **v2** — `selection_sets.membership_resolved`: a set that resolved to nothing is a different
+  row from a set nobody managed to resolve. A v1 row is read as resolved for `folder` and
+  `selection` and unresolved for `search`, which is what a v1 writer actually meant.
+- **v3 — persistent per-object identity.** `objects` gains `authoring_id_kind` (which
+  well-known property pair produced `authoring_id`: `revit-element-id`, `revit-unique-id`,
+  `ifc-global-id`, `dwg-handle`), `structural_key` (a lowercase SHA-256 over the ancestor chain
+  of `(class_name, display_name, path_index)` from the source model's root, chained through the
+  parent's digest so inserting a sibling changes that sibling and every one after it and
+  nothing before it), and `flags` (a bitfield: 1 hidden, 2 layer, 4 insert, 8 composite,
+  16 collection, 32 has-model). `source_models` gains `source_file_name` (`Model.SourceFileName`,
+  name only) and `source_guid`. `selection_sets` gains `guid` (`SavedItem.Guid`, which survives
+  a rename). `meta` gains two OPTIONAL keys, `units` and `ui_language` — optional because every
+  cache written by an older adapter lacks them, and `ui_language` matters because Navisworks
+  localises property and category display names.
+
+The reader chooses its column list from the declared version rather than probing the table:
+a v1/v2 file would fail a v3 query outright, and a file declaring v3 without the columns is
+corrupt and should say so. On a v1/v2 cache the v3 columns read as `null` — including `flags`,
+which is `null` rather than "nothing is set", because an older writer never looked.
+
+`authoring_id_kind` is part of the identity rather than a label on it: a Revit ElementId and an
+AutoCAD handle can be the same digits and name different objects, so `@matchline/asset-identity`
+keys the authoring-id tier on the pair. `structural_key` is its own evidence tier, below the
+child-index `structural` path (it folds display names in, so a renamed level breaks it) and
+above `tag`.
 
 ## Reading side (`packages/model-schema`)
 
@@ -244,10 +310,13 @@ what it found.
 **Adapter status — none verified yet.** `SupportedAdapters` in `navisworks-common` is the single source of truth
 and the launcher reads it, so what the code claims and what this table says cannot drift:
 
-| Year       | Status                     | What that means                                                                                        |
-| ---------- | -------------------------- | ------------------------------------------------------------------------------------------------------ |
-| 2025       | `pending-real-proof`       | Compiles. The Windows proof run (WINDOWS-RUNBOOK.md) has not happened, so nothing has been extracted yet. |
-| 2024, 2026 | `stub-compiled-unverified` | Type-checks against `navisworks-stubs` only. Never built against, or run on, a real install of that year. |
+| Year             | Status                     | What that means                                                                                          |
+| ---------------- | -------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 2024, 2025, 2026 | `stub-compiled-unverified` | Type-checks against `navisworks-stubs` only. Never built against, or run on, a real install of any year. |
+
+2025 was labelled `pending-real-proof` until that state was read back against its own
+definition — "compiles against the real Autodesk assembly" — which has never happened here.
+The label was corrected rather than the definition.
 
 No year is `verified`. Until one is, the launcher emits an `ADAPTER_UNVERIFIED` warning naming
 the status on every run, and Matchline must not advertise that year as supported
