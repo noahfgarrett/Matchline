@@ -14,6 +14,7 @@ export const DRAGON_EXACT_MATCH: IdentityMatch = {
   assetId: 'asset-0001',
   tier: 'exact',
   detail: 'evidence tag equals canonical tag "MAH001-10-01"',
+  sharingAssets: 1,
 };
 
 export const DRAGON_SUFFIX_MATCH: IdentityMatch = {
@@ -22,6 +23,7 @@ export const DRAGON_SUFFIX_MATCH: IdentityMatch = {
   assetId: 'asset-0001',
   tier: 'suffix-unambiguous',
   detail: 'evidence tag extends canonical tag "MAH001-10-01" at separator "-"',
+  sharingAssets: 1,
 };
 
 export const DRAGON_FUZZY_MISS: IdentityMiss = {

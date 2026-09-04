@@ -22,6 +22,8 @@
 export type LadderSourceKind =
   | 'manual'
   | 'explicit-model'
+  /** The MEL's own "System Parent" column, which names a parent outright. */
+  | 'mel-parent'
   | 'profile-lookup'
   | 'flow-family'
   | 'family-role'
@@ -38,6 +40,30 @@ export type LadderSourceKind =
  * is the default it starts from.
  */
 export const LADDER_SOURCE_ORDER = [
+  'manual',
+  'explicit-model',
+  // Immediately under the model's own statement, and above every table and
+  // every rule: a MEL "System Parent" cell is an engineer writing the parent
+  // down in the document the site maintains for exactly that purpose.
+  'mel-parent',
+  'profile-lookup',
+  'flow-family',
+  'family-role',
+  'learned-description',
+  'prior-ssm',
+  'model-tree',
+] as const satisfies ReadonlyArray<LadderSourceKind>;
+
+/**
+ * The ladder as it was before the MEL rung existed.
+ *
+ * A profile stored without a ladder of its own is migrated onto THIS list, not
+ * onto {@link LADDER_SOURCE_ORDER}: a site that has been compiling for months
+ * must not start seeding its hierarchy from a spreadsheet column because the
+ * engine learned to read one. A site that wants the rung adds it, which is the
+ * same way every other rung is turned on and off.
+ */
+export const LADDER_SOURCE_ORDER_BEFORE_MEL_PARENT = [
   'manual',
   'explicit-model',
   'profile-lookup',

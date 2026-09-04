@@ -66,6 +66,17 @@ export interface IdentityMatch {
   readonly tier: IdentityTier;
   /** Names the evidence the tier used, in words a reviewer can check. */
   readonly detail: string;
+  /**
+   * How many assets carry the canonical tag this matched, `1` for a normal one.
+   *
+   * A tag on two assets still resolves -- to the first assetId in code-unit
+   * order -- because multiplying every downstream fact by the number of copies
+   * would be worse. But "resolved, and it named two assets" is a different
+   * answer from "resolved", and a caller about to write a STRUCTURAL fact off
+   * the back of it has to be able to tell: the compiler's claims bridge refuses
+   * a parent named by a duplicated tag rather than picking one of them.
+   */
+  readonly sharingAssets: number;
 }
 
 /**

@@ -41,7 +41,7 @@ import type {
   SourceAssignmentScope,
 } from './model-universe.js';
 import {
-  LADDER_SOURCE_ORDER,
+  LADDER_SOURCE_ORDER_BEFORE_MEL_PARENT,
   type HierarchyConfigInput,
   type ParentLadderConfig,
   type RoleGraphConfig,
@@ -381,9 +381,13 @@ export function emptyIdentityConfig(): ProfileIdentityConfig {
  *   inventing a level stack here would file a site's equipment somewhere nobody
  *   chose. The desktop passes its own default preset in, which is where that
  *   decision has always been made.
- * - `ladder` defaults to `LADDER_SOURCE_ORDER`, which is the walk order the
- *   compiler already used when no ladder was supplied — the same behaviour,
- *   now written down.
+ * - `ladder` defaults to `LADDER_SOURCE_ORDER_BEFORE_MEL_PARENT`, which is the
+ *   walk order the compiler used when no ladder was supplied — the same
+ *   behaviour, now written down. Deliberately not the current
+ *   `LADDER_SOURCE_ORDER`: a rung added to the engine after a profile was
+ *   written is a rung that profile never asked for, and a migration that turned
+ *   one on would start seeding a live site's hierarchy from a source nobody
+ *   chose.
  * - every other section defaults to empty or `null`, which is what "the project
  *   never configured this" meant on the compiler input it arrived on.
  *
@@ -429,7 +433,7 @@ export function migrateSiteProfileV1(
     derivedAttributes: sections.derivedAttributes ?? [],
     hierarchy: sections.hierarchy ?? { levels: [] },
     roleGraph: sections.roleGraph ?? { rules: [] },
-    ladder: sections.ladder ?? { tiers: [...LADDER_SOURCE_ORDER] },
+    ladder: sections.ladder ?? { tiers: [...LADDER_SOURCE_ORDER_BEFORE_MEL_PARENT] },
     ssmDisciplineProjection: sections.ssmDisciplineProjection ?? [],
     parentTagProperty: sections.parentTagProperty ?? null,
     stableIdProperty: sections.stableIdProperty ?? null,

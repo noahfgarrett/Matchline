@@ -117,17 +117,28 @@ export type {
   SystemResolverConfig,
 } from './resolver-config.js';
 
+export type {
+  CompletenessReport,
+  LevelCompleteness,
+  LevelDemotionCount,
+  UnresolvedSystemCount,
+} from './completeness.js';
+
+export { unicodeFold } from './unicode-fold.js';
+
 export { reviewItemSummary } from './review.js';
 export type {
   AbsorbedTaggedComponentReviewItem,
   AmbiguousParentReviewItem,
   AmbiguousSuffixReviewItem,
+  BoundaryDemotionReviewItem,
   DeadClaimRuleReviewItem,
   DuplicateModelTagReviewItem,
   DuplicateModelTagSource,
   FuzzyIdentityCandidate,
   FuzzyIdentityReviewItem,
   ManualBoundaryDemotionReviewItem,
+  MissingBoundaryLevelReviewItem,
   MissingBoundaryReviewItem,
   NestingProposalReviewItem,
   OrphanedDecisionKind,
@@ -138,12 +149,14 @@ export type {
   SystemCatalogConflictReviewItem,
   SystemConflictReviewItem,
   UnresolvableAliasReviewItem,
+  UnresolvedSystemReviewItem,
 } from './review.js';
 
 export {
   boundaryAttributeOf,
   displayAttributeOf,
   LADDER_SOURCE_ORDER,
+  LADDER_SOURCE_ORDER_BEFORE_MEL_PARENT,
   migrateHierarchyConfig,
   migrateHierarchyLevel,
 } from './hierarchy-config.js';

@@ -9,7 +9,7 @@ import {
 } from './dist/review.fixture.js';
 
 test('every review item kind summarizes to a non-empty line', () => {
-  assert.equal(DRAGON_REVIEW_ITEMS.length, 14);
+  assert.equal(DRAGON_REVIEW_ITEMS.length, 17);
   const kinds = new Set();
   for (const item of DRAGON_REVIEW_ITEMS) {
     kinds.add(item.kind);
@@ -172,6 +172,49 @@ test('an orphaned decision with no other end does not read as a decision about n
       reason: 'unknown-child',
     }),
     'stored manual-system decision tag:MAH009-10-01 no longer resolves (unknown-child)',
+  );
+});
+
+test('a level that stopped every nesting is one row, not one per asset', () => {
+  const level = DRAGON_REVIEW_ITEMS[14];
+  assert.equal(level.kind, 'missing-boundary-level');
+  assert.equal(
+    reviewItemSummary(level),
+    'boundary level building: 34 assets could not be placed, because the level states no value on one side or the other',
+  );
+  // The count is the whole point, and the examples name real equipment.
+  assert.equal(level.exampleAssetIds.length, 3);
+});
+
+test('a rule-driven demotion names the level and the rung it refused', () => {
+  const demotion = DRAGON_REVIEW_ITEMS[15];
+  assert.equal(demotion.kind, 'boundary-demotion');
+  assert.equal(
+    reviewItemSummary(demotion),
+    'boundary level system: 12 parents from the flow-family rung became dependencies',
+  );
+});
+
+test('unresolved systems are grouped by the reasons that explain them', () => {
+  const unresolved = DRAGON_REVIEW_ITEMS[16];
+  assert.equal(unresolved.kind, 'unresolved-system');
+  assert.equal(
+    reviewItemSummary(unresolved),
+    '8 assets resolved no system (keyChain[0] model-field no-value)',
+  );
+});
+
+test('a derived attribute assignment that no longer resolves names its field', () => {
+  assert.equal(
+    reviewItemSummary({
+      kind: 'orphaned-decision',
+      decision: 'derived-attribute',
+      childRef: 'tag:MAH009-10-01',
+      parentRef: '',
+      field: 'turnover-package',
+      reason: 'unknown-child',
+    }),
+    'stored derived-attribute decision tag:MAH009-10-01 for turnover-package no longer resolves (unknown-child)',
   );
 });
 

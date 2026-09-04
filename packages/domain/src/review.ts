@@ -152,6 +152,76 @@ export interface ManualBoundaryDemotionReviewItem {
 }
 
 /**
+ * One boundary level that stopped nesting, counted rather than repeated
+ * (PRODUCT.md §11.3).
+ *
+ * A per-asset `missing-boundary` item is the right record when a person is owed
+ * an explanation about one asset. It is the wrong record for the case the
+ * audit found: a site whose Building property nobody mapped raises one item per
+ * asset per level, so 40,000 assets produce 40,000 rows describing one thing to
+ * fix -- and a queue nobody can work is the same as no queue at all.
+ *
+ * So the rule-driven half of it aggregates. One item per level, carrying how
+ * many assets it stopped and a handful of them by name; the fix is a mapping,
+ * not 40,000 decisions. Nothing is discarded to produce it: every asset is
+ * still counted, and the assets whose own decision was refused keep their own
+ * item (see {@link MissingBoundaryReviewItem}).
+ */
+export interface MissingBoundaryLevelReviewItem {
+  readonly kind: 'missing-boundary-level';
+  readonly levelId: string;
+  /**
+   * Assets this level left without a structural decision.
+   *
+   * Counted per asset whose own walk stopped here, not per unstated cell: the
+   * value may be missing on the child, on the parent the ladder selected, or on
+   * both, and what a person is being told is how much equipment went unplaced.
+   */
+  readonly assetCount: number;
+  /** Up to ten of them, in asset-id order, so the item names real equipment. */
+  readonly exampleAssetIds: ReadonlyArray<string>;
+}
+
+/**
+ * Parents one boundary level took away from one ladder rung, counted.
+ *
+ * The manual rung keeps its per-pair {@link ManualBoundaryDemotionReviewItem}:
+ * refusing a person is owed a named explanation. A rule-driven demotion is the
+ * fold doing its job, and one per pair would bury the queue -- but silence is
+ * what the audit actually found, and "every cross-file parent was demoted and
+ * nothing anywhere says so" is not an acceptable answer either. So the rung
+ * reports the count.
+ */
+export interface BoundaryDemotionReviewItem {
+  readonly kind: 'boundary-demotion';
+  readonly levelId: string;
+  /** The rung whose parents were refused. Never `manual`, which has its own item. */
+  readonly ladderSource: LadderSourceKind;
+  /** How many (child, parent) pairs this level demoted at that rung. */
+  readonly pairCount: number;
+  /** Up to ten of the children, in asset-id order. */
+  readonly exampleAssetIds: ReadonlyArray<string>;
+}
+
+/**
+ * Assets the System Resolver could not place, grouped by why (PRODUCT.md §5).
+ *
+ * An unresolved system used to be a number on the compile summary and nothing
+ * in the queue, so a site whose resolver reads a property half its model does
+ * not carry saw "34 assets" and no reason. The skip reasons ARE the reason --
+ * they name the rung and what it lacked -- so assets that failed the same way
+ * are one row, and a site fixes one thing per row rather than one per asset.
+ */
+export interface UnresolvedSystemReviewItem {
+  readonly kind: 'unresolved-system';
+  /** Every rung reason these assets share, sorted, e.g. `keyChain[0] no-value`. */
+  readonly skipReasons: ReadonlyArray<string>;
+  readonly assetCount: number;
+  /** Up to ten of the assets, in asset-id order. */
+  readonly exampleAssetIds: ReadonlyArray<string>;
+}
+
+/**
  * A learned rule that has not earned claim grade (ENGINE.md E3, DECISIONS.md #3).
  *
  * Proposal-grade description rules never write hierarchy and never become
@@ -219,7 +289,7 @@ export interface AbsorbedTaggedComponentReviewItem {
  * names two assets -- the decision is not applied and it is NOT dropped: it
  * arrives here, verbatim, for a person to re-aim or retire.
  */
-export type OrphanedDecisionKind = 'manual-parent' | 'manual-system';
+export type OrphanedDecisionKind = 'manual-parent' | 'manual-system' | 'derived-attribute';
 
 /** Why a stored decision could not be re-addressed. */
 export type OrphanedDecisionReason =
@@ -248,6 +318,15 @@ export interface OrphanedDecisionReviewItem {
    */
   readonly parentRef: string;
   readonly reason: OrphanedDecisionReason;
+  /**
+   * Which field the decision was about, when the decision names one.
+   *
+   * A derived attribute's `manual` rung is a table per attribute, so two
+   * attributes can hold an unmappable assignment for the same asset -- two rows
+   * to re-aim, not one. Absent on every decision kind that is about the asset
+   * itself, which keeps their review keys exactly what they always were.
+   */
+  readonly field?: string;
   /** The person's own words, kept so the decision itself survives its address. */
   readonly note?: string;
 }
@@ -261,7 +340,10 @@ export type ReviewItem =
   | AmbiguousParentReviewItem
   | StructuralCycleReviewItem
   | MissingBoundaryReviewItem
+  | MissingBoundaryLevelReviewItem
   | ManualBoundaryDemotionReviewItem
+  | BoundaryDemotionReviewItem
+  | UnresolvedSystemReviewItem
   | NestingProposalReviewItem
   | DeadClaimRuleReviewItem
   | UnresolvableAliasReviewItem
@@ -303,6 +385,21 @@ export function reviewItemSummary(item: ReviewItem): string {
         `asset ${item.assetId}: the manual parent ${item.parentAssetId} crosses boundary level ` +
         `${item.boundaryLevelId}, so it is a dependency rather than a parent`
       );
+    case 'missing-boundary-level':
+      return (
+        `boundary level ${item.levelId}: ${String(item.assetCount)} assets could not be ` +
+        'placed, because the level states no value on one side or the other'
+      );
+    case 'boundary-demotion':
+      return (
+        `boundary level ${item.levelId}: ${String(item.pairCount)} parents from the ` +
+        `${item.ladderSource} rung became dependencies`
+      );
+    case 'unresolved-system':
+      return (
+        `${String(item.assetCount)} assets resolved no system ` +
+        `(${item.skipReasons.join('; ')})`
+      );
     case 'nesting-proposal':
       return `asset ${item.assetId}: proposed parent ${item.proposedParentId} (${item.ruleDetail})`;
     case 'dead-claim-rule':
@@ -315,7 +412,11 @@ export function reviewItemSummary(item: ReviewItem): string {
       // The other end is named only when the decision has one, so a make-root
       // or a system assignment does not read as a decision about nothing.
       const target = item.parentRef === '' ? '' : ` -> ${item.parentRef}`;
-      return `stored ${item.decision} decision ${item.childRef}${target} no longer resolves (${item.reason})`;
+      const field = item.field === undefined ? '' : ` for ${item.field}`;
+      return (
+        `stored ${item.decision} decision ${item.childRef}${target}${field} ` +
+        `no longer resolves (${item.reason})`
+      );
     }
   }
   return assertNever(item, 'unhandled ReviewItem');

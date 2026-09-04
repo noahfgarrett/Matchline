@@ -20,7 +20,15 @@ export type NormalizationStep =
   /** Left-pads to `length` with `fill`. `1` -> `001`, stated rather than assumed. */
   | { readonly kind: 'padStart'; readonly length: number; readonly fill: string }
   /** Rewrites one exact value to another. The site's own synonym list. */
-  | { readonly kind: 'alias'; readonly from: string; readonly to: string };
+  | { readonly kind: 'alias'; readonly from: string; readonly to: string }
+  /**
+   * NFKC, zero-width strip, dash-family fold, NBSP, whitespace around hyphens.
+   *
+   * The one step that is about characters nobody typed on purpose rather than
+   * about what a site calls things. See {@link unicodeFold}, which both
+   * `@matchline/identity` and `@matchline/system-resolver` run for it.
+   */
+  | { readonly kind: 'unicodeFold' };
 
 /**
  * One rung of a resolution chain (PRODUCT.md §5.2).

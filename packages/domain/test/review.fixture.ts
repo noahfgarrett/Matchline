@@ -133,6 +133,31 @@ export const DRAGON_REVIEW_ITEMS = [
     reason: 'unknown-child',
     note: 'Commissioned with the D1 train.',
   },
+  // The three aggregates land at the END of the array on purpose: the tests
+  // above index it positionally, and an item inserted in the middle would
+  // renumber every assertion that has nothing to do with this change.
+  {
+    // The audit's blocker B3, as one row: a site whose Building property nobody
+    // mapped stops every nesting, and one item per asset per level would be a
+    // queue nobody can work.
+    kind: 'missing-boundary-level',
+    levelId: 'building',
+    assetCount: 34,
+    exampleAssetIds: ['asset-0001', 'asset-0002', 'asset-0009'],
+  },
+  {
+    kind: 'boundary-demotion',
+    levelId: 'system',
+    ladderSource: 'flow-family',
+    pairCount: 12,
+    exampleAssetIds: ['asset-0004', 'asset-0650'],
+  },
+  {
+    kind: 'unresolved-system',
+    skipReasons: ['keyChain[0] model-field no-value'],
+    assetCount: 8,
+    exampleAssetIds: ['asset-0009'],
+  },
 ] as const satisfies ReadonlyArray<ReviewItem>;
 
 /**

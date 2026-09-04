@@ -5,6 +5,7 @@ import {
   boundaryAttributeOf,
   displayAttributeOf,
   LADDER_SOURCE_ORDER,
+  LADDER_SOURCE_ORDER_BEFORE_MEL_PARENT,
   migrateHierarchyConfig,
   relationshipKindOf,
 } from '../dist/index.js';
@@ -20,6 +21,7 @@ test('the default ladder is the §11.1 order, strongest rung first', () => {
   assert.deepEqual(LADDER_SOURCE_ORDER, [
     'manual',
     'explicit-model',
+    'mel-parent',
     'profile-lookup',
     'flow-family',
     'family-role',
@@ -27,6 +29,14 @@ test('the default ladder is the §11.1 order, strongest rung first', () => {
     'prior-ssm',
     'model-tree',
   ]);
+});
+
+test('a profile written before the MEL rung is migrated without it', () => {
+  assert.equal(LADDER_SOURCE_ORDER_BEFORE_MEL_PARENT.includes('mel-parent'), false);
+  assert.deepEqual(
+    LADDER_SOURCE_ORDER.filter((tier) => tier !== 'mel-parent'),
+    LADDER_SOURCE_ORDER_BEFORE_MEL_PARENT,
+  );
 });
 
 test('a site disables a rung by leaving it out, and the rest keep their order', () => {

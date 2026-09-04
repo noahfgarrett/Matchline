@@ -196,6 +196,7 @@ export const COLLIDING_OUTCOMES: ReadonlyMap<string, IdentityOutcome> = new Map(
       assetId: COLLIDING_ASSET_ID,
       tier: 'exact',
       detail: 'evidence tag equals canonical tag "PNL001-10-01"',
+      sharingAssets: 1,
     },
   ],
   [COLLIDING_SPELLING, { status: 'unmatched', evidenceTag: COLLIDING_SPELLING, candidates: [] }],
