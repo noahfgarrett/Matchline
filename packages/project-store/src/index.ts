@@ -21,6 +21,7 @@ export { validateRelationshipOverride, validateSystemOverride } from './override
 export type { ManualSystemOverride, StoredOverride } from './overrides.js';
 
 export {
+  addDraftAndAssetTablesV7,
   addLedgerTableV5,
   MIGRATION_STEPS,
   migrateSourcesToV4,
@@ -32,6 +33,8 @@ export type { MigrationStep } from './migrations.js';
 export { validateSiteProfile, validateSiteProfileV2 } from './profile-json.js';
 
 export {
+  COMPILE_ASSET_RETENTION,
+  COMPILE_ASSETS_TABLE_SQL,
   CONFIG_KEYS,
   CONFIG_TABLE_SQL,
   DECISION_VALUES,
@@ -45,12 +48,14 @@ export {
   LEARNED_TABLE_SQL,
   LEDGER_TABLE_SQL,
   OVERRIDE_KINDS,
+  PROFILE_DRAFT_TABLE_SQL,
   PROJECT_SCHEMA_SQL,
   PROJECT_SCHEMA_VERSION,
   REQUIRED_META_KEYS,
   REQUIRED_TABLES,
   SOURCE_ROLES,
   SOURCES_TABLE_SQL,
+  VACUUM_FREELIST_THRESHOLD,
 } from './schema.js';
 export type {
   ConfigKey,
@@ -84,5 +89,6 @@ export type {
   ProjectStore,
   ReviewDecision,
   SourceInputV4,
+  StoredDraft,
   StoredLedger,
 } from './store.js';

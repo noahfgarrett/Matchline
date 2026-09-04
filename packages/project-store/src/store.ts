@@ -36,6 +36,7 @@ import { MIGRATION_STEPS, type MigrationStep } from './migrations.js';
 import { validateSiteProfileV2 } from './profile-json.js';
 import { optionalText, requireInteger, requireText, type SqlRow } from './rows.js';
 import {
+  COMPILE_ASSET_RETENTION,
   CONFIG_KEYS,
   DECISION_VALUES,
   DEFAULT_APP_VERSION,
@@ -46,6 +47,7 @@ import {
   REQUIRED_META_KEYS,
   REQUIRED_TABLES,
   SOURCE_ROLES,
+  VACUUM_FREELIST_THRESHOLD,
   type ConfigKey,
   type DecisionValue,
   type LearnedRuleKind,
@@ -191,6 +193,21 @@ export interface CompileRecord {
   readonly finishedAt: string;
   /** When the row was written, from the injected clock. */
   readonly recordedAt: string;
+  /**
+   * How many generated-MEL assets this compile produced (v7).
+   *
+   * A number on the history row rather than the assets themselves, so listing
+   * the history costs the history and not the model. Whether the assets are
+   * still stored is a separate question -- see `getCompileAssets` -- because
+   * only the newest {@link COMPILE_ASSET_RETENTION} compiles keep them.
+   */
+  readonly assetCount: number;
+}
+
+/** The wizard draft as it currently stands, and when it was last written (v7). */
+export interface StoredDraft<T> {
+  readonly draft: T;
+  readonly updatedAt: string;
 }
 
 /** The stored snapshot and the compile it came from. */
@@ -308,8 +325,43 @@ export interface ProjectStore {
 
   /** Appends to the compile history. Returns the new compile id. */
   recordCompile(input: CompileInput): number;
-  /** Compile history, newest first. Omitting `limit` returns all of it. */
+  /**
+   * Compile history, newest first. Omitting `limit` returns all of it.
+   *
+   * Reads no asset arrays. Before v7 the generated MEL lived inside
+   * `stats_json`, so drawing a fifty-row history parsed fifty whole generated
+   * MELs to print fifty dates; the assets live in their own table now and
+   * `CompileRecord.assetCount` is what a list needs.
+   */
   listCompiles(limit?: number): readonly CompileRecord[];
+
+  /**
+   * Stores the generated-MEL assets one compile produced (v7).
+   *
+   * Call it in the SAME transaction as the `recordCompile` it belongs to, for
+   * the reason `saveLedger` says: a compile whose assets landed without it is a
+   * row nothing can date.
+   *
+   * Writing also prunes: only the newest {@link COMPILE_ASSET_RETENTION}
+   * compiles keep their assets, and the older rows lose the array while keeping
+   * their compile row and its `asset_count`. The pruning is here rather than on
+   * a timer because this is the only moment the set of recent compiles changes.
+   *
+   * @throws ProjectStoreError `unknown-compile` when no such compile exists.
+   */
+  saveCompileAssets(compileId: number, assets: readonly unknown[]): void;
+  /**
+   * The stored assets of one compile, or `undefined`.
+   *
+   * `undefined` covers three honest cases a caller treats alike: no such
+   * compile, a compile whose assets have been pruned, and a compile recorded by
+   * a build older than v7. All three mean "there is nothing here to diff
+   * against"; `CompileRecord.assetCount` still says what the compile produced.
+   */
+  getCompileAssets<T = unknown>(
+    compileId: number,
+    validate?: (value: unknown) => T,
+  ): T | undefined;
 
   /** Stores the resolved snapshot, replacing whatever was there. */
   saveSnapshot(compileId: number, snapshot: unknown): void;
@@ -367,6 +419,27 @@ export interface ProjectStore {
   getConfig(key: ConfigKey): ConfigEntry | undefined;
   /** Every stored section, ordered by key. Empty means nothing was configured. */
   listConfig(): readonly ConfigEntry[];
+
+  /**
+   * Stores the wizard draft, replacing whatever was there (v7).
+   *
+   * One slot, written on every draft patch. A draft is not a revision -- see
+   * `PROFILE_DRAFT_TABLE_SQL` -- and this deliberately does no profile
+   * validation: a half-finished draft is exactly what this table is for, and a
+   * store that only accepted publishable drafts would be a store that saved
+   * nothing until the wizard was already finished.
+   */
+  saveDraft(draft: unknown): void;
+  /** The stored draft, or `undefined` when none has been written. */
+  getDraft<T = unknown>(validate?: (value: unknown) => T): StoredDraft<T> | undefined;
+  /**
+   * Removes the stored draft. `true` when a row was there to remove.
+   *
+   * Called when a revision is published FROM the draft: the revision is now the
+   * answer to "what does this project believe", and a leftover draft row would
+   * reopen the project onto an unsaved-looking copy of what was just saved.
+   */
+  clearDraft(): boolean;
 
   /** Appends a review decision. Earlier decisions for the key are kept. */
   recordDecision(input: DecisionInput): void;
@@ -759,6 +832,12 @@ export function createProject(path: string, options: CreateProjectOptions): Proj
 
   try {
     db.exec('PRAGMA foreign_keys = ON');
+    // Before the first table and outside the transaction, which is the only
+    // moment this can be set: `auto_vacuum` on a database that already has a
+    // page is a no-op, and changing it later needs a full `VACUUM`. It is what
+    // lets `close` hand pruned asset pages back to the filesystem instead of
+    // leaving a project file at its high-water mark forever.
+    db.exec('PRAGMA auto_vacuum = INCREMENTAL');
     const createdAt = isoNow(clock);
     db.exec('BEGIN IMMEDIATE');
     try {
@@ -1267,11 +1346,59 @@ class SqliteProjectStore implements ProjectStore {
     }
     return this.#open()
       .prepare(
-        `SELECT id, input_hashes_json, profile_revision, stats_json, started_at, finished_at, recorded_at
+        `SELECT id, input_hashes_json, profile_revision, stats_json, started_at, finished_at,
+                recorded_at, asset_count
          FROM compiles ORDER BY id DESC LIMIT ?`,
       )
       .all(bound)
       .map((row) => this.#readCompile(row));
+  }
+
+  saveCompileAssets(compileId: number, assets: readonly unknown[]): void {
+    const checkedId = requireCountArgument(compileId, 'compileId');
+    if (!Array.isArray(assets)) {
+      invalidArgument('assets', 'expected an array');
+    }
+    const json = canonicalJson(assets, 'compileAssets');
+    this.#mutate(() => {
+      const db = this.#open();
+      const compile = db.prepare('SELECT id FROM compiles WHERE id = ?').get(checkedId);
+      if (compile === undefined) {
+        throw new ProjectStoreError({ kind: 'unknown-compile', compileId: checkedId });
+      }
+      db.prepare('UPDATE compiles SET asset_count = ? WHERE id = ?').run(assets.length, checkedId);
+      db.prepare(
+        `INSERT INTO compile_assets (compile_id, assets_json) VALUES (?, ?)
+         ON CONFLICT (compile_id) DO UPDATE SET assets_json = excluded.assets_json`,
+      ).run(checkedId, json);
+      // The prune. Bounded by a subquery over `compiles` rather than by a
+      // remembered id, so a project migrated in with a hundred asset rows is
+      // trimmed by its first compile rather than staying big forever.
+      db.prepare(
+        `DELETE FROM compile_assets
+         WHERE compile_id NOT IN (SELECT id FROM compiles ORDER BY id DESC LIMIT ?)`,
+      ).run(COMPILE_ASSET_RETENTION);
+    });
+  }
+
+  getCompileAssets<T = unknown>(
+    compileId: number,
+    validate?: (value: unknown) => T,
+  ): T | undefined {
+    const checkedId = requireCountArgument(compileId, 'compileId');
+    const row = this.#open()
+      .prepare('SELECT assets_json FROM compile_assets WHERE compile_id = ?')
+      .get(checkedId);
+    if (row === undefined) {
+      return undefined;
+    }
+    const parsed = parseStoredJson(
+      requireText(row, 'compile_assets', 'assets_json'),
+      'compile_assets',
+    );
+    // As in `getLatestSnapshot`: without a validate hook the caller asked for
+    // `unknown`, which is what `T` defaults to.
+    return validate === undefined ? (parsed as T) : validate(parsed);
   }
 
   #readCompile(row: SqlRow): CompileRecord {
@@ -1303,6 +1430,7 @@ class SqliteProjectStore implements ProjectStore {
       startedAt: requireText(row, 'compiles', 'started_at'),
       finishedAt: requireText(row, 'compiles', 'finished_at'),
       recordedAt: requireText(row, 'compiles', 'recorded_at'),
+      assetCount: requireInteger(row, 'compiles', 'asset_count'),
     };
   }
 
@@ -1427,6 +1555,44 @@ class SqliteProjectStore implements ProjectStore {
     };
   }
 
+  saveDraft(draft: unknown): void {
+    const json = canonicalJson(draft, 'draft');
+    this.#mutate((updatedAt) => {
+      this.#open()
+        .prepare(
+          `INSERT INTO profile_draft (slot, draft_json, updated_at) VALUES (0, ?, ?)
+           ON CONFLICT (slot) DO UPDATE SET
+             draft_json = excluded.draft_json,
+             updated_at = excluded.updated_at`,
+        )
+        .run(json, updatedAt);
+    });
+  }
+
+  getDraft<T = unknown>(validate?: (value: unknown) => T): StoredDraft<T> | undefined {
+    const row = this.#open()
+      .prepare('SELECT draft_json, updated_at FROM profile_draft WHERE slot = 0')
+      .get();
+    if (row === undefined) {
+      return undefined;
+    }
+    const parsed = parseStoredJson(
+      requireText(row, 'profile_draft', 'draft_json'),
+      'profile_draft',
+    );
+    return {
+      draft: validate === undefined ? (parsed as T) : validate(parsed),
+      updatedAt: requireText(row, 'profile_draft', 'updated_at'),
+    };
+  }
+
+  clearDraft(): boolean {
+    return this.#mutate(() => {
+      const { changes } = this.#open().prepare('DELETE FROM profile_draft').run();
+      return Number(changes) > 0;
+    });
+  }
+
   recordDecision(input: DecisionInput): void {
     const reviewKey = requireFilledArgument(input.reviewKey, 'reviewKey');
     const decision = requireMemberArgument(input.decision, DECISION_VALUES, 'decision');
@@ -1481,10 +1647,50 @@ class SqliteProjectStore implements ProjectStore {
     return decision;
   }
 
+  /**
+   * Releases the handle, giving freed pages back first when there are enough.
+   *
+   * `incremental_vacuum` only does anything on a file created
+   * `auto_vacuum = INCREMENTAL`, which is every project created by this build
+   * and no project created before it. An existing file is deliberately left on
+   * whatever it was created with: switching a database to incremental vacuuming
+   * requires a full `VACUUM`, which rewrites it whole -- minutes of I/O and a
+   * second copy of the file on disk, at the moment a user pressed Close.
+   *
+   * Best-effort throughout. A close that failed to reclaim disk is not a close
+   * that failed, and the handle must be released either way.
+   */
   close(): void {
-    if (this.#db !== null) {
-      this.#db.close();
+    const db = this.#db;
+    if (db === null) {
+      return;
+    }
+    try {
+      this.#reclaim(db);
+    } catch {
+      // Nothing to tell the user. The pages stay in the freelist and the next
+      // close tries again.
+    } finally {
+      db.close();
       this.#db = null;
+    }
+  }
+
+  #reclaim(db: DatabaseSync): void {
+    const mode = db.prepare('PRAGMA auto_vacuum').get();
+    // 2 is INCREMENTAL. 0 (NONE) and 1 (FULL) are both files this build did not
+    // create, and running the pragma on them is a no-op rather than a mistake --
+    // but reading the freelist on a large one is not free, so it is skipped.
+    if (mode === undefined || requireInteger(mode, 'pragma.auto_vacuum', 'auto_vacuum') !== 2) {
+      return;
+    }
+    const free = db.prepare('PRAGMA freelist_count').get();
+    if (
+      free !== undefined &&
+      requireInteger(free, 'pragma.freelist_count', 'freelist_count') >=
+        VACUUM_FREELIST_THRESHOLD
+    ) {
+      db.exec('PRAGMA incremental_vacuum');
     }
   }
 }

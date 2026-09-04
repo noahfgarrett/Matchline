@@ -1,5 +1,5 @@
 /**
- * The `.matchline` project file schema, version 5 (APP.md "Project file",
+ * The `.matchline` project file schema, version 7 (APP.md "Project file",
  * PRODUCT.md §15).
  *
  * This file is the single source of truth for the DDL: `createProject` executes
@@ -47,11 +47,23 @@
  *   the table and copies every row across. Nothing back-fills the two new keys:
  *   a project that has configured neither simply has no row for them, which is
  *   what "not configured" has always looked like in this table.
+ * - **v7** — two tables and a column, for two kinds of loss.
+ *   `profile_draft` is a single slot holding the wizard draft as it is edited,
+ *   so closing the app no longer discards every unsaved answer in silence; a
+ *   draft is not a revision, which is why it is a slot rather than a row in
+ *   `profile`. `compile_assets` takes the generated-MEL asset array OUT of
+ *   `compiles.stats_json`, where it made every history read parse every asset
+ *   of every compile ever run, and `compiles.asset_count` records how many
+ *   there were so a history row can say what a compile produced without
+ *   reading it. New files are also created `auto_vacuum = INCREMENTAL`, so the
+ *   pages an asset-row prune frees can be given back; existing files are left
+ *   on whatever they were created with, because changing that setting rewrites
+ *   the whole database.
  */
 import type { SourceKind } from '@matchline/domain';
 
 /** The schema version this build writes and reads. */
-export const PROJECT_SCHEMA_VERSION = 6;
+export const PROJECT_SCHEMA_VERSION = 7;
 
 /**
  * The `app_version` written into a new project when the caller does not supply
@@ -60,6 +72,27 @@ export const PROJECT_SCHEMA_VERSION = 6;
  * something truthful.
  */
 export const DEFAULT_APP_VERSION = '1.0.0-rc.1';
+
+/**
+ * How many compiles keep their generated-MEL assets (v7).
+ *
+ * The history list is unbounded and the compile rows themselves are small, so
+ * they stay unbounded -- "this project compiled on the 3rd" is evidence. The
+ * assets are not small, roughly a kilobyte per hundred, and the only thing that
+ * reads a stored compile's assets is a revision diff against a recent baseline.
+ * Twenty is comfortably more than anyone diffs against and bounds what a
+ * project file grows to over a year of daily compiles.
+ */
+export const COMPILE_ASSET_RETENTION = 20;
+
+/**
+ * Freed pages a `close()` will hand back to the filesystem.
+ *
+ * 256 pages is a megabyte at SQLite's default page size. Below that the
+ * `incremental_vacuum` costs more in syscalls than it returns in disk, and a
+ * close is a moment the user is waiting through.
+ */
+export const VACUUM_FREELIST_THRESHOLD = 256;
 
 /** Meta keys every v1 project file declares. */
 export const REQUIRED_META_KEYS = [
@@ -83,6 +116,8 @@ export const REQUIRED_TABLES = [
   'migrations',
   'config',
   'ledger',
+  'profile_draft',
+  'compile_assets',
 ] as const;
 
 /** What a registered input file is to the compile (PRODUCT.md §6, §12). */
@@ -309,7 +344,56 @@ CREATE TABLE ledger (
 `;
 
 /**
- * The v6 DDL.
+ * The `profile_draft` table, as v7 creates it.
+ *
+ * One slot, pinned to 0 by the DDL exactly as `snapshots` and `ledger` pin
+ * theirs, holding the wizard draft as it currently stands.
+ *
+ * A draft is NOT a revision and does not belong in `profile`. A revision is
+ * published, immutable, and the thing a compile names; a draft is what somebody
+ * is in the middle of typing, and it is overwritten on every keystroke-sized
+ * patch. Keeping them in one table would either fill the profile history with
+ * hundreds of half-finished rows or make a revision mutable, and both are worse
+ * than a slot.
+ *
+ * It exists because the alternative was what shipped: draft edits lived in the
+ * session's memory only, so closing the project, opening another or quitting
+ * discarded every answer since the last Save -- with no prompt, because nothing
+ * in main knew there was anything to lose.
+ */
+export const PROFILE_DRAFT_TABLE_SQL = `
+CREATE TABLE profile_draft (
+  slot       INTEGER PRIMARY KEY CHECK (slot = 0),
+  draft_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`;
+
+/**
+ * The `compile_assets` table, as v7 creates it.
+ *
+ * One row per compile, holding the generated-MEL assets that compile produced.
+ *
+ * They used to ride inside `compiles.stats_json`, which cost more than it
+ * looked: `listCompiles` parses `stats_json` for every row it returns, so
+ * drawing a history list of fifty compiles parsed fifty asset arrays -- tens of
+ * megabytes of JSON -- to print fifty dates. Splitting them out makes the
+ * history read proportional to the history rather than to the model, and lets
+ * old assets be pruned without touching the compile rows they belong to, which
+ * are evidence.
+ *
+ * `ON DELETE CASCADE` because these rows have no meaning without their compile,
+ * and `compiles` rows are never deleted anyway.
+ */
+export const COMPILE_ASSETS_TABLE_SQL = `
+CREATE TABLE compile_assets (
+  compile_id  INTEGER PRIMARY KEY REFERENCES compiles(id) ON DELETE CASCADE,
+  assets_json TEXT NOT NULL
+);
+`;
+
+/**
+ * The v7 DDL.
  *
  * Notes on the shapes that are not obvious:
  * - `sources` is keyed by `source_id` (see {@link SOURCES_TABLE_SQL}).
@@ -322,6 +406,8 @@ CREATE TABLE ledger (
  *   structural rather than a convention a future writer could break.
  * - `config` is keyed by section, one row each, so writing the hierarchy cannot
  *   disturb the ladder and a section nobody has set is simply absent.
+ * - `compiles.asset_count` is what a history list reads instead of the assets
+ *   themselves (see {@link COMPILE_ASSETS_TABLE_SQL}).
  */
 export const PROJECT_SCHEMA_SQL = `
 CREATE TABLE meta (
@@ -353,7 +439,8 @@ CREATE TABLE compiles (
   stats_json        TEXT NOT NULL,
   started_at        TEXT NOT NULL,
   finished_at       TEXT NOT NULL,
-  recorded_at       TEXT NOT NULL
+  recorded_at       TEXT NOT NULL,
+  asset_count       INTEGER NOT NULL DEFAULT 0 CHECK (asset_count >= 0)
 );
 
 CREATE TABLE snapshots (
@@ -376,4 +463,4 @@ CREATE TABLE migrations (
   version    INTEGER PRIMARY KEY,
   applied_at TEXT NOT NULL
 );
-${CONFIG_TABLE_SQL}${LEDGER_TABLE_SQL}`;
+${CONFIG_TABLE_SQL}${LEDGER_TABLE_SQL}${PROFILE_DRAFT_TABLE_SQL}${COMPILE_ASSETS_TABLE_SQL}`;

@@ -111,7 +111,7 @@ format-v2 packages.
 
 ## Project file (PRODUCT.md §15)
 
-`ProjectName.matchline` = SQLite, **schema v6**. Tables:
+`ProjectName.matchline` = SQLite, **schema v7**. Tables:
 
 - `meta` — schema version, app version, name, created/modified.
 - `sources` — one row per registered file, keyed by `source_id`: `role`, `logical_name`,
@@ -125,9 +125,16 @@ format-v2 packages.
   rules and profile test examples.
 - `learned` — learned-rule sets and item-master/WBS tables (JSON).
 - `overrides` — manual system and relationship overrides, keyed by `(kind, asset_key)`.
-- `compiles` — history: input hashes, profile revision, stats JSON (including the
-  generated-MEL assets a diff baseline needs), timestamps.
+- `compiles` — history: input hashes, profile revision, stats JSON, timestamps, and
+  `asset_count`. The generated-MEL assets themselves moved to `compile_assets` in v7,
+  so listing the history costs the history rather than the model.
+- `compile_assets` — the generated-MEL assets a revision diff reads, one row per compile,
+  kept for the newest 20 compiles. The compile row itself is never pruned.
 - `snapshots` — the latest resolved snapshot, `slot` pinned to 0.
+- `profile_draft` — the wizard draft as it currently stands, `slot` pinned to 0. Written
+  on every draft edit, so closing the app no longer discards unsaved answers; cleared when
+  a revision is published from it. A draft is not a revision, which is why it is not a row
+  in `profile`.
 - `ledger` — the asset identity ledger the latest compile wrote, `slot` pinned to 0, so an
   `assetId` outlives the tag it was first derived from and every manual decision recorded
   against that id keeps applying.

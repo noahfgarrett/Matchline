@@ -199,6 +199,22 @@ export function digest(seed) {
   return seed.padEnd(64, '0').slice(0, 64).toLowerCase().replace(/[^0-9a-f]/g, '0');
 }
 
+/**
+ * A `dumpTables` result with one column dropped from every row of one table.
+ *
+ * For the migration tests, and only for a column a step ADDS: v7 gives
+ * `compiles` an `asset_count`, so "every other table is byte-for-byte what it
+ * was" needs a way to say "and this table is, apart from the column that is the
+ * point of the step".
+ */
+export function withoutColumn(rows, column) {
+  return rows.map((row) => {
+    const parsed = JSON.parse(row);
+    delete parsed[column];
+    return JSON.stringify(parsed, Object.keys(parsed).sort());
+  });
+}
+
 const DUMPED_TABLES = [
   'meta',
   'sources',
@@ -211,6 +227,8 @@ const DUMPED_TABLES = [
   'migrations',
   'config',
   'ledger',
+  'profile_draft',
+  'compile_assets',
 ];
 
 /**

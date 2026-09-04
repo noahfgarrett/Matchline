@@ -246,7 +246,7 @@ an unsigned release; there is no unsigned release path on purpose.
 
 | Format | Version | Where it is defined |
 | --- | --- | --- |
-| `.matchline` project file (SQLite) | schema **v6** | `packages/project-store/src/schema.ts`, migrations in `migrations.ts` |
+| `.matchline` project file (SQLite) | schema **v7** | `packages/project-store/src/schema.ts`, migrations in `migrations.ts` |
 | Site Profile | **`SiteProfileV2`** | `packages/domain/src/profile-v2.ts` |
 | Portable profile package | format **v2** | `apps/desktop/electron/services/profile-package.ts` |
 | Extraction cache (SQLite) | schema **v1** | `schemas/extraction-cache.sql` |

@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test, { after } from 'node:test';
 
 import {
+  COMPILE_ASSET_RETENTION,
   createProject,
   deriveSourceId,
   deserializeLedger,
@@ -12,7 +13,15 @@ import {
   ProjectStoreError,
 } from '../dist/index.js';
 
-import { dragonProfile, dumpTables, frozenClock, rawExec, tempDirectory } from './support.mjs';
+import {
+  dragonProfile,
+  dumpTables,
+  frozenClock,
+  rawExec,
+  steppingClock,
+  tempDirectory,
+  withoutColumn,
+} from './support.mjs';
 
 /**
  * The migrations, and the promise that running one is never destructive.
@@ -547,6 +556,7 @@ test('migrating a v1 project backs it up and keeps every row', () => {
     JSON.stringify({ applied_at: MIGRATED_AT, version: 4 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 5 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 6 }),
+    JSON.stringify({ applied_at: MIGRATED_AT, version: 7 }),
   ]);
 
   // The backup is still the v1 file, which is the whole point of taking it.
@@ -677,6 +687,7 @@ test('migrating a v2 project widens both CHECKs and keeps every row', () => {
     JSON.stringify({ applied_at: MIGRATED_AT, version: 4 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 5 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 6 }),
+    JSON.stringify({ applied_at: MIGRATED_AT, version: 7 }),
   ]);
 
   // The backup is still the v2 file, which is the whole point of taking it.
@@ -995,6 +1006,7 @@ test('migrating a v3 project gives every source an id and keeps every row', () =
     JSON.stringify({ applied_at: MIGRATED_AT, version: 4 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 5 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 6 }),
+    JSON.stringify({ applied_at: MIGRATED_AT, version: 7 }),
   ]);
 
   // The backup is still the v3 file, which is the whole point of taking it.
@@ -1322,13 +1334,18 @@ test('migrating a v4 project adds an empty ledger and moves nothing else', () =>
     'decisions',
     'config',
   ]);
-  assert.deepEqual(after_, before, 'v5 rebuilds nothing, so every table is what it was');
+  assert.deepEqual(
+    { ...after_, compiles: withoutColumn(after_.compiles, 'asset_count') },
+    before,
+    'v5 rebuilds nothing, and v7 only adds `asset_count` to `compiles`',
+  );
   assert.deepEqual(dumpTables(path, ['ledger']).ledger, []);
 
   assert.deepEqual(dumpTables(path, ['migrations']).migrations, [
     JSON.stringify({ applied_at: CREATED_AT, version: 4 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 5 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 6 }),
+    JSON.stringify({ applied_at: MIGRATED_AT, version: 7 }),
   ]);
 
   // The backup is still the v4 file, which is the whole point of taking it.
@@ -1686,7 +1703,7 @@ test('migrating a v5 project widens the config CHECK and keeps every row', () =>
     'ledger',
   ]);
   assert.deepEqual(
-    after_,
+    { ...after_, compiles: withoutColumn(after_.compiles, 'asset_count') },
     {
       sources: before.sources,
       profile: before.profile,
@@ -1697,12 +1714,13 @@ test('migrating a v5 project widens the config CHECK and keeps every row', () =>
       decisions: before.decisions,
       ledger: before.ledger,
     },
-    'v6 rebuilds only `config`, so every other table is byte-for-byte what it was',
+    'v6 rebuilds only `config`, and v7 only adds `asset_count` to `compiles`',
   );
 
   assert.deepEqual(dumpTables(path, ['migrations']).migrations, [
     JSON.stringify({ applied_at: CREATED_AT, version: 5 }),
     JSON.stringify({ applied_at: MIGRATED_AT, version: 6 }),
+    JSON.stringify({ applied_at: MIGRATED_AT, version: 7 }),
   ]);
 });
 
@@ -1717,6 +1735,444 @@ test('a migrated v5 project reopens as current, with no second backup', () => {
     store.close();
   }
 });
+
+/* ----------------------------------------------------------- v6 -> v7 */
+
+/**
+ * `PROJECT_SCHEMA_SQL` as **v6** shipped, frozen.
+ *
+ * No `profile_draft`, no `compile_assets`, and a `compiles` table with no
+ * `asset_count` -- which is the whole point of the snapshot: a v7 step that
+ * failed to add any of the three would still pass against a file built from
+ * today's DDL, and would fail here.
+ */
+const V6_SCHEMA_SQL = `
+CREATE TABLE meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE sources (
+  source_id            TEXT PRIMARY KEY,
+  role                 TEXT NOT NULL CHECK (role IN (
+                         'model', 'easypower', 'cable-schedule', 'pmd', 'mel', 'p6', 'prior-ssm')),
+  logical_name         TEXT NOT NULL,
+  raw_file_name        TEXT NOT NULL,
+  raw_sha256           TEXT NOT NULL,
+  raw_byte_size        INTEGER NOT NULL CHECK (raw_byte_size >= 0),
+  derived_cache_sha256 TEXT,
+  added_at             TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE profile (
+  revision     INTEGER PRIMARY KEY CHECK (revision > 0),
+  profile_json TEXT NOT NULL,
+  note         TEXT,
+  saved_at     TEXT NOT NULL
+);
+
+CREATE TABLE learned (
+  id         INTEGER PRIMARY KEY,
+  kind       TEXT NOT NULL CHECK (kind IN ('nesting', 'item-master', 'wbs')),
+  rules_json TEXT NOT NULL,
+  saved_at   TEXT NOT NULL
+);
+CREATE INDEX idx_learned_kind ON learned(kind, id);
+
+CREATE TABLE overrides (
+  kind         TEXT NOT NULL CHECK (kind IN ('system', 'relationship')),
+  asset_key    TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  updated_at   TEXT NOT NULL,
+  PRIMARY KEY (kind, asset_key)
+) WITHOUT ROWID;
+
+CREATE TABLE compiles (
+  id                INTEGER PRIMARY KEY,
+  input_hashes_json TEXT NOT NULL,
+  profile_revision  INTEGER NOT NULL REFERENCES profile(revision),
+  stats_json        TEXT NOT NULL,
+  started_at        TEXT NOT NULL,
+  finished_at       TEXT NOT NULL,
+  recorded_at       TEXT NOT NULL
+);
+
+CREATE TABLE snapshots (
+  slot          INTEGER PRIMARY KEY CHECK (slot = 0),
+  compile_id    INTEGER NOT NULL REFERENCES compiles(id),
+  snapshot_json TEXT NOT NULL,
+  saved_at      TEXT NOT NULL
+);
+
+CREATE TABLE decisions (
+  id         INTEGER PRIMARY KEY,
+  review_key TEXT NOT NULL,
+  decision   TEXT NOT NULL CHECK (decision IN ('accepted', 'rejected', 'deferred')),
+  note       TEXT,
+  decided_at TEXT NOT NULL
+);
+CREATE INDEX idx_decisions_key ON decisions(review_key, id);
+
+CREATE TABLE migrations (
+  version    INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL
+);
+
+CREATE TABLE config (
+  key         TEXT PRIMARY KEY CHECK (key IN (
+                'hierarchy', 'roleGraph', 'ladder', 'ssmDisciplineProjection',
+                'parentTagProperty', 'extoTemplate', 'derivedAttributes',
+                'sourceAssignmentRules')),
+  config_json TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE ledger (
+  slot        INTEGER PRIMARY KEY CHECK (slot = 0),
+  compile_id  INTEGER NOT NULL REFERENCES compiles(id),
+  ledger_json TEXT NOT NULL,
+  saved_at    TEXT NOT NULL
+);
+`;
+
+/** One generated-MEL asset, in the shape the desktop app stored (§12.1). */
+function melAsset(index) {
+  return {
+    canonicalTag: `MAH${String(index).padStart(3, '0')}-10-01`,
+    inclusionStatus: 'included',
+    description: 'Air handling unit',
+  };
+}
+
+/**
+ * Writes a v6 project with `compileCount` compiles, each carrying its assets
+ * inside `stats_json` the way the pre-v7 desktop app wrote them.
+ *
+ * That shape is the thing v7 exists to undo, so the fixture has to produce it
+ * verbatim rather than through today's store.
+ */
+function writeV6Project(name, compileCount = 1, assetsPerCompile = 2) {
+  const path = temp.file(name);
+  const db = new DatabaseSync(path);
+  try {
+    db.exec('PRAGMA foreign_keys = ON');
+    db.exec(V6_SCHEMA_SQL);
+
+    const meta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)');
+    meta.run('schema_version', '6');
+    meta.run('app_version', '0.9.0');
+    meta.run('project_name', 'Dragon');
+    meta.run('created_at', CREATED_AT);
+    meta.run('modified_at', CREATED_AT);
+    db.prepare('INSERT INTO migrations (version, applied_at) VALUES (?, ?)').run(6, CREATED_AT);
+
+    db.prepare(
+      'INSERT INTO profile (revision, profile_json, note, saved_at) VALUES (?, ?, ?, ?)',
+    ).run(1, JSON.stringify(dragonProfile()), 'initial import', CREATED_AT);
+
+    db.prepare(
+      'INSERT INTO overrides (kind, asset_key, payload_json, updated_at) VALUES (?, ?, ?, ?)',
+    ).run('system', 'MAH001-10-01', JSON.stringify({ systemKey: '001' }), CREATED_AT);
+
+    db.prepare(
+      'INSERT INTO config (key, config_json, updated_at) VALUES (?, ?, ?)',
+    ).run('extoTemplate', JSON.stringify({ version: 1, headers: ['UPN'] }), CREATED_AT);
+
+    const compile = db.prepare(
+      `INSERT INTO compiles
+         (id, input_hashes_json, profile_revision, stats_json, started_at, finished_at, recorded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (let id = 1; id <= compileCount; id += 1) {
+      compile.run(
+        id,
+        JSON.stringify({ 'model:dragon-coordination.nwd': 'a'.repeat(64) }),
+        1,
+        JSON.stringify({
+          summary: { nodeCount: 34, compile: id },
+          generatedMelAssets: Array.from({ length: assetsPerCompile }, (_, index) =>
+            melAsset(id * 100 + index),
+          ),
+        }),
+        '2026-01-15T10:00:00.000Z',
+        '2026-01-15T10:00:42.000Z',
+        CREATED_AT,
+      );
+    }
+
+    db.prepare(
+      'INSERT INTO snapshots (slot, compile_id, snapshot_json, saved_at) VALUES (0, ?, ?, ?)',
+    ).run(compileCount, JSON.stringify({ nodes: [], reviewItems: [], stats: {} }), CREATED_AT);
+
+    db.prepare(
+      'INSERT INTO decisions (review_key, decision, note, decided_at) VALUES (?, ?, ?, ?)',
+    ).run('missing-boundary:tag:MAH001-10-01', 'accepted', 'walked it down', CREATED_AT);
+  } finally {
+    db.close();
+  }
+  return path;
+}
+
+test('the frozen v6 fixture really is pre-v7: no draft slot, no asset table, no count', () => {
+  // The guard on every assertion below, as the other fixtures have their own.
+  assert.equal(V6_SCHEMA_SQL.includes('profile_draft'), false);
+  assert.equal(V6_SCHEMA_SQL.includes('compile_assets'), false);
+  assert.equal(V6_SCHEMA_SQL.includes('asset_count'), false);
+
+  const path = writeV6Project('frozen-v6.matchline');
+  assert.throws(
+    () => rawExec(path, 'SELECT slot FROM profile_draft'),
+    'a v6 file has nowhere to keep a draft -- that is what v7 adds',
+  );
+});
+
+test('a v6 project is refused, by version, until migration is asked for', () => {
+  const path = writeV6Project('refused-v6.matchline');
+
+  const failure = reason(() => openProject(path));
+  assert.equal(failure.kind, 'migration-required');
+  assert.equal(failure.found, 6);
+  assert.equal(failure.supported, PROJECT_SCHEMA_VERSION);
+  assert.equal(existsSync(`${path}.backup-6`), false, 'a refusal touches nothing');
+});
+
+test('migrating a v6 project keeps every row and lifts the assets out of stats_json', () => {
+  const path = writeV6Project('migrate-v6.matchline');
+  const before = dumpTables(path, [
+    'sources',
+    'profile',
+    'learned',
+    'overrides',
+    'snapshots',
+    'decisions',
+    'config',
+  ]);
+
+  const store = openProject(path, { migrate: true, now: frozenClock(MIGRATED_AT) });
+  try {
+    assert.deepEqual(store.migration, {
+      fromVersion: 6,
+      toVersion: PROJECT_SCHEMA_VERSION,
+      backupPath: `${path}.backup-6`,
+    });
+    assert.ok(existsSync(`${path}.backup-6`), 'the original was copied before anything ran');
+    assert.equal(store.meta().schemaVersion, PROJECT_SCHEMA_VERSION);
+
+    const [compile] = store.listCompiles();
+    // The summary is what is left in the column, and the assets are not in it.
+    assert.deepEqual(compile.stats, { summary: { nodeCount: 34, compile: 1 } });
+    assert.equal(compile.assetCount, 2);
+    assert.deepEqual(store.getCompileAssets(1), [melAsset(100), melAsset(101)]);
+
+    // The new slot starts empty rather than seeded from the newest revision: a
+    // project with no draft in flight has no unsaved answers to restore.
+    assert.equal(store.getDraft(), undefined);
+  } finally {
+    store.close();
+  }
+
+  const after_ = dumpTables(path, [
+    'sources',
+    'profile',
+    'learned',
+    'overrides',
+    'snapshots',
+    'decisions',
+    'config',
+  ]);
+  assert.deepEqual(after_, before, 'v7 touches `compiles` and nothing else');
+
+  assert.deepEqual(dumpTables(path, ['migrations']).migrations, [
+    JSON.stringify({ applied_at: CREATED_AT, version: 6 }),
+    JSON.stringify({ applied_at: MIGRATED_AT, version: 7 }),
+  ]);
+});
+
+test('a v6 project keeps the assets of its newest compiles and drops the rest', () => {
+  const path = writeV6Project('retention-v6.matchline', COMPILE_ASSET_RETENTION + 5, 3);
+
+  const store = openProject(path, { migrate: true, now: frozenClock(MIGRATED_AT) });
+  try {
+    const compiles = store.listCompiles();
+    assert.equal(compiles.length, COMPILE_ASSET_RETENTION + 5);
+    // Every compile still says what it produced, whether or not it still holds
+    // it: the count is evidence and the array is a convenience.
+    assert.ok(compiles.every((record) => record.assetCount === 3));
+
+    const kept = compiles.filter((record) => store.getCompileAssets(record.compileId) !== undefined);
+    assert.deepEqual(
+      kept.map((record) => record.compileId),
+      compiles.slice(0, COMPILE_ASSET_RETENTION).map((record) => record.compileId),
+      'the newest twenty keep their assets and the older rows keep only their count',
+    );
+  } finally {
+    store.close();
+  }
+});
+
+test('a v6 compile row whose stats this build did not write is left exactly as it was', () => {
+  const path = writeV6Project('foreign-stats-v6.matchline');
+  rawExec(path, `UPDATE compiles SET stats_json = '{"nodeCount":34}' WHERE id = 1`);
+
+  const store = openProject(path, { migrate: true, now: frozenClock(MIGRATED_AT) });
+  try {
+    const [compile] = store.listCompiles();
+    assert.deepEqual(compile.stats, { nodeCount: 34 }, 'not rewritten, not guessed at');
+    assert.equal(compile.assetCount, 0);
+    assert.equal(store.getCompileAssets(1), undefined);
+  } finally {
+    store.close();
+  }
+});
+
+test('a migrated v6 project reopens as current, with no second backup', () => {
+  const path = writeV6Project('reopen-v6.matchline');
+  openProject(path, { migrate: true, now: frozenClock(MIGRATED_AT) }).close();
+
+  const store = openProject(path, { migrate: true });
+  try {
+    assert.equal(store.migration, null, 'nothing to do the second time');
+  } finally {
+    store.close();
+  }
+});
+
+/* ------------------------------------------------------ the draft slot (v7) */
+
+test('a draft survives close and reopen, and a saved revision clears it', () => {
+  const path = temp.file('draft.matchline');
+  const store = createProject(path, { name: 'Dragon', now: frozenClock(CREATED_AT) });
+  try {
+    assert.equal(store.getDraft(), undefined, 'a new project has no draft in flight');
+    // Half-finished on purpose: the slot exists precisely for a draft that is
+    // not publishable yet, so it does no profile validation.
+    store.saveDraft({ name: 'Dragon', propertyMappings: {} });
+    assert.deepEqual(store.getDraft(), {
+      draft: { name: 'Dragon', propertyMappings: {} },
+      updatedAt: CREATED_AT,
+    });
+    store.saveDraft({ name: 'Dragon', propertyMappings: { equipmentTag: 'Item > Name' } });
+  } finally {
+    store.close();
+  }
+
+  const reopened = openProject(path);
+  try {
+    assert.deepEqual(reopened.getDraft().draft, {
+      name: 'Dragon',
+      propertyMappings: { equipmentTag: 'Item > Name' },
+    });
+    assert.equal(reopened.clearDraft(), true);
+    assert.equal(reopened.getDraft(), undefined);
+    assert.equal(reopened.clearDraft(), false, 'and clearing an empty slot says so');
+  } finally {
+    reopened.close();
+  }
+});
+
+/* -------------------------------------------------- compile assets (v7) */
+
+test('listing the compile history reads no asset arrays', () => {
+  const path = temp.file('assets.matchline');
+  const store = createProject(path, { name: 'Dragon', now: steppingClock(CREATED_AT) });
+  try {
+    store.saveProfile(dragonProfile(), 'initial import');
+    const assets = Array.from({ length: 500 }, (_, index) => ({
+      canonicalTag: `MAH${String(index).padStart(3, '0')}-10-01`,
+      inclusionStatus: 'included',
+    }));
+
+    const compileId = store.withTransaction(() => {
+      const id = store.recordCompile({
+        inputHashes: {},
+        profileRevision: 1,
+        statsJson: { nodeCount: 34 },
+        startedAt: '2026-01-15T10:00:00.000Z',
+        finishedAt: '2026-01-15T10:00:42.000Z',
+      });
+      store.saveCompileAssets(id, assets);
+      return id;
+    });
+
+    const [record] = store.listCompiles();
+    assert.equal(record.compileId, compileId);
+    assert.equal(record.assetCount, 500);
+    assert.deepEqual(record.stats, { nodeCount: 34 }, 'the assets are not in the stats column');
+    assert.equal(store.getCompileAssets(compileId).length, 500);
+    assert.equal(
+      reason(() => store.saveCompileAssets(compileId + 99, [])).kind,
+      'unknown-compile',
+    );
+  } finally {
+    store.close();
+  }
+});
+
+test('a new compile prunes the assets of everything past the retention window', () => {
+  const path = temp.file('prune.matchline');
+  const store = createProject(path, { name: 'Dragon', now: steppingClock(CREATED_AT) });
+  try {
+    store.saveProfile(dragonProfile(), 'initial import');
+    const ids = [];
+    for (let run = 0; run < COMPILE_ASSET_RETENTION + 3; run += 1) {
+      ids.push(
+        store.withTransaction(() => {
+          const id = store.recordCompile({
+            inputHashes: {},
+            profileRevision: 1,
+            statsJson: { run },
+            startedAt: '2026-01-15T10:00:00.000Z',
+            finishedAt: '2026-01-15T10:00:42.000Z',
+          });
+          store.saveCompileAssets(id, [{ canonicalTag: `MAH${String(run)}-10-01` }]);
+          return id;
+        }),
+      );
+    }
+
+    const kept = ids.filter((id) => store.getCompileAssets(id) !== undefined);
+    assert.deepEqual(kept, ids.slice(-COMPILE_ASSET_RETENTION));
+    assert.equal(
+      store.listCompiles().length,
+      ids.length,
+      'the compile rows themselves are evidence and are never pruned',
+    );
+    assert.ok(
+      store.listCompiles().every((record) => record.assetCount === 1),
+      'and every one of them still says what it produced',
+    );
+  } finally {
+    store.close();
+  }
+});
+
+/**
+ * Incremental vacuuming is a property of the file, set when it is created.
+ *
+ * A migrated file deliberately does NOT get it: switching a database to
+ * incremental vacuuming needs a full `VACUUM`, which rewrites it whole -- and
+ * doing that inside a migration would turn "upgrade this project" into minutes
+ * of I/O and a second copy of the file on disk.
+ */
+test('a new project vacuums incrementally; a migrated one is not rewritten to', () => {
+  const fresh = temp.file('vacuum-new.matchline');
+  createProject(fresh, { name: 'Dragon', now: frozenClock(CREATED_AT) }).close();
+  assert.equal(autoVacuumOf(fresh), 2, 'INCREMENTAL');
+
+  const migrated = writeV6Project('vacuum-old.matchline');
+  assert.equal(autoVacuumOf(migrated), 0, 'the fixture was written with the default');
+  openProject(migrated, { migrate: true, now: frozenClock(MIGRATED_AT) }).close();
+  assert.equal(autoVacuumOf(migrated), 0, 'and the migration left it alone');
+});
+
+function autoVacuumOf(path) {
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    return db.prepare('PRAGMA auto_vacuum').get().auto_vacuum;
+  } finally {
+    db.close();
+  }
+}
 
 /* ------------------------------------------------------- the config table */
 

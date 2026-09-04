@@ -5,7 +5,7 @@
  * > 0.8.1 projects migrate with backup, no silent decision loss.
  *
  * The pieces of that have each been proven in isolation — `project-store`'s
- * `migration.test.mjs` walks v3→v4→v5→v6 against frozen per-version DDL,
+ * `migration.test.mjs` walks v3→v4→v5→v6→v7 against frozen per-version DDL,
  * `profile-v2.test.mjs` lifts a stored V1 profile, `workspace-service.test.mjs`
  * moves a `config` table into a new profile revision. What none of them does is
  * run the whole thing at once, through the DESKTOP service, on a file that has
@@ -19,7 +19,7 @@
  * own copies: a fixture built from today's `schema.ts` drifts with the code, so
  * the test keeps passing while real 0.8.1 files stop opening. The v3 DDL below
  * is copied from that file's frozen snapshot, and the first test asserts it is
- * genuinely pre-v4/v5/v6 — no `source_id`, no `ledger`, no `derivedAttributes`
+ * genuinely pre-v4/v5/v6/v7 — no `source_id`, no `ledger`, no `derivedAttributes`
  * — so it cannot be quietly modernized.
  *
  * ## What "nothing silently lost" is checked against
@@ -512,13 +512,15 @@ function newService() {
 
 /* ------------------------------------------------------------- the gate --- */
 
-test('the fixture really is a 0.8.1 file: pre-v4, pre-v5, pre-v6', () => {
+test('the fixture really is a 0.8.1 file: pre-v4, pre-v5, pre-v6, pre-v7', () => {
   // The guard on everything below. A fixture quietly rebuilt from today's DDL
   // would make this whole file prove nothing.
   assert.equal(V3_SCHEMA_SQL.includes('source_id'), false, 'v4 added source_id');
   assert.equal(V3_SCHEMA_SQL.includes('ledger'), false, 'v5 added the ledger table');
   assert.equal(V3_SCHEMA_SQL.includes('derivedAttributes'), false, 'v6 widened the config CHECK');
   assert.equal(V3_SCHEMA_SQL.includes('sourceAssignmentRules'), false, 'v6 widened the config CHECK');
+  assert.equal(V3_SCHEMA_SQL.includes('profile_draft'), false, 'v7 added the draft slot');
+  assert.equal(V3_SCHEMA_SQL.includes('compile_assets'), false, 'v7 added the asset table');
 
   const path = writeLegacyProject('Frozen.matchline');
   assert.equal(String(scalar(path, "SELECT value FROM meta WHERE key = 'schema_version'")), '3');
@@ -594,7 +596,7 @@ test('a 0.8.1 project migrates, keeps every decision, and recompiles on them', a
     { fromVersion: 3, toVersion: PROJECT_SCHEMA_VERSION, backupPath },
     'the whole chain ran in one open, and the user is told where the original went',
   );
-  assert.equal(PROJECT_SCHEMA_VERSION, 6, 'gate 13 is about landing at v6');
+  assert.equal(PROJECT_SCHEMA_VERSION, 7, 'gate 13 is about landing at the current schema');
   assert.ok(existsSync(backupPath), 'the untouched original was copied before anything ran');
   assert.equal(
     String(scalar(backupPath, "SELECT value FROM meta WHERE key = 'schema_version'")),
@@ -615,7 +617,7 @@ test('a 0.8.1 project migrates, keeps every decision, and recompiles on them', a
     before,
     'the backup is byte-for-byte the project as 0.8.1 left it',
   );
-  assert.equal(String(scalar(path, "SELECT value FROM meta WHERE key = 'schema_version'")), '6');
+  assert.equal(String(scalar(path, "SELECT value FROM meta WHERE key = 'schema_version'")), '7');
   assert.deepEqual(
     (() => {
       const db = new DatabaseSync(path, { readOnly: true });
@@ -625,7 +627,7 @@ test('a 0.8.1 project migrates, keeps every decision, and recompiles on them', a
         db.close();
       }
     })(),
-    [3, 4, 5, 6],
+    [3, 4, 5, 6, 7],
     'every step is recorded, so the chain is auditable rather than assumed',
   );
 

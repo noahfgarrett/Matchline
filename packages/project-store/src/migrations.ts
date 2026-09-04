@@ -16,8 +16,11 @@ import type { DatabaseSync } from 'node:sqlite';
 import { canonicalJson, isRecord } from './json.js';
 import { requireInteger, requireText } from './rows.js';
 import {
+  COMPILE_ASSETS_TABLE_SQL,
+  COMPILE_ASSET_RETENTION,
   CONFIG_TABLE_SQL,
   LEDGER_TABLE_SQL,
+  PROFILE_DRAFT_TABLE_SQL,
   SOURCE_ROLES,
   SOURCES_TABLE_SQL,
 } from './schema.js';
@@ -320,6 +323,120 @@ DROP TABLE config;
 ALTER TABLE config_v6 RENAME TO config;
 `;
 
+
+/**
+ * v6 → v7: a slot for the wizard draft, and the generated assets out of
+ * `stats_json`.
+ *
+ * A procedure rather than plain SQL because it moves rows, and because each
+ * piece has to be a no-op on a file that already has it -- a test that walks a
+ * current file's `schema_version` backwards to exercise the opt-in would
+ * otherwise fail on `CREATE TABLE` or `ADD COLUMN`.
+ *
+ * The move is the substantive half. Before v7 the desktop app stored
+ * `{ summary, generatedMelAssets }` in `compiles.stats_json`, because v1 had no
+ * per-compile slot for the assets and the `snapshots` table holds exactly one
+ * row. That made every compile row carry its whole generated MEL -- roughly a
+ * kilobyte per hundred assets, on a table nothing ever deletes from -- and made
+ * `listCompiles` parse all of it to print a list of dates. Here each row's
+ * assets are lifted into `compile_assets`, `stats_json` is rewritten to the
+ * summary alone, and `asset_count` records what was there.
+ *
+ * Only the newest {@link COMPILE_ASSET_RETENTION} compiles keep their assets;
+ * an older row keeps its `asset_count` and loses the array, exactly as it will
+ * when a new compile prunes it. The compile row itself is never deleted -- it
+ * is the evidence that a compile happened, and it is small.
+ *
+ * A `stats_json` that is not an object, or has no `generatedMelAssets` key, is
+ * left exactly as it was found: it was written by something other than this
+ * app's compile save, and rewriting it would be a guess.
+ */
+export function addDraftAndAssetTablesV7(db: DatabaseSync): void {
+  if (!hasTable(db, 'profile_draft')) {
+    db.exec(PROFILE_DRAFT_TABLE_SQL);
+  }
+  if (!hasTable(db, 'compile_assets')) {
+    db.exec(COMPILE_ASSETS_TABLE_SQL);
+  }
+  if (!columnsOf(db, 'compiles').has('asset_count')) {
+    // `ADD COLUMN` rather than a table rebuild: `snapshots.compile_id`,
+    // `ledger.compile_id` and now `compile_assets.compile_id` are foreign keys
+    // into `compiles`, and dropping the table would strand all three.
+    db.exec(
+      'ALTER TABLE compiles ADD COLUMN asset_count INTEGER NOT NULL DEFAULT 0 CHECK (asset_count >= 0)',
+    );
+  }
+
+  const ids = db
+    .prepare('SELECT id FROM compiles ORDER BY id DESC')
+    .all()
+    .map((row) => requireInteger(row, 'compiles', 'id'));
+  const keepAssets = new Set(ids.slice(0, COMPILE_ASSET_RETENTION));
+
+  const readStats = db.prepare('SELECT stats_json FROM compiles WHERE id = ?');
+  const writeStats = db.prepare(
+    'UPDATE compiles SET stats_json = ?, asset_count = ? WHERE id = ?',
+  );
+  const writeAssets = db.prepare(
+    'INSERT INTO compile_assets (compile_id, assets_json) VALUES (?, ?)',
+  );
+
+  for (const id of ids) {
+    const row = readStats.get(id);
+    if (row === undefined) {
+      continue;
+    }
+    const split = splitStoredStats(requireText(row, 'compiles', 'stats_json'));
+    if (split === null) {
+      continue;
+    }
+    writeStats.run(split.stats, split.assetCount, id);
+    if (split.assets !== null && keepAssets.has(id)) {
+      writeAssets.run(id, split.assets);
+    }
+  }
+}
+
+/** What one pre-v7 `stats_json` splits into, or `null` to leave it alone. */
+interface SplitStats {
+  /** The column's new value: everything that was there but the assets. */
+  readonly stats: string;
+  /** The assets as canonical JSON, or `null` when the key held no array. */
+  readonly assets: string | null;
+  readonly assetCount: number;
+}
+
+function splitStoredStats(text: string): SplitStats | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed) || !Object.hasOwn(parsed, 'generatedMelAssets')) {
+    return null;
+  }
+
+  const assets: unknown = parsed['generatedMelAssets'];
+  const rest: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (key !== 'generatedMelAssets') {
+      rest[key] = value;
+    }
+  }
+
+  if (!Array.isArray(assets)) {
+    // The key was there holding something else. It is still dropped out of the
+    // column -- nothing reads it -- but there is nothing to file under it.
+    return { stats: canonicalJson(rest, 'compiles.stats_json'), assets: null, assetCount: 0 };
+  }
+  return {
+    stats: canonicalJson(rest, 'compiles.stats_json'),
+    assets: canonicalJson(assets, 'compile_assets.assets_json'),
+    assetCount: assets.length,
+  };
+}
+
 /**
  * Every migration this build can run, in order, each one version apart.
  *
@@ -333,4 +450,5 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
   { kind: 'procedure', to: 4, run: migrateSourcesToV4 },
   { kind: 'procedure', to: 5, run: addLedgerTableV5 },
   { kind: 'sql', to: 6, sql: WIDEN_CONFIG_KEYS_SQL },
+  { kind: 'procedure', to: 7, run: addDraftAndAssetTablesV7 },
 ];
