@@ -61,6 +61,32 @@ function compareText(left: string, right: string): number {
 }
 
 /**
+ * Thrown when a ledger announces a format this build cannot read.
+ *
+ * Refused rather than read on a best-effort basis. A ledger IS the project's
+ * asset identity: reading a newer one under this build's assumptions would mint
+ * new ids for equipment that already has them and orphan every decision
+ * recorded against the old ones -- silently, and irreversibly once saved.
+ */
+export class AssetLedgerFormatError extends Error {
+  readonly formatVersion: number;
+  readonly supportedVersion: number;
+
+  constructor(formatVersion: number) {
+    super(
+      `this asset identity ledger states formatVersion ${String(formatVersion)}, and this ` +
+        `build reads version ${String(ASSET_LEDGER_FORMAT_VERSION)}; ` +
+        'open the project with a matching version of Matchline rather than recompiling it, ' +
+        'because a ledger read under the wrong assumptions mints new ids for equipment that ' +
+        'already has them',
+    );
+    this.name = 'AssetLedgerFormatError';
+    this.formatVersion = formatVersion;
+    this.supportedVersion = ASSET_LEDGER_FORMAT_VERSION;
+  }
+}
+
+/**
  * Move a ledger forward.
  *
  * @param previous the ledger the last compile wrote, or `null` for a project
@@ -68,11 +94,18 @@ function compareText(left: string, right: string): number {
  * @param candidates this compile's assets, in catalog order. The order decides
  * only which of several claimants keeps a contested id, and catalog order is
  * itself a function of the project rather than of the caller.
+ * @throws AssetLedgerFormatError when `previous` states a `formatVersion` this
+ * build does not read.
  */
 export function reconcileLedger(
   previous: AssetLedger | null,
   candidates: ReadonlyArray<LedgerCandidate>,
 ): ReconcileLedgerResult {
+  if (previous !== null && previous.formatVersion !== ASSET_LEDGER_FORMAT_VERSION) {
+    // The field exists to be checked. It was written on every ledger and read
+    // by nobody, which made it a version number that could not stop anything.
+    throw new AssetLedgerFormatError(previous.formatVersion);
+  }
   const previousEntries = previous?.entries ?? [];
 
   // --- index the previous ledger, one map per tier --------------------------

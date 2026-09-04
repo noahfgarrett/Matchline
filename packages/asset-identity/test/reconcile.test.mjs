@@ -15,7 +15,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { EMPTY_ASSET_LEDGER, reconcileLedger } from '../dist/index.js';
+import {
+  AssetLedgerFormatError,
+  EMPTY_ASSET_LEDGER,
+  reconcileLedger,
+} from '../dist/index.js';
 import { candidate, entryOf, eventsOf } from './support.mjs';
 
 /** The Dragon unit every scenario below is about. */
@@ -269,4 +273,24 @@ test('reconciliation does not depend on how the previous ledger was reached', ()
 
   const next = (ledger) => reconcileLedger(ledger, [candidate({ canonicalTag: TYPO })]);
   assert.deepEqual([...next(shuffled.ledger).mapping], [...next(straight.ledger).mapping]);
+});
+
+test('a ledger from a newer build is refused rather than read as if it were this one', () => {
+  const newer = { ...EMPTY_ASSET_LEDGER, formatVersion: 2 };
+  assert.throws(
+    () => reconcileLedger(newer, [candidate()]),
+    (error) => {
+      assert.ok(error instanceof AssetLedgerFormatError);
+      assert.equal(error.formatVersion, 2);
+      assert.equal(error.supportedVersion, 1);
+      assert.match(error.message, /formatVersion 2/);
+      return true;
+    },
+  );
+});
+
+test('the ledger this build writes is the one it reads back', () => {
+  const first = reconcileLedger(null, [candidate()]);
+  assert.equal(first.ledger.formatVersion, EMPTY_ASSET_LEDGER.formatVersion);
+  assert.doesNotThrow(() => reconcileLedger(first.ledger, [candidate()]));
 });

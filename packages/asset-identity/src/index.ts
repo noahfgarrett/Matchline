@@ -14,7 +14,7 @@
  */
 export { stableObjectIdentities } from './keys.js';
 
-export { reconcileLedger } from './reconcile.js';
+export { AssetLedgerFormatError, reconcileLedger } from './reconcile.js';
 
 export {
   ASSET_LEDGER_FORMAT_VERSION,
