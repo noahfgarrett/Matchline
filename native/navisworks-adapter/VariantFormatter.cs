@@ -106,8 +106,15 @@ namespace Matchline.Extraction.NavisworksAdapter
                     return value.ToBoolean() ? "true" : "false";
 
                 case "DateTime":
-                    return value.ToDateTime().ToUniversalTime()
-                        .ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+                    // The raw value, round-tripped, and deliberately NOT
+                    // ToUniversalTime(). A DateTime Navisworks hands back with
+                    // Kind Unspecified -- which is what a date read out of a
+                    // model file is -- gets shifted by the EXTRACTING MACHINE'S
+                    // time zone by that call, so the same model extracted in two
+                    // offices produced two different property values and neither
+                    // was the one in the file. "o" keeps the value and records
+                    // the offset it did or did not carry.
+                    return value.ToDateTime().ToString("o", CultureInfo.InvariantCulture);
 
                 case "NamedConstant":
                     NamedConstant constant = value.ToNamedConstant();

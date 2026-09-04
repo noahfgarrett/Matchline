@@ -93,11 +93,14 @@ namespace Matchline.Extraction.NavisworksAdapter
                     AdapterVersion,
                     ProductVersion(),
                     _inputPath,
-                    DocumentPath(document));
+                    DocumentPath(document),
+                    DocumentUnits(document));
 
-                DocumentWalker walker = new DocumentWalker(writer);
-                walker.Walk(document);
-                return new ExtractionCounts(walker.ObjectCount, walker.WarningCount);
+                using (DocumentWalker walker = new DocumentWalker(writer))
+                {
+                    walker.Walk(document);
+                    return new ExtractionCounts(walker.ObjectCount, walker.WarningCount);
+                }
             }
         }
 
@@ -177,23 +180,75 @@ namespace Matchline.Extraction.NavisworksAdapter
         }
 
         /// <summary>
-        /// Product version string, read reflectively.
+        /// The document's display units, or null when it will not say.
         /// <para>
-        /// Deliberate: the shape of Application.Version differs across releases
-        /// and this value is descriptive metadata, not control flow. Reflection
-        /// keeps a wrong guess from being a compile error, and keeps this file
-        /// identical for 2024, 2025 and 2026. VERIFY-ON-WINDOWS (FULLY OPEN): a
-        /// reflective lookup is invisible to the compiler, so the stub build says
-        /// nothing here. Check what this actually produces on each year, and
-        /// consider replacing it with the direct property once confirmed.
+        /// VERIFY-ON-WINDOWS (shape pinned by the stub build: Document.Units is
+        /// a value whose ToString() names the unit). Dispatched on ToString()
+        /// rather than on enum members for the same reason
+        /// <see cref="VariantFormatter"/> is: a release that adds a unit must
+        /// degrade to its name rather than fail to compile.
+        /// </para>
+        /// </summary>
+        private static string DocumentUnits(Document document)
+        {
+            try
+            {
+                return document.Units.ToString();
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Product version string.
+        /// <para>
+        /// Read directly rather than reflectively, which is a deliberate
+        /// reversal. The reflective probe asked <c>Application</c> for a property
+        /// called "Version" and wrote its <c>ToString()</c> into
+        /// <c>meta.navisworks_version</c> -- and the ToString() of a version
+        /// OBJECT is its type name unless that type overrides it, so the meta key
+        /// that is supposed to say which Navisworks produced a cache was liable
+        /// to say nothing of the kind, silently and forever. A named member is a
+        /// compile error when it is wrong, which is the failure worth having.
+        /// </para>
+        /// <para>
+        /// VERIFY-ON-WINDOWS (shape pinned by the stub build: Application.Version
+        /// has a string Runtime, and Application.Title is a string). NOT pinned:
+        /// what Runtime actually contains on each year -- record it during the
+        /// proof run. Title is the fallback because a product name is a worse
+        /// answer than a version and a better one than "unknown".
         /// </para>
         /// </summary>
         private static string ProductVersion()
         {
-            string version = ReflectionProbe.ReadString(
-                typeof(Application), null, new string[] { "Version" }, null);
+            try
+            {
+                string runtime = Application.Version.Runtime;
+                if (!string.IsNullOrEmpty(runtime))
+                {
+                    return runtime;
+                }
+            }
+            catch (Exception)
+            {
+                // Fall through to the title.
+            }
 
-            return version ?? ExtractionHeader.UnknownProductVersion;
+            try
+            {
+                string title = Application.Title;
+                if (!string.IsNullOrEmpty(title))
+                {
+                    return title;
+                }
+            }
+            catch (Exception)
+            {
+            }
+
+            return ExtractionHeader.UnknownProductVersion;
         }
     }
 }
