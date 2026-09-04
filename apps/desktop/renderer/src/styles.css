@@ -1748,6 +1748,24 @@ code {
   border-color: var(--warning);
 }
 
+/*
+ * The picker is a search box stacked on its select, because the array it is
+ * handed is one coverage-ranked page of a catalog that runs to thousands of
+ * rows. It stands where a bare `<select>` used to, so it also has to carry the
+ * widths those selects were given.
+ */
+.property-picker {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.property-picker__note {
+  margin: 0;
+  font-size: 0.74rem;
+}
+
 /* ------------------------------------------------ property mapping chains */
 
 .chain--property {
@@ -1765,7 +1783,7 @@ code {
   flex-wrap: wrap;
 }
 
-.chain__item--rung .chain__head .control--select {
+.chain__item--rung .chain__head .property-picker {
   flex: 1 1 16rem;
   min-width: 12rem;
 }

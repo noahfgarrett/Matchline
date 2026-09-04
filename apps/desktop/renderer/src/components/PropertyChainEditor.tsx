@@ -38,6 +38,17 @@ import { PropertyPicker } from './PropertyPicker';
  * decision half-made, it is a row that does nothing and reads as though the
  * field were configured. The add control is a picker: choosing a property is
  * what appends it, so every rung in the list is a property somebody named.
+ *
+ * ## Every property control here is a `PropertyPicker`
+ *
+ * The rungs always were, so they inherit its catalog-wide search — the one that
+ * asks main rather than filtering the coverage-ranked page it was handed, which
+ * is the only way to reach the low-coverage property a site actually tags with.
+ * The "if that is blank, read" control was the exception: its own `<select>`
+ * over the same page, and therefore the one place in a chain where the second
+ * rung could not be the property the first one exists to fall back FROM. It is
+ * a picker now too, so the search reaches every rung by the same route and
+ * there is one debounced fetch in the tree, not four.
  */
 
 export interface ChainSource {
@@ -305,32 +316,25 @@ export function PropertyRefChain({
           }}
         />
       ) : unused.length === 0 ? null : (
-        <label className="inline-field inline-field--wide chain__add">
+        <label className="inline-field inline-field--wide chain__add" htmlFor={`${idPrefix}-add`}>
           <span>If that is blank, read</span>
-          <select
-            className="control control--select"
-            data-testid={`${idPrefix}-add`}
-            value=""
-            onChange={(event): void => {
-              const encoded = event.target.value;
-              if (encoded === '') {
+          <PropertyPicker
+            id={`${idPrefix}-add`}
+            testId={`${idPrefix}-add`}
+            properties={unused}
+            value={null}
+            noneLabel="Nothing — stop here"
+            onChange={(next): void => {
+              // The search reaches the whole catalog, which is exactly what the
+              // filtered list could not offer — and also what it could not
+              // exclude. A rung this chain already reads would state the same
+              // fallback twice and say nothing new, so it is not appended.
+              if (next === null || chain.some((entry): boolean => propertyRefEquals(entry, next))) {
                 return;
               }
-              const row = unused.find(
-                (entry): boolean => `${entry.category} ${entry.name}` === encoded,
-              );
-              if (row !== undefined) {
-                onChange([...chain, { category: row.category, name: row.name }]);
-              }
+              onChange([...chain, next]);
             }}
-          >
-            <option value="">Nothing — stop here</option>
-            {unused.map((row: WirePropertyCatalogRow): JSX.Element => (
-              <option key={`${row.category} ${row.name}`} value={`${row.category} ${row.name}`}>
-                {`${row.category} > ${row.name}`}
-              </option>
-            ))}
-          </select>
+          />
         </label>
       )}
     </>
