@@ -11,3 +11,7 @@ obj/
 .vs/
 *.user
 
+# apps/desktop/scripts/stage-native.mjs's staging area for electron-builder's
+# extraResources — copied from native/ build output, never a source of truth.
+apps/desktop/native-stage/
+

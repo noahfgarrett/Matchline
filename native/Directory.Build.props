@@ -15,9 +15,26 @@
     <NeutralLanguage>en-US</NeutralLanguage>
     <Company>Matchline</Company>
     <Product>Matchline</Product>
-    <Version>0.1.0</Version>
-    <FileVersion>0.1.0.0</FileVersion>
-    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <!--
+      Kept in sync with the root package.json "version" by hand. CI passes
+      -p:Version=<that value> to every `dotnet build`; a version supplied that
+      way is an MSBuild *global* property and always wins over the assignment
+      below, so this fallback only applies to a local build run without the
+      flag (`msbuild ...` / `dotnet build` with no -p:Version). It used to say
+      "0.1.0" here while the app was already 1.0.0-rc.1 — meta.extractor_version
+      quietly lied about which app it shipped with.
+    -->
+    <Version Condition="'$(Version)' == ''">1.0.0-rc.1</Version>
+    <!--
+      AssemblyVersion/FileVersion must be a strict numeric N.N.N.N; MSBuild's
+      Version is a semver string and may carry a "-rc.1" style prerelease
+      suffix that neither field accepts. Both are derived from Version's
+      numeric part only (everything before the first "-"), with a trailing
+      ".0" fourth component.
+    -->
+    <MatchlineNumericVersion>$(Version.Split('-')[0])</MatchlineNumericVersion>
+    <FileVersion>$(MatchlineNumericVersion).0</FileVersion>
+    <AssemblyVersion>$(MatchlineNumericVersion).0</AssemblyVersion>
     <Copyright>Matchline</Copyright>
     <!-- Keep build output free of satellite/culture noise. -->
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>

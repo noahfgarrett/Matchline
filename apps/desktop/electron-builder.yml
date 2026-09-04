@@ -37,6 +37,24 @@ files:
 
 asar: true
 
+# The C# extraction launcher and the Navisworks plugin adapters. Neither is built by
+# electron-builder — apps/desktop/scripts/stage-native.mjs copies `dotnet build` output
+# into native-stage/ first, and the `package:win` / `package:mac` scripts
+# (apps/desktop/package.json) run it before electron-builder is invoked at all.
+# extractor-launcher.ts `defaultExtractorPath()` looks for
+# `<resourcesPath>/extractor/Matchline.Extractor.exe`, which is what `to: extractor`
+# produces here.
+#
+# Both `from:` directories always exist (the stage script creates them even when empty:
+# a Mac build passes --allow-missing and ships resources/extractor empty on purpose), so
+# electron-builder never fails on a missing source path — only stage-native.mjs decides
+# whether an empty result is acceptable.
+extraResources:
+  - from: native-stage/extractor
+    to: extractor
+  - from: native-stage/plugins
+    to: plugins
+
 # node:sqlite is built into Node, and nothing else in the tree is native — there is no
 # rebuild step to run, and the global `ignore-scripts=true` policy (APP.md) means an
 # implicit one would be a surprise.

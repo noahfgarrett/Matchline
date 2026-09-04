@@ -14,8 +14,9 @@
     "dev": "node scripts/dev.mjs",
     "icons": "electron scripts/build-icons.mjs",
     "start": "electron .",
-    "package:mac": "electron-builder --mac",
-    "package:win": "electron-builder --win",
+    "stage:native": "node scripts/stage-native.mjs",
+    "package:mac": "node scripts/stage-native.mjs --allow-missing && electron-builder --mac",
+    "package:win": "node scripts/stage-native.mjs && electron-builder --win",
     "test": "tsc -b && node --test test/*.test.mjs"
   },
   "dependencies": {
