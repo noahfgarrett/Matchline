@@ -66,11 +66,16 @@ esbuild build in place.
 
 ### `.github/workflows/navisworks-proof.yml` — manual dispatch only
 
-Self-hosted, label-gated, one run at a time. Real plugin compile against the
-installed Autodesk API, then the proof steps from the plan: extraction, the
-TypeScript cache cross-check, cache-hit, cancellation, Selection Sets, Search
-Sets, error classification. Most of those call scripts that Milestone 6 has not
-written yet; see §6.
+A hosted `check-runner` job runs first and fails fast, with a clear message, if
+no *online* self-hosted runner carries the required labels — a dispatch against
+an unregistered label otherwise just queues forever. Then, self-hosted,
+label-gated, one run at a time: real plugin compile against the installed
+Autodesk API, a deploy of the compiled DLLs into the Navisworks `Plugins`
+folder (verified byte-for-byte by hash before anything runs against it), then
+the proof steps from the plan: extraction, the TypeScript cache cross-check,
+cache-hit, cancellation, Selection Sets, Search Sets, error classification. All
+seven proof scripts (Milestone 6, `scripts/windows-proof/*.mjs`) exist and are
+exercised against the fake extractor in `tests/windows-proof/scripts.test.mjs`.
 
 ---
 
@@ -231,7 +236,7 @@ Nothing here degrades quietly. This table is the whole failure surface.
 | Tag pushed, signing secrets missing | `windows-release` fails at its first step, before checkout. `publish` never runs | The plan's rule: fail clearly rather than silently publish an unsigned 1.0.0 |
 | Tag pushed, signing secrets present, no feed decision | Matrix green, signed artifacts built, verified and uploaded to the run; `publish` fails as "not implemented" | The binaries are real and downloadable; the automated distribution is not, and the run says so |
 | Tag pushed, hosted matrix red | `windows-release` never starts (`needs: hosted-matrix`) | A release is not a way around a failing test |
-| Navisworks proof dispatched, no runner registered with the labels | The job sits queued and never starts. Cancel it | GitHub cannot tell "no runner yet" from "runner busy"; a pending job is not a pass |
+| Navisworks proof dispatched, no ONLINE runner registered with the labels | The hosted `check-runner` job fails within seconds, naming the required labels | It queries the runners API itself rather than waiting for a job to sit queued and look like a slow run |
 | Navisworks proof dispatched, runner present, M6 scripts absent | Preflight fails listing every missing script | Scaffolding that admits it is scaffolding |
 | Navisworks proof dispatched, model path not on the runner | Fails immediately with a message saying the path is runner-local | Cheaper than failing ten minutes in |
 

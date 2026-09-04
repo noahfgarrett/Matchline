@@ -23,7 +23,7 @@
  * implementation of the other side.
  */
 import { spawn } from 'node:child_process';
-import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -200,7 +200,14 @@ export function runExtractor(args, options = {}) {
         stageFirstSeenMs: new Map(),
         cancelSentAtMs: null,
         elapsedMs: 0,
-        spawnError: error instanceof Error ? error.message : String(error),
+        // The error code (e.g. "ENOENT"), never `.message`: Node's spawn
+        // error message embeds the full command path, which is exactly what
+        // a published proof artifact must never carry (writeReport's `LEAKY`
+        // check would refuse to write it at all).
+        spawnError:
+          error !== null && typeof error === 'object' && 'code' in error
+            ? String(error.code)
+            : 'SPAWN_FAILED',
       });
       return;
     }
@@ -266,9 +273,21 @@ export function runExtractor(args, options = {}) {
   });
 }
 
-/** The launcher's own argument list, as the app builds it. */
+/**
+ * The launcher's own argument list, as the app builds it — plus
+ * `--navisworks-dir`, which the app never passes (it lets the launcher
+ * auto-locate) but every proof script needs on a runner where
+ * MATCHLINE_NAVISWORKS_INSTALL_DIR names a non-default install (e.g.
+ * Simulate, or a drive other than C:). Without it every proof script fails
+ * `NW_NOT_INSTALLED` on such a runner, silently proving nothing.
+ */
 export function extractorArguments(inputPath, cacheDirectory) {
-  return ['--input', inputPath, '--cache-dir', cacheDirectory];
+  const args = ['--input', inputPath, '--cache-dir', cacheDirectory];
+  const { navisworksInstallDir } = proofSettings();
+  if (navisworksInstallDir !== null) {
+    args.push('--navisworks-dir', navisworksInstallDir);
+  }
+  return args;
 }
 
 /** Every `<64 hex>.sqlite` in a cache directory. Never returns a path. */
@@ -454,21 +473,30 @@ export function writeReport(outDir, name, payload) {
 export function requireSettings(report, settings, needs) {
   let ok = true;
   if (needs.includes('model')) {
+    // `existsSync`, not just "the variable is set": a stale or typo'd
+    // MATCHLINE_PROOF_MODEL must fail here, in a check with an anonymous
+    // detail, rather than reach runExtractor and fail somewhere that reports
+    // the real path.
+    const present = settings.modelPath !== null && existsSync(settings.modelPath);
     ok =
       report.check(
         'MATCHLINE_PROOF_MODEL names a file on this runner',
-        settings.modelPath !== null,
-        settings.modelPath === null ? 'the variable is unset' : null,
+        present,
+        present ? null : settings.modelPath === null ? 'the variable is unset' : 'no file at that path',
       ) && ok;
   }
   if (needs.includes('extractor')) {
+    // Detail carries no path separator on purpose: it is written into the
+    // published proof summary by ProofReport.finish -> writeReport, whose
+    // `LEAKY` check refuses to write a string containing "/" or "\" and
+    // throws instead — which used to mean a missing launcher crashed the
+    // script before it could report anything at all.
+    const present = existsSync(settings.extractorPath);
     ok =
       report.check(
         'the launcher executable is where the build left it',
-        modifiedAtMs(settings.extractorPath) !== null,
-        modifiedAtMs(settings.extractorPath) === null
-          ? 'not found; build native/Matchline.Extraction.sln or set MATCHLINE_EXTRACTOR_PATH'
-          : null,
+        present,
+        present ? null : 'not found; build the launcher, or set MATCHLINE_EXTRACTOR_PATH',
       ) && ok;
   }
   return ok;

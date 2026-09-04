@@ -103,12 +103,15 @@ says — neither of which is in the repo or in git.
 
 ## 0. The workflow path — let CI run the seven checks
 
-`.github/workflows/navisworks-proof.yml` does §3, §8.1, §8.2, §8.3, the Selection
-Set and Search Set gates and the error vocabulary, in one dispatch, against a
-model that never leaves your machine. It needs a **self-hosted runner** on the
-Windows box, labelled `self-hosted windows navisworks-2025`. Registering one is
-in `docs/RELEASE-RUNBOOK.md`; without it a dispatch queues forever, which is the
-honest outcome rather than a green job that proved nothing.
+`.github/workflows/navisworks-proof.yml` does §3, §4, §8.1, §8.2, §8.3, the
+Selection Set and Search Set gates and the error vocabulary, in one dispatch,
+against a model that never leaves your machine. It needs a **self-hosted
+runner** on the Windows box, labelled `self-hosted windows navisworks-2025`.
+Registering one is in `docs/RELEASE-RUNBOOK.md`. A hosted `check-runner` job
+runs first, on GitHub's own runners, and fails the dispatch immediately with a
+clear message if no *online* runner carries that label — rather than the
+dispatch queuing forever, which used to be the only outcome and looked exactly
+like a slow run.
 
 Dispatch it from the Actions tab (or `gh workflow run`) with:
 
@@ -125,7 +128,14 @@ gh workflow run navisworks-proof.yml ^
 ```
 
 The job compiles the plugin against the **real** Autodesk assembly (no stubs),
-then runs, in order:
+**deploys the compiled DLLs into `<install>\Plugins\Matchline.Extraction.Navisworks2025\`
+itself** — the same layout §4 describes by hand — and checks the deployed copy
+is byte-for-byte the one it just built (SHA-256) before uploading it as the
+`adapter-navisworks-2025` artifact. That step exists because a compiled DLL
+nobody deploys proves nothing about what Navisworks would actually load: a
+runner where someone had hand-copied a DLL per §4 was previously being tested
+against whatever was copied last, not against this run's build. Then it runs,
+in order:
 
 | Script                                  | What it proves                                                    |
 | --------------------------------------- | ----------------------------------------------------------------- |
@@ -211,8 +221,13 @@ prompt does not.
 cd %USERPROFILE%\source
 git clone https://github.com/noahfgarrett/Matchline.git
 cd Matchline
-git checkout main
+git checkout claude/matchline-1.0.0-hardening-20260810
 ```
+
+`main` does not have the proof scripts or this runbook's own workflow path (§0) on
+it yet — 1.0 work lives on the branch above until it merges. Check
+`git branch --show-current` in this repo if you are not sure which branch you are
+reading this from.
 
 ---
 
@@ -337,8 +352,12 @@ set MATCHLINE_EXTRACTOR_PATH=%USERPROFILE%\source\Matchline\native\extractor\bin
 npm run dev:desktop
 ```
 
-(A packaged build ships the launcher beside itself and needs no variable. The
-variable exists so a machine that has built from source can use what it built.)
+(A packaged build ships the launcher beside itself and needs no variable —
+`npm run package:win` runs `apps/desktop/scripts/stage-native.mjs` first, which
+copies `native\extractor\bin\Release\*` into the package under
+`resources\extractor\`, and `resources\plugins\navisworks-<year>\` for any
+adapter that was built. The variable above exists so a machine that has built
+from source, but not packaged, can point a dev run at what it built.)
 
 Then, in the app:
 

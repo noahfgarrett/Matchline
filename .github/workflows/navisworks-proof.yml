@@ -52,8 +52,46 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A dispatch against a label nobody is listening on queues silently and never
+  # starts — the "honest outcome" the comment below describes, but honest is
+  # not the same as visible: a queued run looks identical to a slow one until
+  # someone goes looking. This job fails loudly, in seconds, on GitHub's own
+  # hosted runners (no self-hosted machine needed to run the check), instead of
+  # a dispatch nobody notices timed out.
+  check-runner:
+    name: Require an online navisworks-2025 runner
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Fail fast if no online self-hosted runner carries the required labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eo pipefail
+          match=$(gh api "repos/$GH_REPO/actions/runners" --paginate --jq '
+            .runners[]
+            | select(.status == "online")
+            | select((["self-hosted","windows","navisworks-2025"] - [.labels[].name]) == [])
+            | .name
+          ')
+          if [ -z "$match" ]; then
+            echo "No ONLINE self-hosted runner is registered with all of the labels: self-hosted, windows, navisworks-2025." >&2
+            echo "" >&2
+            echo "navisworks-proof.yml's proof job is runs-on: [self-hosted, windows, navisworks-2025] —" >&2
+            echo "a Windows machine with Navisworks Manage/Simulate 2025 installed, registered as a" >&2
+            echo "self-hosted runner carrying exactly those labels (docs/RELEASE-RUNBOOK.md," >&2
+            echo "'Self-hosted Navisworks runner'). Without one, a dispatch queues forever rather than" >&2
+            echo "failing, which is why this check exists: failing here is the honest outcome instead" >&2
+            echo "of a run that silently never starts." >&2
+            exit 1
+          fi
+          echo "found an online runner carrying the required labels."
+
   proof:
     name: Navisworks 2025 proof
+    needs: check-runner
     # Label-gated. `navisworks-2025` is the label the owner puts on the runner
     # that actually has Navisworks Manage/Simulate 2025 installed; without such a
     # runner registered, a dispatch queues and never starts, which is the honest
@@ -106,6 +144,20 @@ jobs:
       - name: Build workspaces
         run: npm run build
 
+      # native/Directory.Build.props falls back to 1.0.0-rc.1 without this; read
+      # once so meta.extractor_version names the real app version.
+      - name: Read the app version
+        id: version
+        shell: bash
+        run: |
+          set -eo pipefail
+          version=$(grep -m1 '"version"' package.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          if [ -z "$version" ]; then
+            echo "could not read \"version\" from package.json" >&2
+            exit 1
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
       # THE REAL COMPILE. No stubs, no escape hatch: this resolves
       # Autodesk.Navisworks.Api out of the install directory, and
       # MatchlineCheckNavisworksReference in the adapter csproj fails the build
@@ -118,7 +170,60 @@ jobs:
           set -eo pipefail
           dotnet build native/Matchline.Extraction.sln \
             -c "$MATCHLINE_CONFIGURATION" \
-            -p:NavisworksInstallDir="$MATCHLINE_NAVISWORKS_INSTALL_DIR"
+            -p:NavisworksInstallDir="$MATCHLINE_NAVISWORKS_INSTALL_DIR" \
+            -p:Version=${{ steps.version.outputs.value }}
+
+      # Compiling the adapter proves nothing about what Navisworks itself would
+      # load unless the bytes under test are the bytes Navisworks sees — the
+      # High finding in docs/AUDIT-2026-09-02-NWD-TO-SSM.md ("Proof workflow
+      # proves an unknown binary"): previously nothing deployed here, so a
+      # runner where someone had hand-copied a DLL per the runbook's §4 was
+      # testing whatever was copied last, not this run's build. This step
+      # deploys the DLLs this run just compiled and proves, by hash, that the
+      # deployed copy is byte-for-byte the built one.
+      - name: Deploy the compiled adapter into the Navisworks Plugins folder
+        shell: bash
+        run: |
+          set -eo pipefail
+          built="native/navisworks-2025/bin/Release"
+          deployed="$MATCHLINE_NAVISWORKS_INSTALL_DIR/Plugins/Matchline.Extraction.Navisworks2025"
+
+          if [ ! -d "$built" ]; then
+            echo "MISSING: $built — the adapter did not compile." >&2
+            exit 1
+          fi
+
+          shopt -s nullglob
+          dlls=("$built"/*.dll)
+          if [ ${#dlls[@]} -eq 0 ]; then
+            echo "MISSING: no *.dll under $built" >&2
+            exit 1
+          fi
+
+          mkdir -p "$deployed"
+          cp -f "${dlls[@]}" "$deployed/"
+
+          status=0
+          for dll in "${dlls[@]}"; do
+            name=$(basename "$dll")
+            built_hash=$(sha256sum "$dll" | cut -d' ' -f1)
+            deployed_hash=$(sha256sum "$deployed/$name" | cut -d' ' -f1)
+            if [ "$built_hash" != "$deployed_hash" ]; then
+              echo "MISMATCH: $name differs between the built copy and the deployed copy" >&2
+              status=1
+            else
+              echo "ok    $name  $built_hash"
+            fi
+          done
+          exit $status
+
+      - name: Upload the built adapter DLLs
+        uses: actions/upload-artifact@v4
+        with:
+          name: adapter-navisworks-2025
+          path: native/navisworks-2025/bin/Release/*.dll
+          if-no-files-found: error
+          retention-days: 30
 
       # One place that says which of M6's scripts are missing, all at once,
       # instead of discovering them one failed dispatch at a time. Each step

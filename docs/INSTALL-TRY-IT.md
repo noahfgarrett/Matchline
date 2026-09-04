@@ -3,7 +3,7 @@
 This is how you get Matchline running on your Windows machine and click around in it.
 No developer tools required for the install itself.
 
-**Scope.** This describes a pre-release build handed over by hand — currently **0.8.1**.
+**Scope.** This describes a pre-release build handed over by hand — currently **1.0.0-rc.1**.
 It is written for someone trying the app out, not for a customer install. At release it is
 superseded by production install documentation: a signed installer, a real publisher name,
 and no "click past the warning" section. Until then, everything below applies. The release
@@ -25,7 +25,7 @@ application updates, which will carry no project data — it does not exist yet.
 ## 1. Which file to grab
 
 Two Windows artifacts are produced, both 64-bit (x64). `<version>` is the build you were
-handed — 0.8.1 at the time of writing.
+handed — 1.0.0-rc.1 at the time of writing.
 
 | File | What it is | When to use it |
 |---|---|---|
@@ -154,7 +154,7 @@ bug report.
 |---|---|---|
 | Your project | Wherever you saved `<YourSite>.matchline` | The whole project. Back this up. |
 | App settings | `C:\Users\<you>\AppData\Roaming\Matchline\app-state.json` | Only the recent-projects list and a "I last saw this file here" index. Safe to delete; you lose nothing but the recents list. |
-| Extraction caches | Wherever you pointed `--cache-dir` (the runbook uses `%USERPROFILE%\matchline-proof\cache`) | Written by the extractor, not by the app. Named by content hash. Re-creatable by re-running the extractor. |
+| Extraction caches | `C:\Users\<you>\AppData\Roaming\Matchline\cache\models` | Written by the extractor, not by the app — the app just tells it where. Named by content hash. Re-creatable by re-running the extractor. The manual launcher path (docs/WINDOWS-RUNBOOK.md) writes wherever you pass `--cache-dir` instead; that only matters for the diagnostic route, not a normal in-app extraction. |
 | Exports | Wherever you chose in the save dialog | Generated MEL, EXTO, predecessor matrices, revision diffs. |
 | The app itself | `C:\Users\<you>\AppData\Local\Programs\Matchline` (installer) or wherever you unzipped it | |
 
@@ -190,6 +190,7 @@ git clone https://github.com/noahfgarrett/Matchline.git
 cd Matchline
 npm ci
 npm run postsetup
+npm run build
 npm run build:desktop
 npm run package:win
 ```
@@ -199,11 +200,23 @@ npm run package:win
   ships no install script of its own, and the repo's supply-chain policy keeps install
   scripts switched off anyway (docs/APP.md), so this step is not optional: skip it and
   nothing can launch.
-- `npm run build:desktop` typechecks the whole workspace and builds the main process,
+- `npm run build` (`tsc -b` at the repo root) builds every workspace package's `dist/`
+  output. `apps/desktop`'s own project does not declare TypeScript project references to
+  them, so skip this and `build:desktop` fails to resolve the `@matchline/*` packages it
+  imports — it is not optional either.
+- `npm run build:desktop` typechecks the desktop app and builds the main process,
   preload, and renderer into `apps/desktop/dist`.
-- `npm run package:win` produces both Windows artifacts into `apps/desktop/release`.
-  The first run downloads the Windows Electron runtime (~120 MB) and the NSIS installer
-  tooling; after that it is cached and the build takes about two minutes.
+- `npm run package:win` produces both Windows artifacts into `apps/desktop/release`. It
+  runs `apps/desktop/scripts/stage-native.mjs` first, which copies the C# launcher (and any
+  built Navisworks adapters) into the package. That needs `native/extractor/bin/Release`
+  to already exist — build it with the .NET SDK first
+  (`dotnet build native/extractor/Matchline.Extractor.csproj -c Release`; this cross-compiles
+  fine from macOS, see `native/README.md`) — and fails with a clear message if it does not:
+  a Windows package this script silently shipped without a launcher is exactly the bug this
+  step exists to prevent. `npm run package:mac` runs the same stage step with
+  `--allow-missing` instead, so a Mac zip without a native build is a deliberate, working
+  choice. The first packaging run also downloads the Windows Electron runtime (~120 MB) and
+  the NSIS installer tooling; after that it is cached and the build takes about two minutes.
 
 `npm run package:mac` builds the macOS zip instead. Both work from either OS — the Windows
 build in section 1 was cross-built on a Mac.
@@ -232,8 +245,6 @@ your build.
 None of these are bugs to report — they are known, and each has a reason.
 
 - **Unsigned.** Section 3. Waiting on a certificate.
-- **Generic app icon.** The app ships with the stock Electron icon because Matchline has no
-  artwork yet. It does not affect anything.
 - **No auto-update.** There is no update server and this build makes no network calls at
   all. New versions arrive as a new file, installed over the old one. A signed, optional,
   disableable update check is planned for release and is not built yet.

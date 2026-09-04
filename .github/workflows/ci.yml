@@ -50,6 +50,15 @@ jobs:
       - name: Integration tests
         run: npm run test:integration
 
+      # The seven Windows-proof scripts (scripts/windows-proof/*.mjs), exercised
+      # against the fake extractor (apps/desktop/test/fake-extractor.mjs) rather
+      # than a real launcher — see tests/windows-proof/scripts.test.mjs. This is
+      # what proves the scripts themselves fail when they should, on every OS in
+      # the matrix; it is not the Autodesk proof, which stays self-hosted-only
+      # (navisworks-proof.yml).
+      - name: Windows-proof script tests
+        run: npm run test:windows-proof
+
       # The 1.0 acceptance gates that have been wired to real behaviour. The
       # rest of tests/acceptance-1.0 is staged red on purpose (it describes
       # milestones that have not landed), so this runs the green subset by name
@@ -94,14 +103,30 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      # native/Directory.Build.props falls back to 1.0.0-rc.1 without this, which
+      # is only ever right by coincidence. Read once and pass to every `dotnet
+      # build` below so meta.extractor_version (ExtractionRunner.cs) always
+      # names the app version that shipped it, on every OS in the matrix.
+      - name: Read the app version
+        id: version
+        shell: bash
+        run: |
+          set -eo pipefail
+          version=$(grep -m1 '"version"' package.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          if [ -z "$version" ]; then
+            echo "could not read \"version\" from package.json" >&2
+            exit 1
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
       - name: Build Matchline.Extraction.Common (netstandard2.0)
-        run: dotnet build native/navisworks-common/Matchline.Extraction.Common.csproj -c Release
+        run: dotnet build native/navisworks-common/Matchline.Extraction.Common.csproj -c Release -p:Version=${{ steps.version.outputs.value }}
 
       # net48 on a Linux runner: csc reads the pinned
       # Microsoft.NETFramework.ReferenceAssemblies metadata, never an installed
       # framework. Only the build is portable; the exe it produces is Windows-only.
       - name: Build Matchline.Extractor (net48 launcher)
-        run: dotnet build native/extractor/Matchline.Extractor.csproj -c Release
+        run: dotnet build native/extractor/Matchline.Extractor.csproj -c Release -p:Version=${{ steps.version.outputs.value }}
 
       # Synthetic records -> NdjsonWriter -> file -> NdjsonReader -> CacheWriter
       # -> SQLite -> CacheInspector, for real. No argument, so the harness picks
@@ -127,9 +152,78 @@ jobs:
           fi
           for project in "${projects[@]}"; do
             echo "--- stub compile: $project"
-            dotnet build "$project" -c Release -p:UseNavisworksStubs=true
+            dotnet build "$project" -c Release -p:UseNavisworksStubs=true -p:Version=${{ steps.version.outputs.value }}
           done
           echo "stub-compiled ${#projects[@]} adapter project(s)"
+
+      # Windows-only from here: the launcher is Windows-only output, and this is
+      # the one hosted job that actually runs it. Proves two things package-smoke
+      # cannot: that the real Windows exe answers a bad command line the way
+      # ExitCodes.cs promises (consumed below by package-smoke), and that
+      # SQLitePCLRaw's win-x64 e_sqlite3.dll actually loads under net48 — the
+      # open question native/extractor/Matchline.Extractor.csproj's own comment
+      # leaves for a real Windows run.
+      - name: Prepare a scratch input and a pre-seeded garbage cache
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scratch = Join-Path $env:RUNNER_TEMP 'nw-not-installed'
+          New-Item -ItemType Directory -Force -Path $scratch | Out-Null
+          $cacheDir = Join-Path $scratch 'cache'
+          New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+
+          $inputPath = Join-Path $scratch 'input.nwd'
+          [System.IO.File]::WriteAllText($inputPath, 'not a real model')
+
+          # Pre-seeded at the name the launcher will compute for $inputPath's own
+          # hash, so CacheInspector rejects it (SqliteException: not a database)
+          # and the run falls through to Navisworks discovery — proving the
+          # STALE_CACHE_DISCARDED path and e_sqlite3.dll's load in one run,
+          # instead of only the second half.
+          $hash = (Get-FileHash -Path $inputPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $garbageCache = Join-Path $cacheDir "$hash.sqlite"
+          [System.IO.File]::WriteAllText($garbageCache, 'not a real sqlite file')
+
+          echo "scratch=$scratch" >> $env:GITHUB_ENV
+          echo "cacheDir=$cacheDir" >> $env:GITHUB_ENV
+          echo "inputPath=$inputPath" >> $env:GITHUB_ENV
+
+      - name: Run the launcher against no Navisworks install
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = 'native\extractor\bin\Release\Matchline.Extractor.exe'
+          $missingInstall = Join-Path $env:scratch 'no-such-navisworks'
+
+          $output = & $exe --input $env:inputPath --cache-dir $env:cacheDir --navisworks-dir $missingInstall 2>&1 | Out-String
+          $exitCode = $LASTEXITCODE
+          Write-Host $output
+
+          # NavisworksNotInstalled, native/extractor/ExitCodes.cs.
+          if ($exitCode -ne 4) {
+            throw "expected exit code 4 (NavisworksNotInstalled), got $exitCode"
+          }
+          if ($output -notmatch '"NW_NOT_INSTALLED"') {
+            throw 'expected an NW_NOT_INSTALLED error line on stdout'
+          }
+          if ($output -notmatch '"STALE_CACHE_DISCARDED"') {
+            throw 'expected a STALE_CACHE_DISCARDED warning for the pre-seeded garbage cache'
+          }
+          Write-Host 'e_sqlite3.dll loaded under net48; the garbage cache was discarded before NW_NOT_INSTALLED.'
+
+      # Consumed by package-smoke (this workflow) and release.yml's
+      # windows-release job, both of which need the real exe rather than
+      # rebuilding it a second time on a different runner.
+      - name: Upload the built launcher
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: extractor-bin
+          path: native/extractor/bin/Release
+          if-no-files-found: error
+          retention-days: 3
 
   # Proves the Windows installer can still be produced from a clean checkout.
   # Deliberately unsigned: apps/desktop/electron-builder.yml switches every
@@ -139,6 +233,9 @@ jobs:
   package-smoke:
     name: windows packaging smoke (unsigned)
     runs-on: windows-latest
+    # The launcher this job packages and then runs is native-smoke's real
+    # Windows build, not a rebuild here — one build, tested twice, is the point.
+    needs: native-smoke
 
     steps:
       - uses: actions/checkout@v4
@@ -153,6 +250,24 @@ jobs:
 
       - name: Post-install setup
         run: npm run postsetup
+
+      # NOTE: actions/download-artifact is not yet in this repository's approved
+      # action set (see release.yml's publish job for the same note). Approving
+      # it is an org/repo settings change, not a workflow change; this job fails
+      # at this step until that is done.
+      - name: Download the built launcher
+        uses: actions/download-artifact@v4
+        with:
+          name: extractor-bin
+          path: native/extractor/bin/Release
+
+      # No --allow-missing here on purpose: this is Windows CI packaging a real
+      # build, and B1 in docs/AUDIT-2026-09-02-NWD-TO-SSM.md was exactly a
+      # Windows package silently shipping without a launcher. A missing/partial
+      # download fails loudly here rather than producing an installer that
+      # looks fine and cannot extract anything.
+      - name: Stage the launcher for packaging
+        run: node apps/desktop/scripts/stage-native.mjs
 
       - name: Build workspaces
         run: npm run build
@@ -198,6 +313,37 @@ jobs:
           done
 
           exit $status
+
+      # B1 in docs/AUDIT-2026-09-02-NWD-TO-SSM.md: a packaged build previously
+      # shipped no launcher at all, and nothing checked. This is that check —
+      # against the actual packaged tree electron-builder produced, not the
+      # staging directory that fed it.
+      - name: Assert the packaged launcher shipped and answers a bad command line
+        shell: bash
+        run: |
+          set -eo pipefail
+          exe="apps/desktop/release/win-unpacked/resources/extractor/Matchline.Extractor.exe"
+
+          if [ ! -f "$exe" ]; then
+            echo "MISSING: $exe — electron-builder packaged no launcher" >&2
+            exit 1
+          fi
+
+          set +e
+          output=$("$exe")
+          status=$?
+          set -e
+          echo "$output"
+
+          # InvalidArguments, native/extractor/ExitCodes.cs.
+          if [ "$status" -ne 2 ]; then
+            echo "expected exit code 2 (InvalidArguments) with no arguments, got $status" >&2
+            exit 1
+          fi
+          if ! echo "$output" | grep -q '"INVALID_ARGS"'; then
+            echo "expected an INVALID_ARGS error line on stdout" >&2
+            exit 1
+          fi
 
       # Short retention on purpose: these are ~230 MB per run and they are a
       # smoke result, not a release. Signed release artifacts come from

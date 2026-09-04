@@ -90,6 +90,26 @@ jobs:
       - name: Build desktop bundles
         run: npm run build:desktop
 
+      # The launcher hosted-matrix (this workflow -> ci.yml -> native-smoke)
+      # already built on a real Windows runner, downloaded here rather than
+      # rebuilt: same run, same checkout, one build tested and shipped.
+      #
+      # NOTE: actions/download-artifact is not yet in this repository's
+      # approved action set (see the publish job below, "Push to the update
+      # feed"). Approving it is an org/repo settings change; this step fails
+      # until that is done.
+      - name: Download the built launcher
+        uses: actions/download-artifact@v4
+        with:
+          name: extractor-bin
+          path: native/extractor/bin/Release
+
+      # No --allow-missing: a tagged release build that shipped without a
+      # working launcher is exactly the bug docs/AUDIT-2026-09-02-NWD-TO-SSM.md
+      # (B1) found, and this is the workflow it must never happen from again.
+      - name: Stage the launcher for packaging
+        run: node apps/desktop/scripts/stage-native.mjs
+
       - name: Package Windows
         run: npm run package:win
 

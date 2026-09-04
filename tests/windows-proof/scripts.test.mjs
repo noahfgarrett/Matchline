@@ -132,6 +132,39 @@ test('extract fails when the launcher answers with an error', () => {
   assert.ok(failedChecks(report).includes('no error line was emitted'));
 });
 
+/**
+ * A regression test for the crash the audit found (proof-lib.mjs's `LEAKY`
+ * check refusing to write a detail containing a path separator): a missing
+ * launcher used to make `requireSettings` report a detail naming
+ * `native/Matchline.Extraction.sln`, which `writeReport` then refused to
+ * write at all — the script died with an uncaught exception and published no
+ * JSON, not even a failing one. `scripts.test.mjs` always overrode
+ * MATCHLINE_EXTRACTOR_PATH before this, so the case was never exercised.
+ */
+test('extract fails cleanly, with no path in the report, when the launcher is missing', () => {
+  const outDir = directory('out', 'extract-missing-launcher');
+  const run = runScript('extract.mjs', {
+    MATCHLINE_PROOF_MODEL: fakeModel('extract-missing-launcher'),
+    MATCHLINE_PROOF_OUT: outDir,
+    MATCHLINE_PROOF_CACHE: directory('caches', 'extract-missing-launcher'),
+    MATCHLINE_EXTRACTOR_PATH: path.join(workspace, 'no-such-extractor.exe'),
+  });
+
+  assert.notEqual(run.status, 0);
+
+  // The whole point: a report was written at all.
+  const report = reportOf(outDir, 'extract');
+  assert.equal(report.status, 'fail');
+
+  const failure = report.checks.find(
+    (check) => check.name === 'the launcher executable is where the build left it',
+  );
+  assert.ok(failure, 'expected the requireSettings extractor check to have run');
+  assert.equal(failure.status, 'fail');
+  assert.ok(typeof failure.detail === 'string' && failure.detail.length > 0);
+  assert.doesNotMatch(failure.detail, /[/\\]/);
+});
+
 test('validate-cache reads the cache the launcher wrote and counts it', () => {
   const outDir = directory('out', 'validate');
   const cacheDir = directory('caches', 'validate');
