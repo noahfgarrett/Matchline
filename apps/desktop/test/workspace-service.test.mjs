@@ -375,7 +375,11 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     assert.deepEqual(config.roleGraph.rules, []);
     assert.equal(config.parentTagProperty, null);
     assert.deepEqual(config.ssmDisciplineProjection, []);
-    assert.equal(config.ladder.tiers.length, 8, 'every ladder rung starts enabled');
+    assert.equal(config.ladder.tiers.length, 9, 'every ladder rung starts enabled');
+    assert.ok(
+      config.ladder.tiers.includes('mel-parent'),
+      'a new site reads its own MEL, which is where a site writes down what hangs off what',
+    );
     assert.equal(config.ladder.tiers[0], 'manual', 'a human decision is the strongest rung');
 
     // Every level attribute the menu offers is one the compiler populates.

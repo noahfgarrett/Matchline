@@ -78,6 +78,7 @@ const NORMALIZATION_KINDS = [
   'stripPrefix',
   'padStart',
   'alias',
+  'unicodeFold',
 ] as const satisfies ReadonlyArray<NormalizationStep['kind']>;
 
 const COMPONENT_KINDS = [
@@ -296,6 +297,7 @@ function readNormalizationStep(value: unknown, field: string): NormalizationStep
   switch (kind) {
     case 'trim':
     case 'uppercase':
+    case 'unicodeFold':
       return { kind };
     case 'stripPrefix':
       return { kind, prefix: requireStringAt(record['prefix'], `${field}.prefix`, fail) };
@@ -457,6 +459,7 @@ export function validateSiteProfile(value: unknown): SiteProfile {
 const LADDER_SOURCES = [
   'manual',
   'explicit-model',
+  'mel-parent',
   'profile-lookup',
   'flow-family',
   'family-role',

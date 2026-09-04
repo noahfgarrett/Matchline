@@ -247,6 +247,16 @@ export const normalizationStepSchema = z.discriminatedUnion('kind', [
     fill: z.string().min(1).max(4),
   }),
   z.object({ kind: z.literal('alias'), from: z.string().min(1), to: z.string() }),
+  /**
+   * NFKC, zero-width strip, dash-family fold, NBSP, whitespace around hyphens.
+   *
+   * The one step that is about characters nobody typed on purpose rather than
+   * about what a site calls things: an en dash a word processor substituted for
+   * a hyphen, or a non-breaking space a paste carried in, is not a different
+   * tag. Enabled by default on a new draft, because no site has ever meant the
+   * other behaviour.
+   */
+  z.object({ kind: z.literal('unicodeFold') }),
 ]);
 export type WireNormalizationStep = z.infer<typeof normalizationStepSchema>;
 
@@ -891,6 +901,7 @@ export type WireRoleGraph = z.infer<typeof roleGraphSchema>;
 export const ladderSourceSchema = z.enum([
   'manual',
   'explicit-model',
+  'mel-parent',
   'profile-lookup',
   'flow-family',
   'family-role',
@@ -1514,6 +1525,61 @@ export const compileIssueRowSchema = z.object({
 });
 export type WireCompileIssueRow = z.infer<typeof compileIssueRowSchema>;
 
+/**
+ * One configured level, and how much of the site states a value for it (B3).
+ *
+ * `assetsWithoutValue` is the number a flat tree used to hide: a boundary level
+ * nothing states is a boundary that stops every nesting on the site, and the
+ * compile before this reported success and said nothing.
+ */
+export const levelCompletenessSchema = z.object({
+  levelId: z.string().min(1),
+  displayName: z.string(),
+  boundary: z.boolean(),
+  /** What the count is about: the boundary's attribute, or the level's key. */
+  attributeKey: z.string(),
+  assetsWithoutValue: z.number().int().nonnegative(),
+  /** True when this level is an enabled boundary that is missing values. */
+  blocksNesting: z.boolean(),
+});
+export type WireLevelCompleteness = z.infer<typeof levelCompletenessSchema>;
+
+/** One rung's parents that one boundary level turned into dependencies. */
+export const levelDemotionSchema = z.object({
+  levelId: z.string().min(1),
+  ladderSource: ladderSourceSchema,
+  count: z.number().int().nonnegative(),
+});
+export type WireLevelDemotion = z.infer<typeof levelDemotionSchema>;
+
+/** One way the resolver came up empty, and how many assets it left. */
+export const unresolvedSystemGroupSchema = z.object({
+  skipReasons: z.array(z.string()),
+  assetCount: z.number().int().nonnegative(),
+});
+export type WireUnresolvedSystemGroup = z.infer<typeof unresolvedSystemGroupSchema>;
+
+/**
+ * How much of the site the compile actually described (audit blocker B3).
+ *
+ * Counts of assets, not of work done: `assetCount` answers "how big is the
+ * site", the summary's other numbers answer "what did the engine do", and this
+ * answers "is my equipment nested, does it have a system, and which missing
+ * field is the reason".
+ */
+export const completenessSchema = z.object({
+  assetCount: z.number().int().nonnegative(),
+  assetsNested: z.number().int().nonnegative(),
+  assetsRooted: z.number().int().nonnegative(),
+  assetsWithNoParentCandidate: z.number().int().nonnegative(),
+  assetsWithoutSystem: z.number().int().nonnegative(),
+  levels: z.array(levelCompletenessSchema),
+  demotionsPerLevel: z.array(levelDemotionSchema),
+  unresolvedSystemBySkipReason: z.array(unresolvedSystemGroupSchema),
+  melRowsDropped: z.number().int().nonnegative(),
+});
+export type WireCompleteness = z.infer<typeof completenessSchema>;
+
 /** Everything screen 8's checklist prints (PRODUCT.md §7 screen 8). */
 export const compileSummarySchema = z.object({
   compileId: z.number().int().positive(),
@@ -1561,6 +1627,15 @@ export const compileSummarySchema = z.object({
   ledgerDisappearedCount: z.number().int().nonnegative(),
   /** Stored decisions the ledger could not re-address. They are review items. */
   orphanedDecisionCount: z.number().int().nonnegative(),
+
+  /**
+   * How much of the site this compile described (B3).
+   *
+   * Carried on the summary rather than behind its own channel because it is
+   * read at exactly the moment the rest of these numbers are, and a screen that
+   * had to ask twice could show a completeness report from a different compile.
+   */
+  completeness: completenessSchema,
 });
 export type WireCompileSummary = z.infer<typeof compileSummarySchema>;
 

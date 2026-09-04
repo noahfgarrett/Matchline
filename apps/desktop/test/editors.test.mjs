@@ -130,6 +130,20 @@ async function openTwoCacheProject(name) {
   return service;
 }
 
+test('a new draft folds unicode by default, so a pasted tag still matches', async () => {
+  const service = await openTwoCacheProject('UnicodeFold');
+  try {
+    const draft = service.updateDraft({});
+    assert.deepEqual(
+      draft.identityConfig.tagNormalization,
+      [{ kind: 'unicodeFold' }],
+      'an en dash and a hyphen are not two different tags on any site',
+    );
+  } finally {
+    service.close();
+  }
+});
+
 /* ========================================================= gate row 5: chains */
 
 test('a mapping is a chain with per-source overrides, all the way through', async () => {

@@ -280,6 +280,12 @@ function assetIdsOf(item: ReviewItem): readonly string[] {
       // The absorbed object is no longer an asset, so the only row that can
       // carry this flag is the one that swallowed it.
       return [item.absorbingAssetId];
+    // A counted item is about a level, a rung or a resolver chain rather than
+    // about one asset. Its examples name assets, but flagging ten tree rows out
+    // of forty thousand would be arbitrary -- the row to work is the item.
+    case 'missing-boundary-level':
+    case 'boundary-demotion':
+    case 'unresolved-system':
     case 'duplicate-model-tag':
     case 'system-catalog-conflict':
     // These three name tags and rules rather than assets: a dead claim rule and
@@ -767,6 +773,7 @@ export function createCompileView(
 
     summary(base: CompileSummaryBase): WireCompileSummary {
       const stats = project.stats;
+      const completeness = project.completeness;
       return {
         compileId: base.compileId,
         profileRevision: base.profileRevision,
@@ -805,6 +812,23 @@ export function createCompileView(
         orphanedDecisionCount: project.reviewItems.filter(
           (item) => item.kind === 'orphaned-decision',
         ).length,
+
+        // Read straight off the engine's own report: this view counts nothing
+        // of its own, so the numbers a screen prints and the numbers the fold
+        // decided cannot drift apart.
+        completeness: {
+          assetCount: completeness.assetCount,
+          assetsNested: completeness.assetsNested,
+          assetsRooted: completeness.assetsRooted,
+          assetsWithNoParentCandidate: completeness.assetsWithNoParentCandidate,
+          assetsWithoutSystem: completeness.assetsWithoutSystem,
+          levels: completeness.levels.map((level) => ({ ...level })),
+          demotionsPerLevel: completeness.demotionsPerLevel.map((entry) => ({ ...entry })),
+          unresolvedSystemBySkipReason: completeness.unresolvedSystemBySkipReason.map(
+            (group) => ({ skipReasons: [...group.skipReasons], assetCount: group.assetCount }),
+          ),
+          melRowsDropped: completeness.melRowsDropped,
+        },
       };
     },
 

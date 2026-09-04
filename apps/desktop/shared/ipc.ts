@@ -292,6 +292,38 @@ const EXAMPLE_COMPILE_SUMMARY = {
   ledgerSplitCount: 0,
   ledgerDisappearedCount: 0,
   orphanedDecisionCount: 0,
+
+  // How much of the site the compile described (B3). Dragon nests four assets
+  // under a parent and roots the other thirty, which is what a fully taught
+  // profile over that fixture actually produces.
+  completeness: {
+    assetCount: 34,
+    assetsNested: 4,
+    assetsRooted: 30,
+    assetsWithNoParentCandidate: 30,
+    assetsWithoutSystem: 0,
+    levels: [
+      {
+        levelId: 'building',
+        displayName: 'Building',
+        boundary: true,
+        attributeKey: 'building',
+        assetsWithoutValue: 0,
+        blocksNesting: false,
+      },
+      {
+        levelId: 'system',
+        displayName: 'System',
+        boundary: true,
+        attributeKey: 'systemKey',
+        assetsWithoutValue: 0,
+        blocksNesting: false,
+      },
+    ],
+    demotionsPerLevel: [{ levelId: 'system', ladderSource: 'flow-family', count: 1 }],
+    unresolvedSystemBySkipReason: [],
+    melRowsDropped: 0,
+  },
 } as const;
 
 const EXAMPLE_TREE_NODE = {

@@ -169,7 +169,16 @@ export function emptyDraft(name: string): WireDraftProfile {
     ssmDisciplineProjection: [],
     parentTagProperty: null,
     stableIdProperty: null,
-    identityConfig: { tagNormalization: [], aliases: [], fuzzyMaxDistance: 0 },
+    // The one normalization step a new site gets for free. It is not a rule
+    // about what this site calls things -- it is what an en dash and a hyphen
+    // have in common -- and without it a tag pasted out of a specification
+    // never matches the same tag typed into a model (audit: "unicode tag
+    // hygiene regressed vs donor").
+    identityConfig: {
+      tagNormalization: [{ kind: 'unicodeFold' }],
+      aliases: [],
+      fuzzyMaxDistance: 0,
+    },
     profileLookup: [],
     priorSsm: [],
     authorityRules: [],
