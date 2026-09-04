@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState, type JSX } from 'react';
 import type {
   WireAttributeChoice,
   WireHierarchyLevel,
+  WireLevelCompleteness,
   WireProfileSection,
   WirePublishBlocker,
 } from '../../../shared/schemas';
@@ -73,6 +74,18 @@ export function Screen9Publish({
    * the System level, then saving would publish something nobody read.
    */
   const [boundariesConfirmed, setBoundariesConfirmed] = useState<boolean>(false);
+  /**
+   * Boundary levels the last compile found no value for (audit blocker B3).
+   *
+   * Read from the compile status rather than recomputed here, so the number
+   * above the confirmation is the number the engine reported and not a second
+   * count that could disagree with it. A project that has not compiled — or has
+   * only a restored compile, whose checklist is not stored — shows nothing
+   * here, which is honest: nobody has measured it yet.
+   */
+  const [unstatedBoundaries, setUnstatedBoundaries] = useState<
+    readonly WireLevelCompleteness[]
+  >([]);
   const [note, setNote] = useState<string>('');
   const [busy, setBusy] = useState<boolean>(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -94,6 +107,32 @@ export function Screen9Publish({
 
   useEffect((): void => {
     setBoundariesConfirmed(false);
+  }, [context.draft]);
+
+  useEffect((): (() => void) => {
+    let cancelled = false;
+    void call(window.matchline.compile.status()).then(
+      (data): void => {
+        if (cancelled) {
+          return;
+        }
+        setUnstatedBoundaries(
+          data.status.state === 'done'
+            ? data.status.summary.completeness.levels.filter(
+                (level) => level.boundary && level.assetsWithoutValue > 0,
+              )
+            : [],
+        );
+      },
+      (): void => {
+        // A status read that fails leaves the warning off. It is a warning
+        // about the last compile, and not knowing what the last compile found
+        // must never be the thing that stops somebody publishing.
+      },
+    );
+    return (): void => {
+      cancelled = true;
+    };
   }, [context.draft]);
 
   useEffect((): (() => void) => {
@@ -304,6 +343,25 @@ export function Screen9Publish({
               'dependency instead of nesting under it, and the review queue says which level ' +
               'broke it.'}
         </p>
+
+        {unstatedBoundaries.length === 0 ? null : (
+          <Callout tone="error" data-testid="publish-unstated-boundaries">
+            {unstatedBoundaries
+              .map(
+                (level) =>
+                  `${level.displayName === '' ? level.levelId : level.displayName}: ${String(level.assetsWithoutValue)} assets state no value`,
+              )
+              .join('; ')}
+            .{' '}
+            {unstatedBoundaries.length === 1
+              ? 'That level is a structural boundary'
+              : 'Those levels are structural boundaries'}
+            , so in the last compile those assets could not nest under anything — a boundary
+            refuses a parent whose value differs, and an asset with no value differs from every
+            parent there is. Publishing this profile keeps that behaviour. Map a property for it
+            on screen 3, or turn the boundary off above.
+          </Callout>
+        )}
 
         <label className="toggle">
           <input

@@ -6,6 +6,7 @@ import type {
   WireCompileStatus,
   WireCompileSummary,
   WireLedgerEvent,
+  WireLevelCompleteness,
 } from '../../../shared/schemas';
 import { call, count, messageOf } from '../api';
 import { Callout, Panel, Stat, StatRow, TableScroll } from '../components/Panel';
@@ -149,8 +150,19 @@ export function Screen8Preview({
     let cancelled = false;
     void call(window.matchline.compile.status()).then(
       (data): void => {
-        if (!cancelled) {
-          setStatus(data.status);
+        if (cancelled) {
+          return;
+        }
+        setStatus(data.status);
+        if (data.status.state === 'running') {
+          // A compile started before this screen was mounted — the user
+          // navigated away and came back, or reloaded the window mid-run. The
+          // panel used to draw as if nothing were happening, so the only
+          // evidence of a multi-minute compile was that Compile did nothing
+          // when pressed. Entering the running state here starts the poll below
+          // and puts the progress line back.
+          setRunning(true);
+          setProgress(data.status);
         }
       },
       (): void => {
@@ -180,6 +192,17 @@ export function Screen8Preview({
         (data): void => {
           if (data.status.state === 'running') {
             setProgress(data.status);
+            return;
+          }
+          // The compile settled. Usually `compile()`'s own await has already
+          // said so and this is redundant; it is not redundant for a compile
+          // this screen did not start — one adopted on mount — where the poll
+          // is the only thing watching.
+          setStatus(data.status);
+          setRunning(false);
+          setProgress(null);
+          if (data.status.state === 'done') {
+            onCompiled();
           }
         },
         (): void => {
@@ -191,7 +214,7 @@ export function Screen8Preview({
     return (): void => {
       clearInterval(timer);
     };
-  }, [running]);
+  }, [running, onCompiled]);
 
   const compile = useCallback(async (): Promise<void> => {
     setRunning(true);
@@ -206,7 +229,10 @@ export function Screen8Preview({
       }
     } catch (caught: unknown) {
       setError(messageOf(caught));
-      setStatus({ state: 'failed', reason: messageOf(caught) });
+      // The transport failed rather than the compile, so nothing here knows
+      // whether a previous view survived; main's own status is the authority on
+      // that and this screen is only reporting what it saw.
+      setStatus({ state: 'failed', reason: messageOf(caught), staleViewFrom: null });
     } finally {
       setRunning(false);
       setProgress(null);
@@ -292,13 +318,31 @@ export function Screen8Preview({
             queue and every export — opens once this has run.
           </Callout>
         ) : null}
+        {status.state === 'restored' && !running ? (
+          <Callout tone="info" data-testid="compile-restored">
+            Showing compile {status.compileId} from{' '}
+            {status.at.slice(0, 16).replace('T', ' ')} — {count(status.assetCount)} assets, read
+            back from this project when it was opened. The hierarchy, the tag search, the review
+            queue and the register exports work from it; the checklist below, the electrical
+            projection and the previews are built from the model, so recompile to refresh.
+          </Callout>
+        ) : null}
         {summary === null ? null : (
           <p className="muted" data-testid="compile-meta">
-            Compile {summary.compileId} from profile revision {summary.profileRevision}, finished
-            in {count(summary.durationMs)} ms. {count(summary.generatedMelRowCount)} rows in the
-            generated MEL.
+            {summary.compileId === null
+              ? 'This compile was not saved.'
+              : `Compile ${String(summary.compileId)} from profile revision ${String(summary.profileRevision)}.`}{' '}
+            Finished in {count(summary.durationMs)} ms. {count(summary.generatedMelRowCount)} rows
+            in the generated MEL.
           </p>
         )}
+        {status.state === 'done' && status.unsavedDraft ? (
+          <Callout tone="warning" data-testid="compile-unsaved-draft">
+            Compiled from an unsaved draft, so nothing was written to the project: no compile
+            row, no snapshot and no revision. The numbers below are real — publish on screen 9 to
+            keep them, and to make this the compile the project reopens onto.
+          </Callout>
+        ) : null}
       </Panel>
 
       {summary === null ? null : (
@@ -331,6 +375,8 @@ export function Screen8Preview({
 
           {openKind === null ? null : <IssueList kind={openKind} />}
 
+          <CompletenessPanel summary={summary} />
+
           <IdentityPanel summary={summary} />
 
           {summary.skippedClaimInputCount === 0 ? null : (
@@ -361,6 +407,170 @@ export function Screen8Preview({
         </Callout>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * How much of the site this compile actually described (audit blocker B3).
+ *
+ * Every other card on this screen counts something the engine *did*. This one
+ * counts what is still missing, and it exists because the most expensive
+ * failure this app has is a compile that succeeds and describes nothing: a
+ * boundary level nobody states a value for refuses every nesting on the site,
+ * so the register comes out complete, every asset is a root, and no number
+ * anywhere says why.
+ *
+ * Read straight off `summary.completeness`, which the engine reports from the
+ * fold's own decisions. Nothing here is recomputed — a second count could
+ * disagree with the snapshot it is describing, and a site would then have two
+ * answers to "is my equipment nested".
+ */
+function CompletenessPanel({ summary }: { readonly summary: WireCompileSummary }): JSX.Element {
+  const completeness = summary.completeness;
+  const blocking = completeness.levels.filter((level) => level.blocksNesting);
+
+  return (
+    <Panel
+      title="Completeness"
+      description="Not what the compile did, but how much of the site it left unsaid. A level nobody states a value for is the one failure that looks like success."
+    >
+      <StatRow>
+        <Stat
+          label="Nested"
+          value={count(completeness.assetsNested)}
+          hint={`of ${count(completeness.assetCount)} assets`}
+        />
+        <Stat
+          label="Roots"
+          value={count(completeness.assetsRooted)}
+          hint={
+            completeness.assetsRooted === completeness.assetCount
+              ? 'every asset — nothing nested at all'
+              : 'top of their own grouping'
+          }
+        />
+        <Stat
+          label="No parent candidate"
+          value={count(completeness.assetsWithNoParentCandidate)}
+          hint={
+            completeness.assetsWithNoParentCandidate === 0
+              ? 'every asset had somewhere to go'
+              : 'no rung proposed a parent at all'
+          }
+        />
+        <Stat
+          label="No system"
+          value={count(completeness.assetsWithoutSystem)}
+          hint={
+            completeness.assetsWithoutSystem === 0
+              ? 'every asset was placed'
+              : 'no resolver rung answered'
+          }
+        />
+        <Stat
+          label="MEL rows dropped"
+          value={count(completeness.melRowsDropped)}
+          hint={
+            completeness.melRowsDropped === 0
+              ? 'every asset produced a row'
+              : 'assets that produced no register row'
+          }
+        />
+      </StatRow>
+
+      {blocking.length === 0 ? null : (
+        <Callout tone="error" data-testid="completeness-blocking">
+          {blocking
+            .map(
+              (level) =>
+                `${count(level.assetsWithoutValue)} assets have no ${level.displayName} value`,
+            )
+            .join('; ')}
+          . {blocking.length === 1 ? 'That level is' : 'Those levels are'} a structural boundary,
+          so these cannot nest under anything — a boundary refuses a parent whose value differs,
+          and an asset with no value differs from every parent there is. Map a property for it on
+          screen 3, or turn the boundary off on screen 6.
+        </Callout>
+      )}
+
+      {completeness.levels.length === 0 ? (
+        <Callout tone="warning">
+          No hierarchy levels are configured, so there is nothing to group by and no boundary to
+          state. Screen 6 is where the level stack is built.
+        </Callout>
+      ) : (
+        <TableScroll>
+          <table className="table table--compact" data-testid="completeness-levels">
+            <thead>
+              <tr>
+                <th>Level, outermost first</th>
+                <th>Compares</th>
+                <th>Boundary</th>
+                <th>Assets with no value</th>
+              </tr>
+            </thead>
+            <tbody>
+              {completeness.levels.map((level: WireLevelCompleteness): JSX.Element => (
+                <tr key={level.levelId} data-testid={`completeness-${level.levelId}`}>
+                  <td>{level.displayName === '' ? level.levelId : level.displayName}</td>
+                  <td className="muted">{level.attributeKey}</td>
+                  <td>
+                    {level.boundary ? (
+                      <span className="badge">boundary</span>
+                    ) : (
+                      <span className="muted">grouping only</span>
+                    )}
+                  </td>
+                  <td>
+                    {level.assetsWithoutValue === 0 ? (
+                      <span className="muted">none</span>
+                    ) : (
+                      <>
+                        {count(level.assetsWithoutValue)}
+                        {level.blocksNesting ? (
+                          <>
+                            {' '}
+                            <span className="badge badge--file-missing">cannot nest</span>
+                          </>
+                        ) : null}
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
+      )}
+
+      {completeness.unresolvedSystemBySkipReason.length === 0 ? null : (
+        <>
+          <h3 className="panel__subtitle">Why the resolver came up empty</h3>
+          <TableScroll>
+            <table className="table table--compact" data-testid="completeness-skip-reasons">
+              <thead>
+                <tr>
+                  <th>Every rung skipped, because</th>
+                  <th>Assets</th>
+                </tr>
+              </thead>
+              <tbody>
+                {completeness.unresolvedSystemBySkipReason.map((group): JSX.Element => (
+                  <tr key={group.skipReasons.join('|')}>
+                    <td className="muted">
+                      {group.skipReasons.length === 0
+                        ? 'no rung was configured at all'
+                        : group.skipReasons.join(', ')}
+                    </td>
+                    <td>{count(group.assetCount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
+        </>
+      )}
+    </Panel>
   );
 }
 

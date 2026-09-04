@@ -26,18 +26,29 @@ export function Panel({
   );
 }
 
-/** A short message with a tone. Used for blocked previews, errors and notes. */
+/**
+ * A short message with a tone. Used for blocked previews, errors and notes.
+ *
+ * `data-testid` is declared and forwarded on purpose. A hyphenated JSX
+ * attribute is exempt from excess-property checking, so a caller that passed
+ * one to a component which did not declare it type-checked and then rendered
+ * nothing — which is how several callouts came to carry test ids that were
+ * never in the DOM. Declaring it makes the forwarding real.
+ */
 export function Callout({
   tone,
   children,
+  'data-testid': testId,
 }: {
   readonly tone: 'info' | 'warning' | 'error' | 'success';
   readonly children: ReactNode;
+  readonly 'data-testid'?: string | undefined;
 }): JSX.Element {
   return (
     <p
       className={`callout callout--${tone}`}
       role={tone === 'error' ? 'alert' : 'status'}
+      data-testid={testId}
     >
       {children}
     </p>

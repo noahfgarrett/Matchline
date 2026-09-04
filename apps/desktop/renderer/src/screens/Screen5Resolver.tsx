@@ -637,6 +637,11 @@ function defaultStep(kind: WireNormalizationStep['kind']): WireNormalizationStep
   switch (kind) {
     case 'trim':
     case 'uppercase':
+    // Characters nobody typed on purpose — an en dash a word processor
+    // substituted, a non-breaking space a paste carried in. It has no options,
+    // so it defaults to itself exactly as trim and uppercase do. It was in the
+    // schema without a case here, which stopped the renderer compiling.
+    case 'unicodeFold':
       return { kind };
     case 'stripPrefix':
       return { kind, prefix: 'UPN-' };

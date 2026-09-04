@@ -123,7 +123,6 @@ export function Wizard({
   const [classes, setClasses] = useState<readonly WireClassCount[]>([]);
   const [compileStatus, setCompileStatus] = useState<WireCompileStatus>({ state: 'never-run' });
   const [error, setError] = useState<string | null>(null);
-  const [saveNote, setSaveNote] = useState<string>('');
   const [saving, setSaving] = useState<boolean>(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
@@ -217,6 +216,13 @@ export function Wizard({
           const result = await call(window.matchline.profile.update({ patch: build(current) }));
           latestDraft.current = result.draft;
           setDraft(result.draft);
+          // Every draft edit un-saves the profile in main — `savedRevision` is
+          // what a compile labels its results with, so a stale number there
+          // would name a revision that is not what produced them. The sidebar
+          // has to follow, or it goes on saying "Saved revision 3" over a draft
+          // that is no longer revision 3, which is the one thing that indicator
+          // exists to tell you.
+          setSavedRevision(null);
           setError(null);
         } catch (caught: unknown) {
           setError(messageOf(caught));
@@ -297,7 +303,19 @@ export function Wizard({
     await refreshModel();
   }, [refreshModel, refreshSources]);
 
-  const compiled = compileStatus.state === 'done';
+  /**
+   * Whether main is holding a view the workspace can read.
+   *
+   * Three states carry one: a compile that finished, a compile restored from
+   * the project file on open, and a failed recompile that left the previous
+   * view standing. The button used to require `done`, which meant reopening a
+   * project disabled the workspace even though the project file was holding
+   * everything the tree needs.
+   */
+  const compiled =
+    compileStatus.state === 'done' ||
+    compileStatus.state === 'restored' ||
+    (compileStatus.state === 'failed' && compileStatus.staleViewFrom !== null);
 
   return (
     <div className="wizard">
@@ -368,44 +386,47 @@ export function Wizard({
           <span className="step__text">
             <span className="step__title">Project workspace</span>
             <span className="step__subtitle">
-              {compiled ? 'Tree, flow, review, exports' : 'Compile on screen 8 first'}
+              {compileStatus.state === 'restored'
+                ? `Compile ${String(compileStatus.compileId)}, restored on open`
+                : compiled
+                  ? 'Tree, flow, review, exports'
+                  : 'Compile on screen 8 first'}
             </span>
           </span>
         </button>
 
         <div className="wizard__save">
-          <label className="wizard__save-label" htmlFor="save-note">
+          <label className="wizard__save-label" htmlFor="save-profile">
             Save the site profile
           </label>
           <p className="wizard__save-what">
-            Writes everything you have decided so far into the project as a new revision.
-            Old revisions are kept.
+            Publishing happens on screen 9, where the publish blockers and the boundary summary
+            are. Old revisions are kept.
           </p>
-          <input
-            id="save-note"
-            className="control control--text"
-            type="text"
-            placeholder="What changed?"
-            data-testid="save-note"
-            value={saveNote}
-            onChange={(event): void => {
-              setSaveNote(event.target.value);
-            }}
-          />
+          {/*
+            This used to save directly, which made it the one way into the store
+            that skipped screen 9's gates: a profile naming a selection set
+            nobody resolved could be published from here, and the boundary
+            summary — the decisions nothing downstream can undo — never had to be
+            read. It navigates now. The wording says publishing is a screen, not
+            a button, because that is the point of the change.
+          */}
           <button
+            id="save-profile"
             className="button button--primary"
             type="button"
             data-testid="save-profile"
-            disabled={saving}
             onClick={(): void => {
-              void saveProfile(saveNote.trim());
+              setInWorkspace(false);
+              setSetupPath('advanced');
+              setScreen(9);
             }}
           >
-            {saving ? 'Saving…' : 'Save profile'}
+            Go to publish
           </button>
           <p className="wizard__revision" data-testid="saved-revision">
             {savedRevision === null
-              ? 'Not saved yet'
+              ? 'Unsaved changes'
               : `Saved revision ${String(savedRevision)}`}
           </p>
           <button
