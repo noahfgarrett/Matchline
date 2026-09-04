@@ -488,7 +488,14 @@ test('the Revit path: a building nobody stated, read off the file names', async 
       ],
       'both boundaries survive, because this project can state both',
     );
-    assert.ok(last.hierarchyNotes.some((note) => /Building stays structural/.test(note)));
+    assert.deepEqual(
+      last.hierarchyNotes.map((note) => [note.levelId, note.kept]),
+      [
+        ['building', true],
+        ['system', true],
+      ],
+    );
+    assert.match(last.hierarchyNotes[0].note, /Building stays structural/);
   } finally {
     service.close();
   }

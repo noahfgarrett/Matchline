@@ -1316,6 +1316,21 @@ export const hierarchyProjectionSchema = z.discriminatedUnion('state', [
 export type WireHierarchyProjection = z.infer<typeof hierarchyProjectionSchema>;
 
 /**
+ * One boundary decision, and why.
+ *
+ * `kept` rather than a phrase the renderer has to recognise: which callout a
+ * note gets is a fact main already knows, and a screen matching on the wording
+ * would silently go quiet the day somebody improves the sentence.
+ */
+export const hierarchyNoteSchema = z.object({
+  levelId: z.string().min(1),
+  /** True when the level keeps its boundary flag. */
+  kept: z.boolean(),
+  note: z.string().min(1),
+});
+export type WireHierarchyNote = z.infer<typeof hierarchyNoteSchema>;
+
+/**
  * One parent → child role pairing the model tree already draws.
  *
  * Read off tagged objects published inside tagged objects and named with the
@@ -1377,8 +1392,8 @@ export const quickSetupSuggestionsSchema = z.object({
    * `hierarchyNotes` says why. The levels themselves never change.
    */
   hierarchy: hierarchyConfigSchema,
-  /** One sentence per boundary decision above, or empty. */
-  hierarchyNotes: z.array(z.string()),
+  /** One decision per boundary level above, with the sentence that explains it. */
+  hierarchyNotes: z.array(hierarchyNoteSchema),
   /** What the proposed stack would do to the assets this project has. */
   hierarchyProjection: hierarchyProjectionSchema,
   /** Parent → child role pairs the model tree draws, strongest first. */

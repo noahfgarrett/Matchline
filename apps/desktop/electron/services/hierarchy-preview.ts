@@ -6,6 +6,7 @@ import type {
   WireDerivedAttribute,
   WireHierarchyConfig,
   WireHierarchyLevel,
+  WireHierarchyNote,
   WireHierarchyProjection,
   WireHierarchyProjectionLevel,
 } from '../../shared/schemas.js';
@@ -156,13 +157,13 @@ export function buildHierarchyProjection(
 export function proposeHierarchy(
   preset: readonly WireHierarchyLevel[],
   projection: WireHierarchyProjection,
-): { readonly hierarchy: WireHierarchyConfig; readonly notes: readonly string[] } {
+): { readonly hierarchy: WireHierarchyConfig; readonly notes: readonly WireHierarchyNote[] } {
   if (projection.state !== 'ready' || projection.assetCount === 0) {
     return { hierarchy: { levels: [...preset] }, notes: [] };
   }
 
   const byLevelId = new Map(projection.levels.map((level) => [level.levelId, level] as const));
-  const notes: string[] = [];
+  const notes: WireHierarchyNote[] = [];
   const levels = preset.map((level): WireHierarchyLevel => {
     const measured = byLevelId.get(level.levelId);
     if (!level.boundary || measured === undefined) {
@@ -170,20 +171,26 @@ export function proposeHierarchy(
     }
     const share = measured.assetsWithoutValue / projection.assetCount;
     if (share <= BOUNDARY_MISSING_LIMIT) {
-      notes.push(
-        `${level.displayName} stays structural: ${String(measured.assetsWithoutValue)} of ` +
+      notes.push({
+        levelId: level.levelId,
+        kept: true,
+        note:
+          `${level.displayName} stays structural: ${String(measured.assetsWithoutValue)} of ` +
           `${String(projection.assetCount)} assets state nothing for it, and it makes ` +
           `${String(measured.distinctValueCount)} groups.`,
-      );
+      });
       return level;
     }
-    notes.push(
-      `${level.displayName} is proposed as a grouping rather than a structural level: ` +
+    notes.push({
+      levelId: level.levelId,
+      kept: false,
+      note:
+        `${level.displayName} is proposed as a grouping rather than a structural level: ` +
         `${String(measured.assetsWithoutValue)} of ${String(projection.assetCount)} assets ` +
         `state nothing for it (${String(Math.round(share * 100))}%). As a boundary it would ` +
         'refuse to nest every one of them and they would all become roots. Map the field, or ' +
         'turn the boundary back on yourself on screen 6.',
-    );
+    });
     return { ...level, boundary: false };
   });
 

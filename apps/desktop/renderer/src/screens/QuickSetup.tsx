@@ -9,6 +9,7 @@ import type {
   WireDraftProfile,
   WireFieldSuggestion,
   WireHierarchyLevel,
+  WireHierarchyNote,
   WireHierarchyProjectionLevel,
   WirePropertySuggestion,
   WireQuickSetupSuggestions,
@@ -1193,9 +1194,9 @@ function HierarchyStep({
             audit's B3 is precisely this sentence never being written: a stack
             whose top level nobody can state compiles into a flat list of roots,
             and nothing said so until after the publish. */}
-        {suggestions.hierarchyNotes.map((note: string): JSX.Element => (
-          <Callout key={note} tone={note.includes('grouping rather than') ? 'warning' : 'info'}>
-            {note}
+        {suggestions.hierarchyNotes.map((note: WireHierarchyNote): JSX.Element => (
+          <Callout key={note.levelId} tone={note.kept ? 'info' : 'warning'}>
+            {note.note}
           </Callout>
         ))}
 
