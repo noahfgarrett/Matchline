@@ -15,7 +15,6 @@ import { writeWorkbook } from '@matchline/spreadsheet-import';
 import { compileProject } from '../dist/index.js';
 import {
   fullInput,
-  idOf,
   melWorkbook,
   MEL_MAPPING,
   MEL_SOURCE_FILE,
