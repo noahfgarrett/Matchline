@@ -83,3 +83,59 @@ test('a 25k-subject model against a 25k-row MEL does not pay per-subject for the
     `resolving ${SUBJECTS} subjects against ${ROWS} MEL rows took ${elapsed.toFixed(0)}ms, budget ${BUDGET_MS}ms`,
   );
 });
+
+/**
+ * The same guard for the other join.
+ *
+ * A `mel-lookup` by equipmentTag read every MEL row for every subject, so the
+ * cost grew with the model and the MEL multiplied together -- 5,000 x 5,000 is
+ * 25 million comparisons for an answer a map gives in one lookup. The budget is
+ * again loose: the indexed run lands in single-digit milliseconds.
+ */
+const TAG_JOIN_CONFIG = {
+  keyChain: [{ kind: 'mel-lookup', joinBy: 'equipmentTag', returnField: 'systemKey' }],
+  descriptionChain: [{ kind: 'mel-lookup', joinBy: 'equipmentTag', returnField: 'systemDescription' }],
+  normalization: [],
+  conflictPolicy: 'review',
+};
+
+test('a tag join reads the MEL through an index rather than once per subject', () => {
+  const melRows = buildMel().slice(0, 5_000);
+  const subjects = buildSubjects()
+    .slice(0, 5_000)
+    .map((subject, index) => ({ ...subject, canonicalTag: `EQ${index}` }));
+
+  const started = performance.now();
+  const result = resolveSystems(subjects, TAG_JOIN_CONFIG, { melRows });
+  const elapsed = performance.now() - started;
+
+  assert.equal(result.bySubject.size, 5_000);
+  const one = result.bySubject.get('scale-4999');
+  assert.equal(one.resolution.systemKey, '004999');
+  assert.equal(one.resolution.systemDescription, 'System 4999');
+  // The row the scan would have stopped on is the row the index names.
+  assert.deepEqual(one.keyClaim.provenance.sourceRef, {
+    kind: 'sheet-row',
+    sheet: 'MEL',
+    row: 5001,
+  });
+
+  assert.ok(
+    elapsed < BUDGET_MS,
+    `joining 5000 subjects to 5000 MEL rows by tag took ${elapsed.toFixed(0)}ms, budget ${BUDGET_MS}ms`,
+  );
+});
+
+test('a tag no MEL row states still skips with the reason it always did', () => {
+  const result = resolveSystems(
+    [{ assetId: 'lonely', canonicalTag: 'EQ-NOT-IN-MEL', properties: new Map() }],
+    TAG_JOIN_CONFIG,
+    { melRows: buildMel().slice(0, 10) },
+  );
+  const only = result.bySubject.get('lonely');
+  assert.equal(only.resolution, null);
+  assert.deepEqual(
+    only.skippedRungs.map((rung) => rung.reason),
+    ['no-value', 'no-value'],
+  );
+});

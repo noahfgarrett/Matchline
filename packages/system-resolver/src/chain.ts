@@ -11,7 +11,7 @@ import type { SystemComponentConfig } from '@matchline/domain';
 import type { AnatomyResult } from '@matchline/tag-anatomy';
 
 import { expandComposite } from './composite.js';
-import type { MelRowIndex, SystemJoinIndex } from './join.js';
+import type { MelRowIndex, MelTagIndex, SystemJoinIndex } from './join.js';
 import { COMPONENT_EVIDENCE_TIER } from './tiers.js';
 import type {
   ChainName,
@@ -69,6 +69,15 @@ export interface RungContext {
    * question in one lookup.
    */
   readonly melRowIndex: MelRowIndex;
+  /**
+   * The MEL rows addressed by the equipment tag they state.
+   *
+   * The other half of the same problem: a tag join used to read every MEL row
+   * for every subject, so the work grew with the model and the MEL multiplied
+   * together. Built once per compile, and keyed on the tag exactly as written,
+   * so the answer is the row the scan would have found.
+   */
+  readonly melTagIndex: MelTagIndex;
 }
 
 /** Which source vocabulary a rung's claim belongs to. */
@@ -172,10 +181,9 @@ function evaluateMelLookup(
     // First row that both matches the tag and actually states the field. The
     // tag comparison is exact: the canonical tag was canonicalized upstream,
     // and a tag that only matches after fuzzing is a data problem to surface.
-    for (const row of context.melRows) {
-      if (row.equipmentTag !== context.subject.canonicalTag) {
-        continue;
-      }
+    // The index holds those rows in workbook order, so this is the row the
+    // scan it replaces would have stopped on.
+    for (const row of context.melTagIndex.get(context.subject.canonicalTag) ?? []) {
       const value = (field === 'systemKey' ? row.systemKey : row.systemDescription)?.trim() ?? '';
       if (value.length > 0) {
         return yieldFrom(value, row);

@@ -9,7 +9,7 @@
  * Normalization applies to keys only. Descriptions are display text; padding
  * or upper-casing them would corrupt a human-readable string to no benefit.
  */
-import { assertNever, type NormalizationStep } from '@matchline/domain';
+import { assertNever, unicodeFold, type NormalizationStep } from '@matchline/domain';
 
 import type { TransformRecord } from './types.js';
 
@@ -38,6 +38,11 @@ function applyStep(value: string, step: NormalizationStep): string {
       return step.fill.length === 0 ? value : value.padStart(step.length, step.fill);
     case 'alias':
       return value === step.from ? step.to : value;
+    case 'unicodeFold':
+      // The one step whose implementation is shared rather than restated: a
+      // tag that folds one way for identity and another way for the resolver
+      // is a tag that joins in one stage and not in the other.
+      return unicodeFold(value);
     default:
       return assertNever(step, 'unhandled NormalizationStep');
   }

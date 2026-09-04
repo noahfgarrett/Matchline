@@ -77,16 +77,17 @@ export function buildSystemJoinIndex(
 }
 
 /**
- * Both MEL-side indexes, built once for a whole compile and shared by every
- * subject. Passed as a pair because they are always built and always consulted
- * together, and because a rung needs both to answer one `mel-lookup`.
+ * Every MEL-side index, built once for a whole compile and shared by every
+ * subject. Passed as a group because they are always built and always consulted
+ * together, and because a rung needs them to answer one `mel-lookup`.
  */
 export interface MelIndexes {
   readonly join: SystemJoinIndex;
   readonly rows: MelRowIndex;
+  readonly byTag: MelTagIndex;
 }
 
-/** Builds both indexes from whichever MEL side the caller supplied. */
+/** Builds every index from whichever MEL side the caller supplied. */
 export function buildMelIndexes(
   catalog: SystemCatalog | undefined,
   melRows: ReadonlyArray<MelCatalogRow> | undefined,
@@ -95,7 +96,44 @@ export function buildMelIndexes(
   return {
     join: buildSystemJoinIndex(catalog, melRows, normalization),
     rows: buildMelRowIndex(melRows),
+    byTag: buildMelTagIndex(melRows),
   };
+}
+
+/** Equipment tag -> the rows stating it, in workbook order. */
+export type MelTagIndex = ReadonlyMap<string, ReadonlyArray<MelCatalogRow>>;
+
+/**
+ * Indexes the MEL rows by the equipment tag a tag join matches on.
+ *
+ * Keyed by the tag exactly as the workbook wrote it, because that is what the
+ * scan this replaces compared: `evaluateMelLookup` tests
+ * `row.equipmentTag !== subject.canonicalTag`, both sides already canonical,
+ * and a tag that only matches after fuzzing is a data problem to surface rather
+ * than an index to widen. What changes is the cost -- a tag join used to read
+ * every row for every subject, which on 40,000 assets and a 40,000-row MEL is
+ * 1.6 billion comparisons for an answer a map gives in one.
+ */
+export function buildMelTagIndex(
+  melRows: ReadonlyArray<MelCatalogRow> | undefined,
+): MelTagIndex {
+  const index = new Map<string, MelCatalogRow[]>();
+  if (melRows === undefined) {
+    return index;
+  }
+  for (const row of melRows) {
+    const tag = row.equipmentTag;
+    if (tag === undefined) {
+      continue;
+    }
+    const bucket = index.get(tag);
+    if (bucket === undefined) {
+      index.set(tag, [row]);
+    } else {
+      bucket.push(row);
+    }
+  }
+  return index;
 }
 
 /** What the MEL rows state about one trimmed systemKey, in row order. */

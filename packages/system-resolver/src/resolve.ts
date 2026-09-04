@@ -101,6 +101,7 @@ function runChain(
       joinKey,
       joinIndex: indexes.join,
       melRowIndex: indexes.rows,
+      melTagIndex: indexes.byTag,
     };
     const outcome = evaluateComponent(component, chain, rungIndex, rungContext);
     if (!outcome.ok) {
