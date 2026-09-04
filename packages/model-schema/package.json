@@ -14,6 +14,10 @@
       "types": "./dist/fixtures/dragon.d.ts",
       "default": "./dist/fixtures/dragon.js"
     },
+    "./fixtures/revit": {
+      "types": "./dist/fixtures/revit.d.ts",
+      "default": "./dist/fixtures/revit.js"
+    },
     "./fixtures/scale": {
       "types": "./dist/fixtures/scale.d.ts",
       "default": "./dist/fixtures/scale.js"
