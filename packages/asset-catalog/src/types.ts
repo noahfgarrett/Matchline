@@ -145,6 +145,12 @@ export interface ModelAssetIdentityEvidence {
   /** `objects.authoring_id` of the representative object. */
   readonly authoringId: string | null;
   /**
+   * `objects.authoring_id_kind` -- which authoring system issued
+   * {@link authoringId}. `null` for a cache written before schema v3, which
+   * recorded ids without recording where they came from.
+   */
+  readonly authoringIdKind: string | null;
+  /**
    * Sibling positions (`objects.path_index`) from the root of the
    * representative object's own tree down to the object itself.
    *
@@ -155,6 +161,12 @@ export interface ModelAssetIdentityEvidence {
   readonly structuralPath: ReadonlyArray<number>;
   /** `objects.class_name` of the representative object. */
   readonly className: string | null;
+  /**
+   * `objects.structural_key` -- the extractor's own digest of the ancestor
+   * chain of (class, display name, sibling position). Published verbatim, like
+   * everything else here; `null` for a cache written before schema v3.
+   */
+  readonly structuralKey: string | null;
 }
 
 /** One asset as the model universe alone describes it. */

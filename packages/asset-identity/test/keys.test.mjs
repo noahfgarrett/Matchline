@@ -37,8 +37,50 @@ test('a tier with no evidence is absent, never a placeholder key', () => {
   );
   assert.deepEqual(
     identities.map((identity) => identity.tier),
-    ['structural', 'tag'],
+    ['structural', 'structural-key', 'tag'],
   );
+});
+
+test('the authoring id is keyed WITH the system that issued it', () => {
+  // A Revit ElementId and an AutoCAD handle can be the same digits. Keying the
+  // id alone would make one object out of two.
+  const authoringOf = (identities) =>
+    identities.find((identity) => identity.tier === 'authoring-id').stableObjectKey;
+
+  const revit = stableObjectIdentities(evidence({ authoringId: '418022' }));
+  const dwg = stableObjectIdentities(
+    evidence({ authoringId: '418022', authoringIdKind: 'dwg-handle' }),
+  );
+  assert.notEqual(authoringOf(revit), authoringOf(dwg));
+
+  // A cache from before schema v3 recorded ids without their origin. That is a
+  // third answer, not a wildcard: it must not match either of the above.
+  const unknown = stableObjectIdentities(
+    evidence({ authoringId: '418022', authoringIdKind: null }),
+  );
+  assert.notEqual(authoringOf(unknown), authoringOf(revit));
+  assert.notEqual(authoringOf(unknown), authoringOf(dwg));
+});
+
+test('the extractor structural key is its own tier, scoped and below the index path', () => {
+  const keyAt = (identities, tier) =>
+    identities.find((identity) => identity.tier === tier)?.stableObjectKey;
+
+  const here = stableObjectIdentities(evidence());
+  assert.ok(keyAt(here, 'structural-key'), 'a v3 cache states one');
+
+  // Scoped by the source model like every other model tier: the digest chain
+  // starts at a model root, so two files of the same shape agree on it.
+  const elsewhere = stableObjectIdentities(
+    evidence({ sourceModelPersistentId: '00000000-0000-4000-8000-000000009999' }),
+  );
+  assert.notEqual(keyAt(here, 'structural-key'), keyAt(elsewhere, 'structural-key'));
+
+  // A pre-v3 cache states nothing here, and the tier is absent rather than
+  // keyed on a placeholder that every silent object would share.
+  const legacy = stableObjectIdentities(evidence({ structuralKey: null }));
+  assert.equal(keyAt(legacy, 'structural-key'), undefined);
+  assert.ok(keyAt(legacy, 'structural'), 'and the older structural tier still answers');
 });
 
 test('the model tiers are scoped by the SOURCE MODEL, so re-registering a file keeps the key', () => {
@@ -116,6 +158,10 @@ test('an object the cache does not place carries no structural key', () => {
   const identities = stableObjectIdentities(evidence({ structuralPath: [] }));
   assert.equal(
     identities.some((identity) => identity.tier === 'structural'),
+    false,
+  );
+  assert.equal(
+    identities.some((identity) => identity.tier === 'structural-key'),
     false,
   );
 });

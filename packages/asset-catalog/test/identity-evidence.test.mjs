@@ -88,9 +88,14 @@ test('an asset carries its representative object`s ids, class and position', () 
     sourceModelPersistentId: MODEL_GUID,
     instanceGuid: '00000000-0000-4000-8000-000000000003',
     authoringId: 'id-MAH001-10-01',
+    // Which authoring system issued that id: part of the evidence, because two
+    // systems can number an object the same.
+    authoringIdKind: 'revit-element-id',
     // Root first, the object itself last: sibling positions, not object ids.
     structuralPath: [0, 3, 7],
     className: 'Equipment',
+    // The extractor's own digest of the ancestor chain, published verbatim.
+    structuralKey: '3'.padStart(64, 'b'),
   });
 });
 

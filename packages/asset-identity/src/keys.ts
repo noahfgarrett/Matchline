@@ -16,6 +16,15 @@ import { escapeSourceId } from '@matchline/domain';
 
 import type { ModelObjectIdentityEvidence, StableKeyTier, StableModelObjectIdentity } from './types.js';
 
+/**
+ * What stands in for `authoring_id_kind` when the cache does not record one.
+ *
+ * Not the empty string: a key component that can be empty is a key component
+ * that can be absorbed by its neighbours, and the whole point of the escaping
+ * below is that no value can spell another object's key.
+ */
+const UNKNOWN_AUTHORING_ID_KIND = 'unknown';
+
 /** A blank string is not a value: an extractor writes one where it read nothing. */
 function meaningful(value: string | null | undefined): string | null {
   if (value === undefined || value === null) {
@@ -72,7 +81,20 @@ export function stableObjectIdentities(
 
   const authoringId = meaningful(evidence.authoringId);
   if (authoringId !== null) {
-    identities.push(identity('authoring-id', source, `auth/${scope}/${escapeSourceId(authoringId)}`));
+    // The kind is a component of the key, not a label on it. A Revit ElementId
+    // and an AutoCAD handle can be the same digits, and a key that could not
+    // tell them apart would merge two pieces of equipment across a federated
+    // model. A cache written before schema v3 recorded ids without their
+    // origin, and gets the placeholder below rather than being quietly treated
+    // as matching every kind.
+    const kind = meaningful(evidence.authoringIdKind) ?? UNKNOWN_AUTHORING_ID_KIND;
+    identities.push(
+      identity(
+        'authoring-id',
+        source,
+        `auth/${scope}/${escapeSourceId(kind)}/${escapeSourceId(authoringId)}`,
+      ),
+    );
   }
 
   const instanceGuid = meaningful(evidence.instanceGuid);
@@ -86,6 +108,14 @@ export function stableObjectIdentities(
     const path = evidence.structuralPath.join('.');
     const className = escapeSourceId(meaningful(evidence.className) ?? '');
     identities.push(identity('structural', source, `struct/${scope}/${path}/${className}`));
+  }
+
+  const structuralKey = meaningful(evidence.structuralKey);
+  if (structuralKey !== null) {
+    // Scoped like the other model tiers: the digest chain starts at the source
+    // model's root, so two files with the same tree shape produce the same key
+    // and only the model scope keeps them apart.
+    identities.push(identity('structural-key', source, `skey/${scope}/${escapeSourceId(structuralKey)}`));
   }
 
   const tag = meaningful(evidence.canonicalTag);

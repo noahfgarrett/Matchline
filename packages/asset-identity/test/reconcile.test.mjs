@@ -65,6 +65,56 @@ test('a corrected tag keeps the id, records the old spelling, and says what happ
   assert.equal(changed.tier, 'authoring-id');
 });
 
+test('a tag correction rides on the authoring id alone, with everything else moved', () => {
+  // The scenario schema v3 exists for. Somebody fixes a typo in the tag AND the
+  // model is republished, so the InstanceGuid is new and the object sits a
+  // couple of positions further along its level. The only thing that did not
+  // move is the authoring tool's own id for the element -- and that is enough,
+  // because `authoring-id` outranks every tier that did move.
+  const before = candidate({ canonicalTag: TYPO });
+  const first = reconcileLedger(null, [before]);
+
+  const after = candidate({
+    canonicalTag: TAG,
+    instanceGuid: '00000000-0000-4000-8000-000000009911',
+    structuralPath: [0, 1, 7],
+  });
+  const second = reconcileLedger(first.ledger, [after]);
+
+  assert.deepEqual([...second.mapping], [[`tag:${TAG}`, `tag:${TYPO}`]]);
+  assert.equal(second.ledger.entries.length, 1, 'one asset, not a remove plus an add');
+
+  const [changed] = eventsOf(second, 'tag-changed');
+  assert.equal(changed.assetId, `tag:${TYPO}`);
+  assert.equal(changed.previousCanonicalTag, TYPO);
+  assert.equal(changed.canonicalTag, TAG);
+  assert.equal(changed.tier, 'authoring-id', 'the authoring id is what carried the id across');
+  assert.deepEqual(eventsOf(second, 'rematched-by-tag'), [], 'the tag was never needed');
+  assert.deepEqual(eventsOf(second, 'new-asset'), []);
+  assert.deepEqual(eventsOf(second, 'disappeared'), []);
+
+  // And the entry now carries the new evidence, so the NEXT compile matches
+  // against where the object actually is.
+  assert.deepEqual(
+    entryOf(second.ledger, `tag:${TYPO}`).modelIdentities,
+    after.identities,
+  );
+});
+
+test('the extractor structural key carries an id when nothing else can', () => {
+  // No authoring id, no InstanceGuid, and the object was renamed -- so the
+  // catalog mints a different id and the `structural` child-index tier is the
+  // last model evidence there is. It agrees, so the tag is never consulted.
+  const bare = { authoringId: null, authoringIdKind: null, instanceGuid: null };
+  const first = reconcileLedger(null, [candidate({ ...bare, canonicalTag: TYPO })]);
+  const second = reconcileLedger(first.ledger, [candidate({ ...bare, canonicalTag: TAG })]);
+
+  const [changed] = eventsOf(second, 'tag-changed');
+  assert.equal(changed.assetId, `tag:${TYPO}`);
+  assert.equal(changed.tier, 'structural');
+  assert.deepEqual(eventsOf(second, 'rematched-by-tag'), []);
+});
+
 test('an asset re-tagged back to an earlier spelling is not left as its own alias', () => {
   const first = reconcileLedger(null, [candidate({ canonicalTag: TYPO })]);
   const second = reconcileLedger(first.ledger, [candidate({ canonicalTag: TAG })]);

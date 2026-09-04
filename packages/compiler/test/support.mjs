@@ -26,6 +26,7 @@
  * family and `TIT603-10-01` a family of its own -- which is why the taught
  * `VFD -> TIT` rule below produces nothing, and is supposed to.
  */
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -286,8 +287,10 @@ function augmentDragonCache(path, build) {
 
     const insertObject = db.prepare(
       'INSERT INTO objects (id, source_model_id, parent_id, path_index, depth, display_name, class_name, ' +
-        'instance_guid, authoring_id, bbox_min_x, bbox_min_y, bbox_min_z, bbox_max_x, bbox_max_y, bbox_max_z) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL)',
+        'instance_guid, authoring_id, authoring_id_kind, structural_key, flags, ' +
+        'bbox_min_x, bbox_min_y, bbox_min_z, bbox_max_x, bbox_max_y, bbox_max_z) ' +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IS NULL THEN NULL ELSE 'revit-element-id' END, " +
+        "'', 0, NULL, NULL, NULL, NULL, NULL, NULL)",
     );
     const insertProperty = db.prepare(
       'INSERT INTO properties (object_id, category, category_internal, name, name_internal, value_text, value_type) ' +
@@ -329,6 +332,7 @@ function augmentDragonCache(path, build) {
           displayName,
           className,
           `00000000-0000-4000-8000-${String(id).padStart(12, '0')}`,
+          null,
           null,
         );
         context.addProperty(id, 'Item', 'Name', displayName);
@@ -414,9 +418,21 @@ function augmentDragonCache(path, build) {
        * in the cache, so a test can tell the two apart instead of assuming the
        * engine can.
        */
-      setObjectIdentity(objectId, { authoringId, instanceGuid }) {
+      setObjectIdentity(objectId, { authoringId, authoringIdKind, instanceGuid }) {
         if (authoringId !== undefined) {
-          db.prepare('UPDATE objects SET authoring_id = ? WHERE id = ?').run(authoringId, objectId);
+          // The kind travels with the id, because that is the only shape the
+          // extractor writes: authoring_id_kind is NULL exactly when
+          // authoring_id is. Setting one without the other would produce a row
+          // no cache has, and would quietly stop two objects with the same id
+          // from colliding at that tier -- which is the thing a split test is
+          // about.
+          db.prepare(
+            'UPDATE objects SET authoring_id = ?, authoring_id_kind = ? WHERE id = ?',
+          ).run(
+            authoringId,
+            authoringId === null ? null : (authoringIdKind ?? 'revit-element-id'),
+            objectId,
+          );
         }
         if (instanceGuid !== undefined) {
           db.prepare('UPDATE objects SET instance_guid = ? WHERE id = ?').run(
@@ -447,11 +463,45 @@ function augmentDragonCache(path, build) {
 
     build(context);
 
+    // Every mutation above -- a move, a rename, a new object -- changes the
+    // shape of the tree, and a re-extraction is what these fixtures stand in
+    // for: the extractor recomputes objects.structural_key from the chain above
+    // each object, so leaving stale keys behind would let that identity tier
+    // answer a question the real cache cannot, and quietly disarm every test
+    // about falling through to a weaker tier.
+    recomputeStructuralKeys(db);
+
     const count = db.prepare('SELECT COUNT(*) AS total FROM objects').get().total;
     db.prepare('UPDATE meta SET value = ? WHERE key = ?').run(String(count), 'object_count');
     db.exec('COMMIT');
   } finally {
     db.close();
+  }
+}
+
+/**
+ * Recomputes every `objects.structural_key`, the way the extractor does.
+ *
+ * The same computation as `DocumentWalker.StructuralKey` and the fixture
+ * generators: a digest of (class name, display name, sibling position) chained
+ * through the parent's digest, from the model root down. Ordered by id, which
+ * is depth-first extraction order, so a parent's key is always in hand before
+ * its children need it.
+ */
+function recomputeStructuralKeys(db) {
+  const rows = db
+    .prepare('SELECT id, parent_id, path_index, display_name, class_name FROM objects ORDER BY id')
+    .all();
+  const update = db.prepare('UPDATE objects SET structural_key = ? WHERE id = ?');
+  const keys = new Map();
+  for (const row of rows) {
+    const parentKey = row.parent_id === null ? '' : (keys.get(row.parent_id) ?? '');
+    const material =
+      `${parentKey}\u001e${row.class_name ?? ''}\u001f${row.display_name ?? ''}` +
+      `\u001f${String(row.path_index)}`;
+    const key = createHash('sha256').update(material, 'utf8').digest('hex');
+    keys.set(row.id, key);
+    update.run(key, row.id);
   }
 }
 

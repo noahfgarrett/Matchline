@@ -9,6 +9,8 @@
  * Dragon spelling throughout (`docs/EXTRACTION.md`, "Confidentiality"): every
  * tag, GUID and file name here is invented.
  */
+import { createHash } from 'node:crypto';
+
 import { stableObjectIdentities } from '../dist/index.js';
 
 /** The invented model file every fixture object lives in. */
@@ -23,16 +25,41 @@ export const SOURCE_ID = 'dragon';
  * absent has to say so with `null`.
  */
 export function evidence(overrides = {}) {
-  return {
+  const facts = {
     logicalSourceId: SOURCE_ID,
     sourceModelPersistentId: MODEL_GUID,
     authoringId: 'id-MAH001-10-01',
+    authoringIdKind: 'revit-element-id',
     instanceGuid: '00000000-0000-4000-8000-000000000004',
     structuralPath: [0, 1, 2],
     className: 'Equipment',
     canonicalTag: 'MAH001-10-01',
     ...overrides,
   };
+  return {
+    ...facts,
+    // Derived rather than fixed, because the real thing is: the extractor's
+    // structural_key is a digest of the ancestor chain, so an object that moved
+    // in the tree gets a different one. A fixture that held it constant while
+    // moving the object would let this tier answer questions the real cache
+    // cannot, and every "a moved object falls through to a weaker tier" test
+    // would silently stop testing anything.
+    structuralKey:
+      'structuralKey' in overrides ? overrides.structuralKey : syntheticStructuralKey(facts),
+  };
+}
+
+/** 64 hex characters over the same facts the extractor chains its digest from. */
+function syntheticStructuralKey(facts) {
+  if (facts.structuralPath.length === 0) {
+    return null;
+  }
+  const material = [
+    facts.sourceModelPersistentId ?? '',
+    facts.className ?? '',
+    facts.structuralPath.join('.'),
+  ].join('|');
+  return createHash('sha256').update(material, 'utf8').digest('hex');
 }
 
 /** One candidate, from evidence plus the id the catalog would have minted. */

@@ -28,6 +28,14 @@
  *   root-relative child-index path, and its class name. Derived from the shape
  *   of the tree and never from content, so a re-extraction of an unchanged
  *   model under a new content hash produces the same key.
+ * - `structural-key` -- the source model's persistent id and the extractor's
+ *   own `objects.structural_key`: a digest of the ancestor chain of
+ *   (class, display name, sibling position) from the model's root. Weaker than
+ *   `structural` because it folds the display NAMES in as well, so renaming a
+ *   level breaks it where the bare child-index path survives. Stronger than
+ *   `tag` because it is still nothing a person edits, and it is the only tier
+ *   that can tell two identically-positioned objects in different branches
+ *   apart. Absent for a cache written before schema v3.
  * - `tag` -- the canonical tag. Reconciliation only: it is the field most
  *   likely to be corrected, so it can never be the reason two compiles agree
  *   when a stronger tier disagreed. A match here is reported as its own event.
@@ -40,6 +48,7 @@ export type StableKeyTier =
   | 'authoring-id'
   | 'instance-guid'
   | 'structural'
+  | 'structural-key'
   | 'tag';
 
 /** Every {@link StableKeyTier} in evidence order, for callers that walk it. */
@@ -48,6 +57,7 @@ export const STABLE_KEY_TIER_ORDER = [
   'authoring-id',
   'instance-guid',
   'structural',
+  'structural-key',
   'tag',
 ] as const satisfies ReadonlyArray<StableKeyTier>;
 
@@ -149,6 +159,18 @@ export interface ModelObjectIdentityEvidence {
    */
   readonly sourceModelPersistentId: string | null;
   readonly authoringId: string | null;
+  /**
+   * `objects.authoring_id_kind` -- which authoring system issued
+   * {@link authoringId}.
+   *
+   * Part of the key rather than a note beside it: a Revit ElementId and an
+   * AutoCAD handle can be the same digits and name different objects, so two
+   * ids only mean the same thing when their kinds agree too. `null` for a cache
+   * written before schema v3, which recorded ids without recording their
+   * origin; the key then uses a placeholder, so pre-v3 and post-v3 evidence for
+   * the same object do NOT match at this tier and fall through to a weaker one.
+   */
+  readonly authoringIdKind: string | null;
   readonly instanceGuid: string | null;
   /**
    * Sibling positions from the root of the object's own tree down to the object
@@ -157,6 +179,12 @@ export interface ModelObjectIdentityEvidence {
    */
   readonly structuralPath: ReadonlyArray<number>;
   readonly className: string | null;
+  /**
+   * `objects.structural_key` -- the extractor's digest of the ancestor chain.
+   * `null` for a cache written before schema v3, in which case the tier is
+   * simply absent rather than keyed on a placeholder.
+   */
+  readonly structuralKey: string | null;
   /** The profile-mapped stable id, when the site maps one and the object has it. */
   readonly stableIdPropertyValue?: string;
   /** The asset's canonical tag. `''` when the asset is untagged. */

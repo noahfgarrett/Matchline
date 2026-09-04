@@ -10,6 +10,7 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   EXTRACTION_CACHE_DDL,
   EXTRACTION_CACHE_DDL_V1,
+  EXTRACTION_CACHE_DDL_V2,
 } from '../../model-schema/dist/fixtures/dragon.js';
 
 /**
@@ -21,7 +22,8 @@ import {
  */
 const DDL_BY_VERSION = {
   1: EXTRACTION_CACHE_DDL_V1,
-  2: EXTRACTION_CACHE_DDL,
+  2: EXTRACTION_CACHE_DDL_V2,
+  3: EXTRACTION_CACHE_DDL,
 };
 
 /** A throwaway directory under the OS temp dir; callers remove it when done. */
@@ -33,7 +35,7 @@ export function makeTempDirectory(label) {
 const META = {
   // Matches EXTRACTION_CACHE_DDL, which this writes: a file declaring one
   // version while carrying another's tables is a shape no writer produces.
-  schema_version: '2',
+  schema_version: '3',
   input_file_name: 'Dragon-Synthetic.nwd',
   input_sha256: '0'.repeat(64),
   input_bytes: '2048',
@@ -76,25 +78,40 @@ export function writeSyntheticCache(path, content) {
     }
     insertMeta.run('object_count', String(objects.length));
 
+    // v3 columns are written only when the fixture declares v3; a v1/v2 file
+    // does not have them, and that is the whole point of DDL_BY_VERSION.
+    const withV3 = meta.schema_version === '3';
     const insertSourceModel = db.prepare(
-      'INSERT INTO source_models (id, parent_id, file_name, display_name, guid) VALUES (?, ?, ?, ?, ?)',
+      withV3
+        ? 'INSERT INTO source_models (id, parent_id, file_name, display_name, guid, ' +
+            'source_file_name, source_guid) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        : 'INSERT INTO source_models (id, parent_id, file_name, display_name, guid) ' +
+            'VALUES (?, ?, ?, ?, ?)',
     );
     for (const model of sourceModels) {
-      insertSourceModel.run(
+      const columns = [
         model.id,
         model.parentId ?? null,
         model.fileName ?? null,
         model.displayName ?? null,
         model.guid ?? null,
-      );
+      ];
+      if (withV3) {
+        columns.push(model.sourceFileName ?? null, model.sourceGuid ?? null);
+      }
+      insertSourceModel.run(...columns);
     }
 
     const insertObject = db.prepare(
-      'INSERT INTO objects (id, source_model_id, parent_id, path_index, depth, display_name, class_name, ' +
-        'instance_guid, authoring_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      withV3
+        ? 'INSERT INTO objects (id, source_model_id, parent_id, path_index, depth, display_name, ' +
+            'class_name, instance_guid, authoring_id, authoring_id_kind, structural_key, flags) ' +
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        : 'INSERT INTO objects (id, source_model_id, parent_id, path_index, depth, display_name, ' +
+            'class_name, instance_guid, authoring_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     for (const [index, object] of objects.entries()) {
-      insertObject.run(
+      const objectColumns = [
         object.id,
         // An explicit null means "the cache attributes this to no source
         // model", which is not the same as leaving the field out.
@@ -111,7 +128,24 @@ export function writeSyntheticCache(path, content) {
           ? `00000000-0000-4000-8000-${String(object.id).padStart(12, '0')}`
           : object.instanceGuid,
         object.authoringId ?? null,
-      );
+      ];
+      if (withV3) {
+        objectColumns.push(
+          // Paired with the id: an id with no kind, or a kind with no id, is a
+          // shape the extractor never writes.
+          object.authoringId === undefined || object.authoringId === null
+            ? null
+            : (object.authoringIdKind ?? 'revit-element-id'),
+          // Derived from the id so every object has one without a test saying
+          // so, and overridable (`null` included) for the same reason the
+          // InstanceGuid is.
+          object.structuralKey === undefined
+            ? String(object.id).padStart(64, 'b')
+            : object.structuralKey,
+          object.flags ?? 0,
+        );
+      }
+      insertObject.run(...objectColumns);
     }
 
     const insertProperty = db.prepare(
