@@ -44,6 +44,9 @@ const KIND_LABELS: Readonly<Record<string, string>> = {
   // P0-9: a decision recorded against an asset id this compile cannot find. The
   // decision is kept, note and all; what is lost is the thing it pointed at.
   'orphaned-decision': 'Stored decision no longer resolves',
+  // P0-9, the other direction: an id was KEPT on the strength of a tag alone,
+  // in circumstances where a reused tag is as likely as a re-tagged unit.
+  'possible-rematch': 'Kept its id on the tag alone',
 };
 
 const DECISIONS: ReadonlyArray<readonly [WireDecisionValue, string]> = [

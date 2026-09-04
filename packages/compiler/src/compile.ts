@@ -95,6 +95,7 @@ import {
   applyLedgerMapping,
   decisionResolverOf,
   ledgerCandidateOf,
+  possibleRematches,
   resolveDerivedAssignments,
   resolveManualAssignments,
   resolveManualOverrides,
@@ -477,6 +478,11 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
   );
   const catalog = applyLedgerMapping(modelCatalog, ledgerResult.mapping);
   const identityLedger = ledgerResult.ledger;
+  // The subset of tag-tier re-matches where a reused tag is as likely as a
+  // re-tagged unit. The re-match itself has already happened -- refusing it
+  // would orphan every decision recorded against the id -- so this is a
+  // question, not a refusal (P0-9).
+  const rematchQuestions = possibleRematches(input.identityLedger ?? null, ledgerResult);
 
   stage('properties');
   const sourceFiles = new Map<string, string>();
@@ -843,6 +849,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     // Stored decisions the ledger could not re-address. Raised before the
     // stages that would have consumed them, because a decision nobody can see
     // is exactly what P0-9 forbids.
+    rematchQuestions,
     manualParents.reviewItems,
     manualSystems?.reviewItems ?? [],
     derivedAssignments.reviewItems,

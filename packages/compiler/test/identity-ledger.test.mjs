@@ -575,3 +575,109 @@ test('a derived assignment nobody can re-aim is reported, never dropped', () => 
     'and nothing was assigned to an asset nobody meant',
   );
 });
+
+/**
+ * A tag re-match against an entry that had VANISHED is a question, not a
+ * silence (P0-9).
+ *
+ * The `tag` tier is the weakest rung and the only one not scoped to a model
+ * file. It exists so a re-extraction with no stable evidence still carries an
+ * id forward — and the cost is that a number a site retires and reuses hands
+ * the new equipment the old unit's id, and with it every manual system, manual
+ * parent and review decision recorded against it. The re-match still happens,
+ * because refusing it would mint a fresh id and orphan all of that. What was
+ * missing was anyone being told.
+ */
+test('a tag-only re-match against a disappeared entry raises a possible-rematch', () => {
+  // 1. The whole site: every asset gets an id on model evidence.
+  const first = compileProject(fullInput(plain.cache));
+
+  // 2. A revision of the model that does not contain it at all — the unit was
+  //    decommissioned. Its entry is KEPT and marked `disappeared`, which is
+  //    what makes the decisions recorded against it still resolvable.
+  const without = openDragonSubset('ledger-rematch-gone', {
+    tagFilter: (tag) => tag !== TAG,
+  });
+  let second;
+  try {
+    second = compileProject(fullInput(without.cache, { identityLedger: first.identityLedger }));
+  } finally {
+    without.close();
+  }
+  const vanished = second.identityLedger.entries.find((entry) => entry.assetId === idOf(TAG));
+  assert.equal(vanished.status, 'disappeared');
+
+  // 3. It comes back — under the same tag, on an object with none of the model
+  //    evidence the ledger remembers. Exactly what a reused tag looks like from
+  //    the outside, and exactly what a rebuilt model looks like too, which is
+  //    why this is a review item rather than a refusal.
+  const reissued = openDragonCache('ledger-rematch-back', (context) => {
+    const id = context.objectIdOfTag(TAG);
+    context.setObjectIdentity(id, {
+      authoringId: 'id-reissued-777',
+      instanceGuid: '00000000-0000-4000-8000-000000007771',
+    });
+    context.moveUnder(TAG, context.layerId('D2', 1), 2);
+  });
+  try {
+    const third = compileProject(
+      fullInput(reissued.cache, { identityLedger: second.identityLedger }),
+    );
+
+    assert.ok(
+      third.identityLedgerEvents.some(
+        (event) => event.kind === 'rematched-by-tag' && event.assetId === idOf(TAG),
+      ),
+      'the ledger still reports the re-match as an event',
+    );
+
+    const questions = third.reviewItems.filter((item) => item.kind === 'possible-rematch');
+    assert.deepEqual(questions, [
+      {
+        kind: 'possible-rematch',
+        assetId: idOf(TAG),
+        canonicalTag: TAG,
+        reason: 'reappeared',
+        previousSourceIds: ['dragon'],
+        sourceIds: ['dragon'],
+      },
+    ]);
+
+    // The id itself was kept, which is the point: the decisions recorded
+    // against it still apply while the question is open.
+    assert.ok(third.snapshot.nodes.has(idOf(TAG)));
+  } finally {
+    reissued.close();
+  }
+});
+
+test('an ordinary tag re-match, on an entry that never vanished, stays an event', () => {
+  const first = compileProject(fullInput(plain.cache));
+  // Same object, same place, new authoring evidence: a model re-exported by a
+  // tool that renumbers. The tag carries it, and nothing about that is
+  // suspicious.
+  const reexported = openDragonCache('ledger-rematch-plain', (context) => {
+    const id = context.objectIdOfTag(TAG);
+    context.setObjectIdentity(id, {
+      authoringId: 'id-reexported-888',
+      instanceGuid: '00000000-0000-4000-8000-000000008881',
+    });
+    context.moveUnder(TAG, context.layerId('D2', 1), 2);
+  });
+  try {
+    const second = compileProject(
+      fullInput(reexported.cache, { identityLedger: first.identityLedger }),
+    );
+    assert.ok(
+      second.identityLedgerEvents.some((event) => event.kind === 'rematched-by-tag'),
+      'still reported as an event',
+    );
+    assert.deepEqual(
+      second.reviewItems.filter((item) => item.kind === 'possible-rematch'),
+      [],
+      'but not as a question: the entry was there all along, in the same document',
+    );
+  } finally {
+    reexported.close();
+  }
+});

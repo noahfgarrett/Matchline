@@ -69,7 +69,7 @@ export { aggregateReviewItems } from './review.js';
  * Answering it a second way in the app is how two rows survive and a phantom
  * `ambiguous-parent` appears.
  */
-export { decisionResolverOf } from './identity-ledger.js';
+export { decisionResolverOf, possibleRematches } from './identity-ledger.js';
 export type {
   DecisionResolution,
   ResolutionStatus,

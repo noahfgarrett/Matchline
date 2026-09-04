@@ -9,7 +9,7 @@ import {
 } from './dist/review.fixture.js';
 
 test('every review item kind summarizes to a non-empty line', () => {
-  assert.equal(DRAGON_REVIEW_ITEMS.length, 17);
+  assert.equal(DRAGON_REVIEW_ITEMS.length, 18);
   const kinds = new Set();
   for (const item of DRAGON_REVIEW_ITEMS) {
     kinds.add(item.kind);
@@ -223,4 +223,15 @@ test('an unknown review item kind is rejected rather than silently summarized', 
     () => reviewItemSummary({ kind: 'vibes' }),
     /unhandled ReviewItem.*vibes/s,
   );
+});
+
+test('a tag-only re-match against a vanished entry is a question, not a silence', () => {
+  const rematch = DRAGON_REVIEW_ITEMS[17];
+  assert.equal(rematch.kind, 'possible-rematch');
+  // The asset and the tag, because the tag IS the whole of the evidence, and
+  // the reason, because "it had vanished" and "it lived somewhere else" are
+  // different things for a reviewer to check.
+  assert.match(reviewItemSummary(rematch), /asset-0009/);
+  assert.match(reviewItemSummary(rematch), /MAH009-10-01/);
+  assert.match(reviewItemSummary(rematch), /reappeared/);
 });

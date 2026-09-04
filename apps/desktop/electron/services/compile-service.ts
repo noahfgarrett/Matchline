@@ -280,6 +280,11 @@ function assetIdsOf(item: ReviewItem): readonly string[] {
       // The absorbed object is no longer an asset, so the only row that can
       // carry this flag is the one that swallowed it.
       return [item.absorbingAssetId];
+    // The asset that inherited the id is in this compile and is exactly the row
+    // a reviewer wants to look at: "is this the same unit the decisions were
+    // recorded against, or a tag somebody reused?" (P0-9).
+    case 'possible-rematch':
+      return [item.assetId];
     // A counted item is about a level, a rung or a resolver chain rather than
     // about one asset. Its examples name assets, but flagging ten tree rows out
     // of forty thousand would be arbitrary -- the row to work is the item.

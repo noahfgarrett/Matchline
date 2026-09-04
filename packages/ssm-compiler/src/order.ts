@@ -379,6 +379,12 @@ export function reviewKey(item: ReviewItem): string {
         field(item.absorbingAssetId),
         String(item.objectId),
       );
+    case 'possible-rematch':
+      // The asset and why it is being asked about. Not the sources, and not the
+      // tag: the sources are the evidence FOR the question and the tag is what
+      // a re-tag would change, and a person who has already answered "yes, same
+      // unit" must not be asked again because a third source now carries it.
+      return composeKey(item.kind, field(item.assetId), field(item.reason));
     case 'orphaned-decision':
       // Both spellings and the reason, but not the note: the note is what the
       // person wrote, and two people writing different notes about the same

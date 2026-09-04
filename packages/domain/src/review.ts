@@ -331,6 +331,50 @@ export interface OrphanedDecisionReviewItem {
   readonly note?: string;
 }
 
+/**
+ * Why a tag-only re-match is worth a person's eye rather than only an event.
+ *
+ * - `reappeared` — the entry's last recorded state was `disappeared`. The asset
+ *   was not in the previous compile at all, and the only thing tying this one
+ *   to it is a string somebody types.
+ * - `different-source` — the entry was last read from one set of registered
+ *   sources and this compile read it from another. Equipment does move between
+ *   documents; so does a tag that was reused for something else.
+ */
+export type PossibleRematchReason = 'reappeared' | 'different-source';
+
+/**
+ * The identity ledger tied this asset to a previous entry by TAG ALONE, and the
+ * circumstances make that worth checking (P0-9).
+ *
+ * The `tag` tier is the weakest rung of the evidence order and the only one
+ * that is not scoped to a model file: it exists so that a re-extraction with no
+ * stable model evidence still carries an id forward. The cost is that a tag
+ * reused for new equipment inherits the retired equipment's id — and with it
+ * every manual system, every manual parent and every review decision recorded
+ * against it. That is exactly right when the site re-tagged a unit, and exactly
+ * wrong when it retired one and reused the number.
+ *
+ * A tag re-match on its own is ordinary and is reported as a ledger event.
+ * This item is the subset where nothing else agrees the two are the same thing:
+ * the entry had vanished, or it lived in different documents. The re-match
+ * still HAPPENS — refusing it would mint a new id and orphan the decisions,
+ * which is the failure the ledger exists to prevent — and this says so, so a
+ * person can split them if it was wrong.
+ */
+export interface PossibleRematchReviewItem {
+  readonly kind: 'possible-rematch';
+  /** The ledger id the asset inherited. */
+  readonly assetId: string;
+  /** The tag both compiles carry, which is the whole of the evidence. */
+  readonly canonicalTag: string;
+  readonly reason: PossibleRematchReason;
+  /** The sources the ledger last saw this asset in. Empty for a new project. */
+  readonly previousSourceIds: ReadonlyArray<string>;
+  /** The sources this compile read it from. */
+  readonly sourceIds: ReadonlyArray<string>;
+}
+
 export type ReviewItem =
   | SystemConflictReviewItem
   | DuplicateModelTagReviewItem
@@ -348,7 +392,8 @@ export type ReviewItem =
   | DeadClaimRuleReviewItem
   | UnresolvableAliasReviewItem
   | AbsorbedTaggedComponentReviewItem
-  | OrphanedDecisionReviewItem;
+  | OrphanedDecisionReviewItem
+  | PossibleRematchReviewItem;
 
 /**
  * A one-line description of what needs deciding.
@@ -408,6 +453,11 @@ export function reviewItemSummary(item: ReviewItem): string {
       return `alias ${item.evidenceTag} -> ${item.aliasTarget}: no asset carries that tag`;
     case 'absorbed-tagged-component':
       return `tag ${item.absorbedTag} was absorbed into ${item.absorbingAssetId} (object ${item.objectId})`;
+    case 'possible-rematch':
+      return (
+        `asset ${item.assetId} (${item.canonicalTag}) kept its id on the tag alone ` +
+        `(${item.reason})`
+      );
     case 'orphaned-decision': {
       // The other end is named only when the decision has one, so a make-root
       // or a system assignment does not read as a decision about nothing.

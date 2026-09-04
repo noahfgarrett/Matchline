@@ -144,6 +144,8 @@ export type {
   OrphanedDecisionKind,
   OrphanedDecisionReason,
   OrphanedDecisionReviewItem,
+  PossibleRematchReason,
+  PossibleRematchReviewItem,
   ReviewItem,
   StructuralCycleReviewItem,
   SystemCatalogConflictReviewItem,

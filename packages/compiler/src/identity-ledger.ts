@@ -32,12 +32,19 @@ import type {
   OrphanedDecisionKind,
   OrphanedDecisionReason,
   OrphanedDecisionReviewItem,
+  PossibleRematchReason,
+  PossibleRematchReviewItem,
   ReviewItem,
 } from '@matchline/domain';
 import type { AssetCatalog, ModelAsset } from '@matchline/asset-catalog';
 import { uniqueTagAssetId } from '@matchline/asset-catalog';
 import { stableObjectIdentities } from '@matchline/asset-identity';
-import type { AssetLedger, LedgerCandidate } from '@matchline/asset-identity';
+import type {
+  AssetLedger,
+  AssetLedgerEntry,
+  LedgerCandidate,
+  ReconcileLedgerResult,
+} from '@matchline/asset-identity';
 import type { ManualAssignment, ManualAssignments } from '@matchline/system-resolver';
 
 /**
@@ -183,6 +190,107 @@ export function decisionResolverOf(
     const [assetId] = matches;
     return assetId === undefined ? UNKNOWN : { status: 'resolved', assetId };
   };
+}
+
+/**
+ * The tag-only re-matches that are worth a person's eye (P0-9).
+ *
+ * `reconcileLedger` already reports EVERY tag-tier match as a
+ * `rematched-by-tag` event, and most of them are ordinary: a model re-exported
+ * without the stable evidence it had last time, an object rebuilt in place. An
+ * event is the right weight for those — it is a line in the ledger view, not a
+ * question.
+ *
+ * These are the subset where nothing except the string agrees the two are the
+ * same thing:
+ *
+ * - the previous entry's last recorded state was `disappeared`, so the asset
+ *   was not in the last compile at all and a tag is the only thread back to it;
+ * - the sources it was last read from and the sources it was read from now do
+ *   not overlap, so the equipment either moved documents or the number was
+ *   reused in another one.
+ *
+ * Both are exactly what a retired-and-reused tag looks like — and inheriting
+ * that entry hands new equipment every manual system, manual parent and review
+ * decision the retired unit accumulated. The re-match still happens: refusing
+ * it would mint a fresh id and orphan those decisions, which is the failure the
+ * ledger exists to prevent. This is how the person who knows the site gets to
+ * say it was wrong.
+ *
+ * `previous` is the ledger the last compile wrote — `null` for a project's
+ * first compile, which produces nothing here because there is nothing to have
+ * re-matched against.
+ */
+export function possibleRematches(
+  previous: AssetLedger | null,
+  result: ReconcileLedgerResult,
+): ReadonlyArray<PossibleRematchReviewItem> {
+  if (previous === null) {
+    return [];
+  }
+  const before = new Map(previous.entries.map((entry) => [entry.assetId, entry]));
+  const after = new Map(result.ledger.entries.map((entry) => [entry.assetId, entry]));
+
+  const items: PossibleRematchReviewItem[] = [];
+  for (const event of result.events) {
+    if (event.kind !== 'rematched-by-tag') {
+      continue;
+    }
+    const was = before.get(event.assetId);
+    const now = after.get(event.assetId);
+    if (was === undefined || now === undefined) {
+      continue;
+    }
+    const previousSourceIds = sourceIdsOf(was);
+    const sourceIds = sourceIdsOf(now);
+    // `disappeared` first: an asset that was not there at all is the stronger
+    // statement, and one item per asset beats two rows asking the same question
+    // twice.
+    const reason: PossibleRematchReason | null =
+      was.status === 'disappeared'
+        ? 'reappeared'
+        : disjoint(previousSourceIds, sourceIds)
+          ? 'different-source'
+          : null;
+    if (reason === null) {
+      continue;
+    }
+    items.push({
+      kind: 'possible-rematch',
+      assetId: event.assetId,
+      canonicalTag: now.currentCanonicalTag,
+      reason,
+      previousSourceIds,
+      sourceIds,
+    });
+  }
+  return items;
+}
+
+/** The registered sources one entry's evidence was read from, sorted, deduped. */
+function sourceIdsOf(entry: AssetLedgerEntry): ReadonlyArray<string> {
+  const ids = new Set<string>();
+  for (const identity of entry.modelIdentities) {
+    if (identity.logicalSourceId !== '') {
+      ids.add(identity.logicalSourceId);
+    }
+  }
+  return [...ids].sort();
+}
+
+/**
+ * Whether two source lists have nothing in common.
+ *
+ * An empty list on either side is NOT disjoint: an entry carrying no model
+ * identities says nothing about where it came from, and inventing a question
+ * out of missing evidence would put a row in the queue on every compile of a
+ * project whose ledger predates the field.
+ */
+function disjoint(left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean {
+  if (left.length === 0 || right.length === 0) {
+    return false;
+  }
+  return !left.some((id) => right.includes(id));
 }
 
 /** The manual parent decisions that still apply, and the ones that do not. */

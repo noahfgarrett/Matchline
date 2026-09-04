@@ -158,6 +158,19 @@ export const DRAGON_REVIEW_ITEMS = [
     assetCount: 8,
     exampleAssetIds: ['asset-0009'],
   },
+  {
+    // A tag the site reused: the unit it named was retired, its ledger entry was
+    // marked `disappeared`, and the new equipment carrying that number has just
+    // inherited its id and every decision recorded against it (P0-9). The
+    // re-match still happens — refusing it would orphan those decisions — and
+    // this is how a person gets to say it was wrong.
+    kind: 'possible-rematch',
+    assetId: 'asset-0009',
+    canonicalTag: 'MAH009-10-01',
+    reason: 'reappeared',
+    previousSourceIds: ['model:dragon-mechanical.nwc'],
+    sourceIds: ['model:dragon-mechanical.nwc'],
+  },
 ] as const satisfies ReadonlyArray<ReviewItem>;
 
 /**

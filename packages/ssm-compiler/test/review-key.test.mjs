@@ -96,6 +96,14 @@ const EVERY_KIND = [
     absorbingAssetId: 'tag:MAH001-10-01',
     objectId: 57,
   },
+  {
+    kind: 'possible-rematch',
+    assetId: 'tag:MAH001-10-01',
+    canonicalTag: 'MAH001-10-01',
+    reason: 'reappeared',
+    previousSourceIds: ['dragon-mechanical'],
+    sourceIds: ['dragon-controls'],
+  },
 ];
 
 test('every review kind produces a key, and no two kinds collide', () => {
@@ -380,4 +388,33 @@ test('a counted item is keyed by its group, so the count can change without orph
     reviewKey({ kind: 'boundary-demotion', levelId, ladderSource, pairCount: 1, exampleAssetIds: [] });
   assert.notEqual(demotion('building', 'flow-family'), demotion('building', 'family-role'));
   assert.notEqual(demotion('building', 'flow-family'), demotion('system', 'flow-family'));
+});
+
+/**
+ * A possible re-match is keyed by the asset and why it is being asked about,
+ * and by nothing else.
+ *
+ * Not by the tag, which is the field a correction changes; not by the sources,
+ * which are the evidence FOR the question rather than the question. Somebody
+ * who has answered "yes, same unit" must not be asked again because a third
+ * document now carries it.
+ */
+test('a possible re-match key survives a re-tag and a change of source', () => {
+  const base = {
+    kind: 'possible-rematch',
+    assetId: 'tag:MAH001-10-01',
+    canonicalTag: 'MAH001-10-01',
+    reason: 'reappeared',
+    previousSourceIds: ['dragon-mechanical'],
+    sourceIds: ['dragon-mechanical'],
+  };
+  const key = reviewKey(base);
+  assert.equal(
+    reviewKey({ ...base, canonicalTag: 'MAH001-10-99', sourceIds: ['dragon-controls'] }),
+    key,
+  );
+  // The reason is part of it, because "it had vanished" and "it lived
+  // somewhere else" are different things for a person to go and check.
+  assert.notEqual(reviewKey({ ...base, reason: 'different-source' }), key);
+  assert.notEqual(reviewKey({ ...base, assetId: 'tag:MAH001-10-02' }), key);
 });
