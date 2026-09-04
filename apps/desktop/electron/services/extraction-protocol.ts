@@ -20,22 +20,23 @@
  * (`ExtractionStages`). `detect` names the Navisworks that will open the file
  * and is the only stage that always carries a `detail` sentence.
  *
- * `sets` sits between the walk and the convert because that is where
- * `DocumentWalker` emits it: the saved sets are resolved after the tree has
- * been walked and before the stream is turned into a cache. It is its own stage
- * rather than part of the walk because resolving one saved search re-runs that
- * search over the whole model — a document with a few dozen of them sits here
- * for minutes after the last object record was written, and without a line of
- * its own the walk counter simply stops moving and the run looks hung. Unlike
- * the walk and the convert it knows its total, because the set tree is counted
+ * `sets` sits between the open and the walk because that is where
+ * `DocumentWalker` emits it: every saved set is resolved BEFORE the tree walk
+ * starts, so the walk can write a membership row as it reaches each item and
+ * never has to hold a handle on every object in the model until the last set is
+ * done. It is its own stage rather than part of the open because resolving one
+ * saved search runs that search over the whole document — a set-heavy model
+ * sits here for minutes before a single object record is written, and without a
+ * line of its own the run looks like an open that never finished. Unlike the
+ * walk and the convert it knows its total, because the set tree is counted
  * before the first one is resolved.
  */
 export const EXTRACTION_STAGES = [
   'hash',
   'detect',
   'open',
-  'walk',
   'sets',
+  'walk',
   'convert',
   'finalize',
 ] as const;
@@ -70,6 +71,17 @@ export const LAUNCHER_ERROR_CODES = {
   pluginNotDeployed: 'PLUGIN_NOT_DEPLOYED',
   /** Navisworks ran and the add-in never wrote a stream at all. */
   pluginNotFound: 'PLUGIN_NOT_FOUND',
+  /**
+   * The document opened without one or more of the files it references, so the
+   * extraction describes less than the input does and was thrown away.
+   *
+   * Its own code because the run looks like a success from every other angle —
+   * Navisworks opened, the walk finished, the cache passed its own integrity
+   * checks — while describing a site with a whole discipline missing. An NWF
+   * whose referenced models have moved is the usual cause, which is also why an
+   * NWF is never served from cache without being opened again.
+   */
+  sourceModelMissing: 'SOURCE_MODEL_MISSING',
   cacheWriteFailed: 'CACHE_WRITE_FAILED',
   internal: 'INTERNAL',
 } as const;
@@ -119,6 +131,7 @@ const EXIT_CODE_TO_ERROR: ReadonlyMap<number, string> = new Map([
   [10, LAUNCHER_ERROR_CODES.navisworksStalled],
   [11, LAUNCHER_ERROR_CODES.pluginNotDeployed],
   [12, LAUNCHER_ERROR_CODES.pluginNotFound],
+  [13, LAUNCHER_ERROR_CODES.sourceModelMissing],
 ]);
 
 /**
@@ -314,6 +327,21 @@ export function extractorArguments(
 /** The file name the launcher gives a cache built from these bytes. */
 export function cacheFileName(rawSha256: string): string {
   return `${rawSha256}.sqlite`;
+}
+
+/**
+ * Whether an input only REFERENCES its models rather than containing them.
+ *
+ * An NWF, today. Its bytes are a list of references, so they can be identical
+ * while the models behind them have moved, been replaced, or gone missing — the
+ * content hash addresses the wrong thing, and a cache-hit on it would serve an
+ * answer about files nobody looked at. Both this process and the launcher skip
+ * their cache-hit check for one (`ExtractionRunner.IsReferencingInput`); the
+ * cache is still FILED under the hash, because that is what the caller asked
+ * about.
+ */
+export function isReferencingInput(inputPath: string): boolean {
+  return inputPath.toLowerCase().endsWith('.nwf');
 }
 
 /** The two files a run leaves behind if it is killed before it can tidy up. */

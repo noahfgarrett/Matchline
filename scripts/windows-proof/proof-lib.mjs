@@ -42,10 +42,15 @@ export const EXIT_CODES = {
   navisworksStalled: 10,
   pluginNotDeployed: 11,
   pluginNotFound: 12,
+  sourceModelMissing: 13,
 };
 
-/** Stage names, from `native/navisworks-common/Protocol/ExtractionProtocol.cs`. */
-export const STAGES = ['hash', 'detect', 'open', 'walk', 'sets', 'convert', 'finalize'];
+/**
+ * Stage names, from `native/navisworks-common/Protocol/ExtractionProtocol.cs`.
+ * `sets` before `walk`: the adapter resolves every saved set before it starts
+ * walking, so it never has to hold a handle on every object in the model.
+ */
+export const STAGES = ['hash', 'detect', 'open', 'sets', 'walk', 'convert', 'finalize'];
 
 /** The launcher's own executable name, as it is built and as it ships. */
 const EXTRACTOR_EXECUTABLE = 'Matchline.Extractor.exe';

@@ -23,6 +23,7 @@ import {
   cacheFileName,
   errorCodeForExitCode,
   extractorArguments,
+  isReferencingInput,
   partialFileNames,
   type ExtractionMessage,
 } from './extraction-protocol.js';
@@ -888,8 +889,15 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
     // The cache-hit check happens here as well as inside the launcher, and
     // that is the point: a model that has not changed must never start
     // Navisworks at all (docs/EXTRACTION.md, "Cache reuse by content hash").
+    //
+    // Except for an NWF, whose bytes are a list of references rather than a
+    // model: they can be identical while the files behind them have moved or
+    // gone, so a hit on the hash would answer about files nobody looked at. The
+    // launcher skips its own check for the same reason
+    // (`ExtractionRunner.IsReferencingInput`), and skipping it in only one of
+    // the two places would leave the other serving the stale answer.
     const cachePath = path.join(options.cacheDirectory, cacheFileName(rawSha256));
-    if (existsSync(cachePath)) {
+    if (!isReferencingInput(job.inputPath) && existsSync(cachePath)) {
       const validation = validateCache(cachePath, rawSha256, job.expectedByteSize);
       if (validation.ok) {
         await associate(job, cachePath, rawSha256, validation, true);

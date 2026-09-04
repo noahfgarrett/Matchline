@@ -180,7 +180,7 @@ test('validate-cache reads the cache the launcher wrote and counts it', () => {
   assert.deepEqual(failedChecks(report), []);
   assert.equal(run.status, 0);
   assert.equal(report.facts.objects, 76);
-  assert.equal(report.facts.schemaVersion, '2');
+  assert.equal(report.facts.schemaVersion, '3');
   assert.equal(report.facts.selectionSets, 3);
 });
 

@@ -62,6 +62,13 @@ const FAILURE_COPY: Readonly<Record<string, string>> = {
     'check the Navisworks log named in the detail below, open Navisworks once by hand to let ' +
     'it settle any prompts, then add the file again.',
 
+  [LAUNCHER_ERROR_CODES.sourceModelMissing]:
+    'Navisworks opened this file but could not find every model it points at, so what was read ' +
+    'is missing whole packages of equipment. Nothing was saved, on purpose: a part of the site ' +
+    'recorded as if it were all of it is worse than no extraction at all. The files it could not ' +
+    'find are named below — put them back where this file expects them, or reopen it in ' +
+    'Navisworks and repoint it at where they are now, save it, and add it again.',
+
   [LAUNCHER_ERROR_CODES.cacheWriteFailed]:
     'The model was read but the extraction cache failed its integrity check, so it was thrown ' +
     'away rather than kept. Check there is free disk space, then add the file again.',
@@ -159,6 +166,13 @@ const WARNING_COPY: Readonly<Record<string, string>> = {
   SOURCE_MODEL_READ_FAILED:
     'One of the models appended into this file could not be read; the equipment it holds is ' +
     'not in this extraction.',
+  // `WarningCodes.SourceModelMissing`. Always error severity, and the launcher
+  // refuses to commit a cache that carries one — so this line is only ever seen
+  // as the detail behind the SOURCE_MODEL_MISSING failure above, naming which
+  // file was absent.
+  SOURCE_MODEL_MISSING:
+    'A model this file points at was not where it expects it, so nothing was loaded from it and ' +
+    'everything it holds is absent. The extraction was discarded rather than kept incomplete.',
 };
 
 /** The plain-language line for a failure, with the launcher's own detail after it. */

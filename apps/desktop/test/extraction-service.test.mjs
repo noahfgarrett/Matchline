@@ -984,20 +984,24 @@ test('an upper-case hash is folded rather than rejected', async () => {
  * Saved-set resolution is a stage of its own, and the row says so.
  *
  * `ExtractionStages.Sets` (native/navisworks-common/Protocol/
- * ExtractionProtocol.cs) exists because resolving one saved search re-runs that
- * search over the whole model: a set-heavy document sits there for minutes
- * after the last object record was written, and a build that dropped the stage
- * — which this one did, by not listing it — showed the user a walk counter that
- * had stopped moving. It is asserted here in three places at once, because a
- * stage that only one side knows about is the bug: the launcher emits it, the
- * protocol lists it in the launcher's own order, and the service turns it into
- * a row a person can read.
+ * ExtractionProtocol.cs) exists because resolving one saved search runs that
+ * search over the whole model: a set-heavy document sits there for minutes, and
+ * a build that dropped the stage — which this one did, by not listing it —
+ * showed the user a counter that had stopped moving. It is asserted here in
+ * three places at once, because a stage that only one side knows about is the
+ * bug: the launcher emits it, the protocol lists it in the launcher's own
+ * order, and the service turns it into a row a person can read.
+ *
+ * It sits BEFORE the walk, and that is load-bearing rather than cosmetic: the
+ * adapter resolves every set first so the walk can write each item's membership
+ * as it reaches it, instead of pinning a handle to every object in the model
+ * until the last set is done.
  */
 test('the saved-set stage is emitted, listed, and turned into a line in the row', async (t) => {
   assert.deepEqual(
     [...EXTRACTION_STAGES],
-    ['hash', 'detect', 'open', 'walk', 'sets', 'convert', 'finalize'],
-    'the stage list is the launcher order, sets between the walk and the convert',
+    ['hash', 'detect', 'open', 'sets', 'walk', 'convert', 'finalize'],
+    'the stage list is the launcher order, sets between the open and the walk',
   );
 
   const cacheDir = newCacheDir('sets');
@@ -1023,14 +1027,14 @@ test('the saved-set stage is emitted, listed, and turned into a line in the row'
   await extraction.whenIdle();
   assert.equal(extraction.job('model:sets').status, 'ready');
 
-  // Every announcement, in order, so "between the walk and the convert" is
+  // Every announcement, in order, so "between the open and the walk" is
   // checked against what actually reached the row rather than against the fake.
   const walkAt = changes.findIndex((change) => change.detail.includes('records read from the model'));
   const setsAt = changes.findIndex((change) => change.detail.includes('saved selection and search sets'));
   const convertAt = changes.findIndex((change) => change.detail.includes('records written to the cache'));
-  assert.ok(walkAt >= 0, 'the walk reported');
-  assert.ok(setsAt > walkAt, `the sets stage reached the row after the walk (saw ${setsAt})`);
-  assert.ok(convertAt > setsAt, 'and before the convert');
+  assert.ok(setsAt >= 0, 'the sets stage reported');
+  assert.ok(walkAt > setsAt, `the walk reached the row after the sets (saw ${walkAt})`);
+  assert.ok(convertAt > walkAt, 'and the convert after the walk');
 
   const setLines = changes.filter((change) => change.detail.includes('saved selection and search sets'));
   for (const line of setLines) {
@@ -1045,6 +1049,109 @@ test('the saved-set stage is emitted, listed, and turned into a line in the row'
     'reported as a real fraction of a real total, not as "unknown"',
   );
   assert.match(setLines.at(-1).detail, /2 of 2/);
+});
+
+/* ---------------------------------------------------------------- NWF inputs */
+
+/**
+ * An NWF holds a list of references, not a model.
+ *
+ * Two consequences, and this is where both are checked from the outside: its
+ * bytes are not evidence about the models behind them, so a cache filed under
+ * its hash is never served without opening it again; and a document that opened
+ * without one of those models produces an extraction that is missing whole
+ * packages of equipment while looking, from every other angle, like a success.
+ */
+test('an unchanged NWF is opened again rather than served from its cache', async (t) => {
+  const cacheDir = newCacheDir('nwf-reopen');
+  const modelPath = writeModel('Dragon-Coordination.nwf', { walkTicks: 1 });
+
+  const extraction = createExtractionService({
+    cacheDirectory: cacheDir,
+    launcher: fakeLauncher(),
+    onChanged: () => {},
+    onSettled: () => {},
+  });
+  t.after(() => {
+    extraction.shutdown();
+  });
+
+  const runOnce = async (sourceId) => {
+    extraction.enqueue({
+      sourceId,
+      fileName: 'Dragon-Coordination.nwf',
+      inputPath: modelPath,
+      rawSha256: null,
+    });
+    await extraction.whenIdle();
+    return extraction.job(sourceId);
+  };
+
+  const first = await runOnce('model:nwf-a');
+  assert.equal(first.status, 'ready');
+
+  // The same bytes a second time. An NWD would come back as a cache hit here —
+  // that is the promise "the same model twice never starts Navisworks again" —
+  // and an NWF must not, because identical bytes say nothing about whether the
+  // files they point at have moved since.
+  const second = await runOnce('model:nwf-b');
+  assert.equal(
+    second.status,
+    'ready',
+    'an NWF was served from cache (`cache-hit`) without anyone checking its references',
+  );
+
+  // The launch log is the proof it really ran twice rather than being answered
+  // from this process.
+  const log = readFileSync(join(cacheDir, 'fake-extractor.log'), 'utf8');
+  assert.equal(
+    log.split('\n').filter((line) => line.startsWith('start ')).length,
+    2,
+  );
+});
+
+test('an NWF that opened without one of its models is refused, not half-kept', async (t) => {
+  const cacheDir = newCacheDir('nwf-missing');
+  const modelPath = writeModel('Dragon-Broken.nwf', {
+    mode: 'missing-reference',
+    missingFileName: 'Dragon-Electrical.nwc',
+  });
+
+  const extraction = createExtractionService({
+    cacheDirectory: cacheDir,
+    launcher: fakeLauncher(),
+    onChanged: () => {},
+    onSettled: () => {},
+  });
+  t.after(() => {
+    extraction.shutdown();
+  });
+
+  extraction.enqueue({
+    sourceId: 'model:nwf-missing',
+    fileName: 'Dragon-Broken.nwf',
+    inputPath: modelPath,
+    rawSha256: null,
+  });
+  await extraction.whenIdle();
+
+  const job = extraction.job('model:nwf-missing');
+  assert.equal(job.status, 'failed');
+  assert.equal(job.errorCode, LAUNCHER_ERROR_CODES.sourceModelMissing);
+
+  // Nothing is left behind that a later run could mistake for an answer: not a
+  // cache, not a partial. A cache describing part of a site as if it were all
+  // of it is worse than no cache.
+  assert.deepEqual(
+    readdirSync(cacheDir).filter((name) => name.endsWith('.sqlite') || name.endsWith('.partial')),
+    [],
+  );
+
+  // And the row says which file was missing and what to do about it, in words:
+  // the plain sentence leads, the launcher's own detail names the file.
+  assert.match(job.note, /could not find every model it points at/);
+  assert.match(job.note, /Dragon-Electrical\.nwc/);
+  assert.doesNotMatch(job.note.split('The extractor reported:')[0], /[A-Z]{3,}_[A-Z]/);
 });
 
 /* ------------------------------------------------------------- removal, close */

@@ -33,7 +33,11 @@ import { writeDragonFixture } from '@matchline/model-schema/fixtures/dragon';
  *   the file is not read for it, and the value addresses the cache;
  * - the same order of events: hash → cache-hit check → detect (+ the
  *   `ADAPTER_UNVERIFIED` warning, because no year is verified yet) → open →
- *   walk → sets → convert → finalize → result;
+ *   sets → walk → convert → finalize → result. Sets before the walk, because
+ *   the adapter resolves every saved set before it starts walking so it never
+ *   has to hold a handle on every object in the model;
+ * - the same refusal to serve an `.nwf` from cache without opening it, and the
+ *   same `SOURCE_MODEL_MISSING` when a referenced model was not there;
  * - the same `total: 0` for the stages that cannot know their total, and a real
  *   total for `sets`, which counts the set tree before resolving any of it;
  * - the same atomic commit: `<sha>.sqlite.partial`, then rename;
@@ -69,6 +73,7 @@ const EXIT = {
   navisworksStalled: 10,
   pluginNotDeployed: 11,
   pluginNotFound: 12,
+  sourceModelMissing: 13,
 };
 
 /** `ExitCodes.ForErrorCode`, mirrored. */
@@ -84,6 +89,7 @@ const EXIT_FOR_CODE = {
   NW_STALLED: EXIT.navisworksStalled,
   PLUGIN_NOT_DEPLOYED: EXIT.pluginNotDeployed,
   PLUGIN_NOT_FOUND: EXIT.pluginNotFound,
+  SOURCE_MODEL_MISSING: EXIT.sourceModelMissing,
 };
 
 /**
@@ -239,6 +245,8 @@ function readScenario(inputPath) {
     tickMs: 0,
     ignoreCancel: false,
     ignoreSigterm: false,
+    /** `mode: 'missing-reference'` names the file the document could not find. */
+    missingFileName: 'Dragon-Electrical.nwc',
     /**
      * Milliseconds spent in `finalize` before the result line.
      *
@@ -354,8 +362,13 @@ async function main() {
   };
 
   // Cache reuse by content hash: an unchanged model never touches Navisworks.
+  // An NWF is the exception, and the launcher makes it for the same reason
+  // (ExtractionRunner.IsReferencingInput): its bytes are a list of references,
+  // so identical bytes say nothing about whether the models behind them are
+  // still there.
+  const referencesInput = input.toLowerCase().endsWith('.nwf');
   const existingPath = path.join(cacheDir, `${sha256}.sqlite`);
-  if (existsSync(existingPath)) {
+  if (!referencesInput && existsSync(existingPath)) {
     const database = new DatabaseSync(existingPath);
     const { n } = database.prepare('SELECT COUNT(*) AS n FROM objects').get();
     database.close();
@@ -415,6 +428,22 @@ async function main() {
     }
   }
 
+  // The saved sets, after the open and before the walk, exactly where
+  // DocumentWalker puts them: every set is resolved first so the walk can write
+  // a membership row as it reaches each item instead of holding the whole model
+  // in a dictionary. The denominator is real — the number of saved sets, folders
+  // excluded, in the Dragon cache this run is about to commit, counted before
+  // the first is resolved — which is what lets this stage report a fraction
+  // where the walk and the convert cannot.
+  progress('sets', 0, DRAGON_SAVED_SET_COUNT);
+  for (let resolved = 1; resolved <= DRAGON_SAVED_SET_COUNT; resolved += 1) {
+    await sleep(scenario.tickMs);
+    if (stopIfCancelled(null)) {
+      return;
+    }
+    progress('sets', resolved, DRAGON_SAVED_SET_COUNT);
+  }
+
   for (let tick = 1; tick <= scenario.walkTicks; tick += 1) {
     await sleep(scenario.tickMs);
     if (stopIfCancelled(null)) {
@@ -424,18 +453,26 @@ async function main() {
     progress('walk', tick * 25000, 0);
   }
 
-  // The saved sets, after the walk and before the convert, exactly where
-  // DocumentWalker puts them. The denominator is real: it is the number of
-  // saved sets — folders excluded — in the Dragon cache this run is about to
-  // commit, counted before the first is resolved, which is what lets this stage
-  // report a fraction where the walk and the convert cannot.
-  progress('sets', 0, DRAGON_SAVED_SET_COUNT);
-  for (let resolved = 1; resolved <= DRAGON_SAVED_SET_COUNT; resolved += 1) {
-    await sleep(scenario.tickMs);
-    if (stopIfCancelled(null)) {
-      return;
-    }
-    progress('sets', resolved, DRAGON_SAVED_SET_COUNT);
+  // A document that opened without one of the files it points at. The plugin
+  // says so per reference, the launcher collects the error-severity warnings,
+  // and no cache is committed: an extraction missing a whole discipline that
+  // looks like a success is the failure this code exists to prevent.
+  if (scenario.mode === 'missing-reference') {
+    emit({
+      type: 'warning',
+      code: 'SOURCE_MODEL_MISSING',
+      message:
+        `The document references '${scenario.missingFileName}' but that file is not where the ` +
+        'document expects it and nothing was loaded from it. Everything it holds is absent from ' +
+        'this extraction.',
+      objectId: null,
+    });
+    log(`end ${path.basename(input)}`);
+    fail(
+      'SOURCE_MODEL_MISSING',
+      'The model opened without everything it references, so the extraction describes less than ' +
+        `the file does and was not kept. One model was missing: ${scenario.missingFileName}.`,
+    );
   }
 
   progress('convert', 0, 0);
