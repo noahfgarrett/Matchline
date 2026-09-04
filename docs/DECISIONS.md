@@ -131,9 +131,12 @@ each is proven.
     and has exactly three states: `stub-compiled-unverified` (type-checks against our own
     hand-written stand-in — a compile check, not support), `pending-real-proof` (compiles
     against the real Autodesk assembly, proof run not completed), `verified` (extracted a
-    real model on a real install, recorded). As of this entry: 2025 is
-    `pending-real-proof`; 2024 and 2026 are `stub-compiled-unverified`; nothing is
-    `verified`. No document, UI string or release note may claim more than this table says.
+    real model on a real install, recorded). As of this entry: 2024, 2025 and 2026 are
+    all `stub-compiled-unverified` and nothing is `verified`. 2025 carried
+    `pending-real-proof` for a while, which this entry defines as compiling against the
+    real Autodesk assembly -- something no build here has ever done. The label was
+    corrected rather than the definition. No document, UI string or release note may
+    claim more than this table says.
     Detection names the version that will open the file, and selection takes the newest
     installed. (Directive "Adapters 2024/2025/2026"; gates 14–17.)
 15. **The release tag workflow fails loudly rather than shipping unsigned.** No hardcoded

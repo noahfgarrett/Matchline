@@ -70,7 +70,7 @@ namespace Matchline.Extraction.Protocol
             get { return string.Equals(_verificationStatus, AdapterVerification.Verified, StringComparison.Ordinal); }
         }
 
-        /// <summary>e.g. "2025 (adapter navisworks-2025, pending-real-proof)".</summary>
+        /// <summary>e.g. "2025 (adapter navisworks-2025, stub-compiled-unverified)".</summary>
         public string Describe()
         {
             return _year.ToString(CultureInfo.InvariantCulture) +
@@ -95,7 +95,14 @@ namespace Matchline.Extraction.Protocol
         private static readonly AdapterSupport[] Table =
         {
             new AdapterSupport(2026, AdapterVerification.StubCompiledOnly),
-            new AdapterSupport(2025, AdapterVerification.RealProofPending),
+
+            // 2025 was recorded as pending-real-proof, which this file defines
+            // as "compiles against the real Autodesk assembly". That has never
+            // happened -- there is no Windows machine with Navisworks in this
+            // project's history and every adapter build so far used
+            // native/navisworks-stubs. Claiming the stronger state was the one
+            // thing this table exists to prevent, so it says the true one.
+            new AdapterSupport(2025, AdapterVerification.StubCompiledOnly),
             new AdapterSupport(2024, AdapterVerification.StubCompiledOnly)
         };
 

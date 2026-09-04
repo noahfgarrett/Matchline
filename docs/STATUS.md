@@ -100,8 +100,9 @@ orphaned-decision review item. Gate 12 green.
 **M7 — 2024/2026 adapters. Landed, unverified.** One shared Autodesk-touching source in
 `native/navisworks-adapter/` compiled once per year into 2024/2025/2026 assemblies;
 newest-installed selection; `SupportedAdapters.cs` is the single source of truth for what
-may be claimed. 2025 is `pending-real-proof`, 2024 and 2026 are
-`stub-compiled-unverified`, nothing is `verified`. CI stub-compiles every adapter it finds
+may be claimed. 2024, 2025 and 2026 are all `stub-compiled-unverified` and nothing is
+`verified`: 2025's `pending-real-proof` label claimed a build against the real Autodesk
+assembly that has never happened, and was corrected. CI stub-compiles every adapter it finds
 by glob, so a new year is covered the day it lands. Gate 17 stays open until the labels are
 backed by a real run.
 
