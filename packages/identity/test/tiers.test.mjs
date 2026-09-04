@@ -188,3 +188,40 @@ test('a disabled tier does not run', () => {
   assert.deepEqual(outcome.candidates, []);
   assert.equal(resolveTag(index, 'MAH001-10-01').tier, 'exact');
 });
+
+test('a unicodeFold step matches an en-dashed spelling of a hyphenated tag', () => {
+  const index = buildIdentityIndex(DRAGON_ASSETS, {
+    tagNormalization: [{ kind: 'unicodeFold' }],
+  });
+  const outcome = resolveTag(index, 'MAH001–10–01');
+  assert.equal(outcome.status, 'matched');
+  assert.equal(outcome.tier, 'normalized');
+  assert.equal(outcome.assetId, 'asset-0001');
+});
+
+test('without the step the same en-dashed spelling matches nothing', () => {
+  const index = buildIdentityIndex(DRAGON_ASSETS);
+  assert.equal(resolveTag(index, 'MAH001–10–01').status, 'unmatched');
+});
+
+test('a fuzzy-free lookup reports the same match and ranks no proposals', () => {
+  const index = buildIdentityIndex(DRAGON_ASSETS);
+  assert.equal(resolveTag(index, 'MAH001-10-01', { includeFuzzy: false }).tier, 'exact');
+
+  // `MAH001-10-1` is one edit away, so the default lookup proposes it and the
+  // fuzzy-free one refuses to spend the distance pass at all.
+  const proposed = resolveTag(index, 'MAH001-10-1');
+  assert.ok(proposed.candidates.length > 0);
+  assert.deepEqual(resolveTag(index, 'MAH001-10-1', { includeFuzzy: false }).candidates, []);
+});
+
+test('a matched duplicate tag says how many assets carry it', () => {
+  const index = buildIdentityIndex([
+    { assetId: 'asset-a', canonicalTag: 'DUP001-10-01' },
+    { assetId: 'asset-b', canonicalTag: 'DUP001-10-01' },
+  ]);
+  const outcome = resolveTag(index, 'DUP001-10-01');
+  assert.equal(outcome.status, 'matched');
+  assert.equal(outcome.assetId, 'asset-a');
+  assert.equal(outcome.sharingAssets, 2);
+});

@@ -9,6 +9,7 @@
 export { buildIdentityIndex, DEFAULT_FUZZY_MAX_DISTANCE } from './build.js';
 
 export { FUZZY_CANDIDATE_LIMIT, resolveTag, resolveTags } from './resolve.js';
+export type { ResolveTagOptions } from './resolve.js';
 
 export { boundaryCuts, DEFAULT_TAG_SEPARATORS } from './boundary.js';
 export type { BoundaryCut } from './boundary.js';

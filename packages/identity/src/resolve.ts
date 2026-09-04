@@ -47,7 +47,13 @@ function compareText(left: string, right: string): number {
 
 type TierResult =
   | { readonly kind: 'miss' }
-  | { readonly kind: 'match'; readonly assetId: string; readonly detail: string }
+  | {
+      readonly kind: 'match';
+      readonly assetId: string;
+      readonly detail: string;
+      /** Assets carrying the matched canonical tag; above 1 is a duplicate. */
+      readonly sharingAssets: number;
+    }
   | { readonly kind: 'ambiguous'; readonly candidateAssetIds: ReadonlyArray<string> }
   /** A configured alias naming a canonical tag the universe does not contain. */
   | { readonly kind: 'unresolvable-alias'; readonly aliasTarget: string };
@@ -126,6 +132,7 @@ function decide(choice: CandidateChoice, describe: (choice: CandidateChoice) => 
         kind: 'match',
         assetId: choice.assetId,
         detail: withDuplicateNote(describe(choice), choice.sharingAssets),
+        sharingAssets: choice.sharingAssets,
       };
     default:
       return assertNever(choice, 'unhandled CandidateChoice');
@@ -299,7 +306,11 @@ function unmatched(
   return { status: 'unmatched', evidenceTag, candidates };
 }
 
-function resolveOne(index: IdentityIndex, evidenceTag: string): Resolution {
+function resolveOne(
+  index: IdentityIndex,
+  evidenceTag: string,
+  options: ResolveTagOptions = {},
+): Resolution {
   // An empty spelling is a blank cell, not a tag. Nothing is near it and
   // nothing about it needs a person.
   if (evidenceTag.length === 0) {
@@ -312,6 +323,9 @@ function resolveOne(index: IdentityIndex, evidenceTag: string): Resolution {
     }
 
     if (tier === 'fuzzy-proposal') {
+      if (options.includeFuzzy === false) {
+        break;
+      }
       const candidates = fuzzyCandidates(index, evidenceTag);
       if (candidates.length === 0) {
         break;
@@ -340,6 +354,7 @@ function resolveOne(index: IdentityIndex, evidenceTag: string): Resolution {
           assetId: result.assetId,
           tier,
           detail: result.detail,
+          sharingAssets: result.sharingAssets,
         },
         reviewItems: [],
       };
@@ -369,6 +384,21 @@ function resolveOne(index: IdentityIndex, evidenceTag: string): Resolution {
   return { outcome: unmatched(evidenceTag, []), reviewItems: [] };
 }
 
+/** How much work one lookup is worth. */
+export interface ResolveTagOptions {
+  /**
+   * Whether to rank fuzzy proposals for a spelling nothing matched.
+   *
+   * Defaults to true, which is what a reviewer-facing lookup wants. Pass
+   * `false` where the answer feeds a decision rather than a person: fuzzy never
+   * matches (§9.2), so for a caller that reads only `status === 'matched'` the
+   * tier changes nothing and costs a bounded Levenshtein against every asset in
+   * the index -- which on a 40,000-asset site is the single most expensive
+   * thing a compile can be asked to do per unmatched tag.
+   */
+  readonly includeFuzzy?: boolean;
+}
+
 /**
  * Resolves one foreign spelling against the model-first universe.
  *
@@ -377,8 +407,12 @@ function resolveOne(index: IdentityIndex, evidenceTag: string): Resolution {
  * explaining it is produced by `resolveTags`, which is where review output
  * belongs.
  */
-export function resolveTag(index: IdentityIndex, evidenceTag: string): IdentityOutcome {
-  return resolveOne(index, evidenceTag).outcome;
+export function resolveTag(
+  index: IdentityIndex,
+  evidenceTag: string,
+  options?: ResolveTagOptions,
+): IdentityOutcome {
+  return resolveOne(index, evidenceTag, options).outcome;
 }
 
 /**
