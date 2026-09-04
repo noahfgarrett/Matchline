@@ -39,8 +39,10 @@ import type {
   AssembleOptions,
   AssembledClaims,
   ClaimSubject,
+  DuplicateTagTarget,
   MakeRootDirective,
   ProfileSourceRef,
+  ResolveTag,
   SkipReason,
   SkippedClaimInput,
 } from './types.js';
@@ -198,23 +200,78 @@ function pairIsUsable(
   return true;
 }
 
+/** Whether the bridge refused because the spelling names several assets. */
+function isDuplicateTarget(
+  resolved: string | null | DuplicateTagTarget,
+): resolved is DuplicateTagTarget {
+  return typeof resolved === 'object' && resolved !== null;
+}
+
+/**
+ * One tag through the bridge, with the refusal already logged.
+ *
+ * The two refusals are different facts and get different reasons: nothing
+ * carries this spelling, versus several things do. A caller that flattened them
+ * would send a person looking for a typo in a tag that is spelled perfectly
+ * and written twice.
+ */
+function resolveOneTag(
+  ladderSource: LadderSourceKind,
+  tag: string,
+  end: 'child' | 'parent',
+  resolveTag: ResolveTag,
+  childRef: string,
+  parentRef: string,
+  skips: SkipLog,
+): string | null {
+  const resolved = resolveTag(tag);
+  if (isDuplicateTarget(resolved)) {
+    skips.note(ladderSource, 'duplicate-target', childRef, parentRef);
+    return null;
+  }
+  if (resolved === null) {
+    skips.note(
+      ladderSource,
+      end === 'child' ? 'unresolvable-child-tag' : 'unresolvable-parent-tag',
+      childRef,
+      parentRef,
+    );
+    return null;
+  }
+  return resolved;
+}
+
 /** A tag pair resolved through identity, or the reason it could not be. */
 function resolvePair(
   ladderSource: LadderSourceKind,
   childTag: string,
   parentTag: string,
-  resolveTag: (tag: string) => string | null,
+  resolveTag: ResolveTag,
   known: ReadonlySet<string>,
   skips: SkipLog,
 ): { readonly childAssetId: string; readonly parentAssetId: string } | null {
-  const childAssetId = resolveTag(childTag);
+  const childAssetId = resolveOneTag(
+    ladderSource,
+    childTag,
+    'child',
+    resolveTag,
+    childTag,
+    parentTag,
+    skips,
+  );
   if (childAssetId === null) {
-    skips.note(ladderSource, 'unresolvable-child-tag', childTag, parentTag);
     return null;
   }
-  const parentAssetId = resolveTag(parentTag);
+  const parentAssetId = resolveOneTag(
+    ladderSource,
+    parentTag,
+    'parent',
+    resolveTag,
+    childTag,
+    parentTag,
+    skips,
+  );
   if (parentAssetId === null) {
-    skips.note(ladderSource, 'unresolvable-parent-tag', childTag, parentTag);
     return null;
   }
   if (!pairIsUsable(ladderSource, childAssetId, parentAssetId, childTag, parentTag, known, skips)) {
@@ -350,9 +407,16 @@ export function assembleRelationshipClaims(
       continue;
     }
     const rung = ladderRung('explicit-model');
-    const parentAssetId = opts.resolveTag(parentTag);
+    const parentAssetId = resolveOneTag(
+      'explicit-model',
+      parentTag,
+      'parent',
+      opts.resolveTag,
+      subject.assetId,
+      parentTag,
+      skips,
+    );
     if (parentAssetId === null) {
-      skips.note('explicit-model', 'unresolvable-parent-tag', subject.assetId, parentTag);
       continue;
     }
     if (
@@ -383,7 +447,77 @@ export function assembleRelationshipClaims(
     structural.push(structuralClaim('explicit-model', subject.assetId, parentAssetId, provenance));
   }
 
-  // --- Tier 3: explicit accepted profile lookup -----------------------------
+  // --- Tier 3: the MEL's own System Parent column ---------------------------
+  // The donor's primary structural source, read back. One row can name several
+  // parents; the first is the nesting and the rest are dependencies, because an
+  // asset has one parent and the other statements are still true.
+  for (const row of opts.melParents ?? []) {
+    const childAssetId = resolveOneTag(
+      'mel-parent',
+      row.childTag,
+      'child',
+      opts.resolveTag,
+      row.childTag,
+      row.parentTags[0] ?? '',
+      skips,
+    );
+    if (childAssetId === null) {
+      continue;
+    }
+
+    row.parentTags.forEach((parentTag, position) => {
+      if (parentTag === '') {
+        return;
+      }
+      const parentAssetId = resolveOneTag(
+        'mel-parent',
+        parentTag,
+        'parent',
+        opts.resolveTag,
+        row.childTag,
+        parentTag,
+        skips,
+      );
+      if (parentAssetId === null) {
+        return;
+      }
+      if (
+        !pairIsUsable(
+          'mel-parent',
+          childAssetId,
+          parentAssetId,
+          row.childTag,
+          parentTag,
+          known,
+          skips,
+        )
+      ) {
+        return;
+      }
+
+      const provenance: Provenance = {
+        ...row.provenance,
+        rule: LADDER_SOURCE_RULE['mel-parent'],
+        fallbackRung: ladderRung('mel-parent'),
+      };
+      if (position === 0) {
+        structural.push(
+          structuralClaim('mel-parent', childAssetId, parentAssetId, provenance),
+        );
+        return;
+      }
+      // A second System Parent is a real relation that cannot nest: the slot is
+      // taken, and dropping the statement would lose what the MEL said.
+      dependencies.push(
+        dependencyClaim(childAssetId, parentAssetId, 'DEPENDENCY', {
+          ...provenance,
+          rule: `${LADDER_SOURCE_RULE['mel-parent']}[${String(position)}]`,
+        }),
+      );
+    });
+  }
+
+  // --- Tier 4: explicit accepted profile lookup -----------------------------
   (opts.profileLookup ?? []).forEach((entry, position) => {
     const resolved = resolvePair(
       'profile-lookup',
@@ -412,7 +546,7 @@ export function assembleRelationshipClaims(
     );
   });
 
-  // --- Tier 4: flow-anchored family, plus every dependency ------------------
+  // --- Tier 5: flow-anchored family, plus every dependency ------------------
   const roleRules = indexRoleGraph(opts.roleGraph);
   const anchoredPairs = new Set<string>();
 
@@ -464,7 +598,7 @@ export function assembleRelationshipClaims(
     );
   }
 
-  // --- Tier 5: family + role, where flow anchored nothing -------------------
+  // --- Tier 6: family + role, where flow anchored nothing -------------------
   if (roleRules.size > 0) {
     const families = new Map<string, FamilyMember[]>();
     for (const subject of subjectById.values()) {
@@ -520,7 +654,7 @@ export function assembleRelationshipClaims(
     }
   }
 
-  // --- Tier 6: learned description rules ------------------------------------
+  // --- Tier 7: learned description rules ------------------------------------
   (opts.learned ?? []).forEach((learned, position) => {
     if (
       !pairIsUsable(
@@ -565,7 +699,7 @@ export function assembleRelationshipClaims(
     );
   });
 
-  // --- Tier 7: prior accepted SSM examples ----------------------------------
+  // --- Tier 8: prior accepted SSM examples ----------------------------------
   (opts.priorSsm ?? []).forEach((example, position) => {
     const resolved = resolvePair(
       'prior-ssm',

@@ -8,11 +8,14 @@ import { assembleRelationshipClaims } from '../dist/index.js';
 import {
   DRAGON_LEARNED,
   DRAGON_MANUAL_OVERRIDES,
+  DRAGON_MEL_PARENTS,
   DRAGON_PRIOR_SSM,
   DRAGON_PROFILE_LOOKUP,
   DRAGON_SUBJECTS,
+  DUPLICATE_PARENT_SUBJECTS,
   EXPLICIT_PARENT_SUBJECTS,
   resolveDragonTag,
+  resolveWithDuplicateTag,
 } from './dist/dragon.fixture.js';
 
 const BARE = { resolveTag: resolveDragonTag };
@@ -115,7 +118,7 @@ test('a profile lookup claims resolved pairs and skips the ones it cannot resolv
   assert.equal(claim.evidenceTier, 2);
   assert.equal(claim.provenance.sourceFile, 'site-profile');
   assert.equal(claim.provenance.sourceRef.sheet, 'profileLookup');
-  assert.equal(claim.provenance.fallbackRung, 3);
+  assert.equal(claim.provenance.fallbackRung, 4);
 
   assert.deepEqual(assembled.skipped, [
     {
@@ -139,7 +142,7 @@ test('a prior accepted SSM example is a claim on the rung below learning', () =>
   assert.equal(claim.targetAssetId, 'asset-0001');
   assert.equal(claim.ladderSource, 'prior-ssm');
   assert.equal(claim.relationshipType, 'STRUCTURAL_PARENT_CANDIDATE');
-  assert.equal(claim.provenance.fallbackRung, 7);
+  assert.equal(claim.provenance.fallbackRung, 8);
 });
 
 test('a claim-grade learned rule claims; a proposal-grade one only proposes', () => {
@@ -222,4 +225,97 @@ test('a flow edge whose endpoints are unknown yields no dependency either', () =
     assembled.skipped.map((skip) => `${skip.ladderSource}:${skip.reason}`),
     ['flow-family:self-parent', 'flow-family:unknown-child-asset'],
   );
+});
+
+test('the MEL System Parent column is a claim on the rung under the model', () => {
+  const assembled = assembleRelationshipClaims(DRAGON_SUBJECTS, {
+    ...BARE,
+    melParents: DRAGON_MEL_PARENTS,
+  });
+
+  assert.deepEqual(
+    assembled.structural.map((claim) => `${claim.subjectAssetId}<-${claim.targetAssetId}`),
+    ['asset-0002<-asset-0001', 'asset-0003<-asset-0002'],
+  );
+  const [claim] = assembled.structural;
+  assert.equal(claim.ladderSource, 'mel-parent');
+  assert.equal(claim.source, 'MEL');
+  assert.equal(claim.relationshipType, 'EXPLICIT_PARENT');
+  // Tier 2: a maintained tracking document, not stamped engineering.
+  assert.equal(claim.evidenceTier, 2);
+  assert.equal(claim.provenance.sourceFile, 'Dragon-MEL.xlsx');
+  assert.deepEqual(claim.provenance.sourceRef, { kind: 'sheet-row', sheet: 'MEL', row: 2 });
+  assert.equal(claim.provenance.rule, 'relate.melSystemParent');
+  assert.equal(claim.provenance.fallbackRung, 3);
+});
+
+test('a second System Parent on one row is a dependency, never a second nesting', () => {
+  const assembled = assembleRelationshipClaims(DRAGON_SUBJECTS, {
+    ...BARE,
+    melParents: DRAGON_MEL_PARENTS,
+  });
+
+  assert.deepEqual(
+    assembled.dependencies.map((claim) => `${claim.subjectAssetId}<-${claim.targetAssetId}`),
+    ['asset-0003<-asset-0001'],
+  );
+  const [dependency] = assembled.dependencies;
+  assert.equal(dependency.kind, 'dependency');
+  assert.equal(dependency.provenance.sourceRef.row, 3);
+});
+
+test('a MEL row naming a parent the model does not carry is skipped, loudly', () => {
+  const assembled = assembleRelationshipClaims(DRAGON_SUBJECTS, {
+    ...BARE,
+    melParents: DRAGON_MEL_PARENTS,
+  });
+
+  assert.deepEqual(assembled.skipped, [
+    {
+      ladderSource: 'mel-parent',
+      reason: 'unresolvable-parent-tag',
+      childRef: 'TIT001-10-01',
+      parentRef: 'MAH009-99-99',
+    },
+  ]);
+});
+
+test('a parent tag two assets carry places neither of them', () => {
+  const assembled = assembleRelationshipClaims(DUPLICATE_PARENT_SUBJECTS, {
+    resolveTag: resolveWithDuplicateTag,
+  });
+
+  // Nothing was guessed: the tag names two assets, so it names no parent.
+  assert.deepEqual(assembled.structural, []);
+  assert.deepEqual(assembled.skipped, [
+    {
+      ladderSource: 'explicit-model',
+      reason: 'duplicate-target',
+      childRef: 'asset-0002',
+      parentRef: 'PNL001-10-01',
+    },
+    {
+      ladderSource: 'explicit-model',
+      reason: 'duplicate-target',
+      childRef: 'asset-0003',
+      parentRef: 'PNL001-10-01',
+    },
+  ]);
+});
+
+test('a duplicated tag in a profile lookup is refused the same way', () => {
+  const assembled = assembleRelationshipClaims(DRAGON_SUBJECTS, {
+    resolveTag: resolveWithDuplicateTag,
+    profileLookup: [{ childTag: 'VFD001-10-01', parentTag: 'PNL001-10-01' }],
+  });
+
+  assert.deepEqual(assembled.structural, []);
+  assert.deepEqual(assembled.skipped, [
+    {
+      ladderSource: 'profile-lookup',
+      reason: 'duplicate-target',
+      childRef: 'VFD001-10-01',
+      parentRef: 'PNL001-10-01',
+    },
+  ]);
 });

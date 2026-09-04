@@ -17,6 +17,7 @@ import type {
   ClaimSubject,
   FlowEdgeInput,
   LearnedClaimInput,
+  MelParentInput,
   PriorSsmExample,
   ProfileLookupEntry,
   ResolveTag,
@@ -136,6 +137,59 @@ export const EXPLICIT_PARENT_SUBJECTS: ReadonlyArray<ClaimSubject> = [
     role: 'MAH',
     familyKey: '002-20-01',
     explicitParentTag: 'PLC009-99-99',
+  },
+];
+
+/** One MEL row's address, the way the compiler stamps one. */
+export function melRow(row: number): Provenance {
+  return {
+    sourceFile: 'Dragon-MEL.xlsx',
+    sourceRef: { kind: 'sheet-row', sheet: 'MEL', row },
+    propertyOrColumn: 'System Parent',
+  };
+}
+
+/**
+ * Three MEL statements: one plain, one naming two parents, one dead.
+ *
+ * The second row is the case §8.2 decides -- the first tag nests, the second is
+ * a dependency -- and the third is a tag the model does not carry, which has to
+ * be loud rather than silent.
+ */
+export const DRAGON_MEL_PARENTS: ReadonlyArray<MelParentInput> = [
+  { childTag: 'PLC001-10-01', parentTags: ['MAH001-10-01'], provenance: melRow(2) },
+  {
+    childTag: 'VFD001-10-01',
+    parentTags: ['PLC001-10-01', 'MAH001-10-01'],
+    provenance: melRow(3),
+  },
+  { childTag: 'TIT001-10-01', parentTags: ['MAH009-99-99'], provenance: melRow(4) },
+];
+
+/**
+ * A bridge whose `PNL001-10-01` names two assets.
+ *
+ * The catalog keeps both (duplicate tags are never merged), so the tag places
+ * nothing: what it names is "one of these two", and there is no such asset.
+ */
+export const resolveWithDuplicateTag: ResolveTag = (tag) =>
+  tag === 'PNL001-10-01' ? { duplicate: true, sharingAssets: 2 } : resolveDragonTag(tag);
+
+/** Two subjects whose model property names the duplicated tag as their parent. */
+export const DUPLICATE_PARENT_SUBJECTS: ReadonlyArray<ClaimSubject> = [
+  {
+    assetId: 'asset-0002',
+    canonicalTag: 'PLC001-10-01',
+    role: 'PLC',
+    familyKey: '001-10-01',
+    explicitParentTag: 'PNL001-10-01',
+  },
+  {
+    assetId: 'asset-0003',
+    canonicalTag: 'VFD001-10-01',
+    role: 'VFD',
+    familyKey: '001-10-01',
+    explicitParentTag: 'PNL001-10-01',
   },
 ];
 

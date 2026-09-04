@@ -28,14 +28,18 @@ import {
  * - `explicit-model` is the model stating a relationship itself.
  * - `flow-family` rests on a cable schedule or power study -- an engineered,
  *   stamped document -- even though the nesting is inferred from it.
- * - `profile-lookup` and `prior-ssm` rest on maintained lists that follow the
- *   work: explicit statements, but not stamped engineering.
+ * - `mel-parent`, `profile-lookup` and `prior-ssm` rest on maintained lists
+ *   that follow the work: explicit statements, but not stamped engineering. The
+ *   MEL's System Parent column sits above the other two in the ladder because
+ *   it is the document the site maintains for exactly this purpose, and it was
+ *   the donor's primary structural source.
  * - `family-role`, `learned-description` and `model-tree` are derived by rule
  *   from other evidence, which is exactly what the inferred tier means.
  */
 export const LADDER_SOURCE_EVIDENCE_TIER = {
   manual: EVIDENCE_TIER.MODEL,
   'explicit-model': EVIDENCE_TIER.MODEL,
+  'mel-parent': EVIDENCE_TIER.TRACKING_DOCUMENT,
   'profile-lookup': EVIDENCE_TIER.TRACKING_DOCUMENT,
   'flow-family': EVIDENCE_TIER.ENGINEERED_DOCUMENT,
   'family-role': EVIDENCE_TIER.INFERRED,
@@ -55,6 +59,7 @@ export const LADDER_SOURCE_EVIDENCE_TIER = {
 export const LADDER_SOURCE_KIND = {
   manual: 'MANUAL',
   'explicit-model': 'MODEL',
+  'mel-parent': 'MEL',
   'profile-lookup': 'MANUAL',
   'flow-family': 'FLOW',
   'family-role': 'MODEL',
@@ -73,6 +78,7 @@ export const LADDER_SOURCE_KIND = {
 export const LADDER_SOURCE_RELATIONSHIP_TYPE = {
   manual: 'EXPLICIT_PARENT',
   'explicit-model': 'EXPLICIT_PARENT',
+  'mel-parent': 'EXPLICIT_PARENT',
   'profile-lookup': 'EXPLICIT_PARENT',
   'flow-family': 'FAMILY_RELATED',
   'family-role': 'FAMILY_RELATED',
@@ -85,6 +91,7 @@ export const LADDER_SOURCE_RELATIONSHIP_TYPE = {
 export const LADDER_SOURCE_RULE = {
   manual: 'relate.manualOverride',
   'explicit-model': 'relate.explicitModelParent',
+  'mel-parent': 'relate.melSystemParent',
   'profile-lookup': 'relate.profileLookup',
   'flow-family': 'relate.flowAnchoredFamily',
   'family-role': 'relate.familyRole',

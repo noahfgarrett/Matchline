@@ -82,18 +82,65 @@ export interface ProfileLookupEntry {
 }
 
 /**
- * The identity bridge: a source spelling to a canonical asset id, or `null`
- * when nothing resolved it.
+ * A tag that names more than one asset.
+ *
+ * Identity resolves a duplicated tag to the first asset id in code-unit order,
+ * which is the right answer for enrichment: a description attached to one of
+ * two copies is a cosmetic mistake. It is the wrong answer for STRUCTURE. A
+ * profile row or a model property naming `PNL001-10-01` where two assets carry
+ * that tag has not said which one is the parent, and picking the alphabetically
+ * lower one would nest a site's equipment under whichever copy sorted first --
+ * silently, and differently after a re-extraction renumbered them.
+ *
+ * So the bridge says "duplicate" and assembly refuses (ENGINE.md: a tie stops
+ * the ladder). The refusal is loud: it lands in `skipped` as
+ * {@link SkipReason} `duplicate-target`.
+ */
+export interface DuplicateTagTarget {
+  readonly duplicate: true;
+  /** How many assets carry the tag. Always more than one. */
+  readonly sharingAssets: number;
+}
+
+/**
+ * The identity bridge: a source spelling to a canonical asset id, `null` when
+ * nothing resolved it, or {@link DuplicateTagTarget} when several assets carry
+ * it.
  *
  * `null` is a real answer and it is respected: an unresolvable tag produces no
- * claim and no invented asset (ENGINE.md binding rule 1).
+ * claim and no invented asset (ENGINE.md binding rule 1). A bridge that only
+ * ever returns `string | null` is still a valid `ResolveTag` -- the duplicate
+ * arm is something a caller opts into by being able to detect one.
  */
-export type ResolveTag = (tag: string) => string | null;
+export type ResolveTag = (tag: string) => string | null | DuplicateTagTarget;
 
 /** Which profile document the profile-borne rules came out of. */
 export interface ProfileSourceRef {
   readonly sourceFile: string;
   readonly profileRevision?: string;
+}
+
+/**
+ * One MEL row's "System Parent" statement (PRODUCT.md §11.1, donor priority
+ * 900).
+ *
+ * The MEL is where a site writes down what hangs off what, and the donor's
+ * primary structural source was this column. It arrives as tags because a MEL
+ * is a document engineers read: the bridge is what turns them into assets.
+ *
+ * `parentTags` is a list because a row may name several. The FIRST is the
+ * structural claim -- an asset has one parent -- and the rest become
+ * dependencies, which is the same rule connectivity follows: a real relation
+ * that orders work without nesting (§8.2). Listing them in the other order
+ * would be a different statement, so the workbook's order is respected.
+ */
+export interface MelParentInput {
+  /** The child, as the MEL's equipment tag column spells it. */
+  readonly childTag: string;
+  /** The System Parent tags, in the order the row states them. */
+  readonly parentTags: ReadonlyArray<string>;
+  /** The workbook, sheet and row the statement was read from. */
+  readonly provenance: Provenance;
 }
 
 /** Everything assembly may read besides the subjects themselves. */
@@ -104,6 +151,8 @@ export interface AssembleOptions {
   readonly priorSsm?: ReadonlyArray<PriorSsmExample>;
   readonly profileLookup?: ReadonlyArray<ProfileLookupEntry>;
   readonly manualOverrides?: ReadonlyArray<ManualRelationshipOverride>;
+  /** The MEL's own System Parent column (§11.1, the `mel-parent` rung). */
+  readonly melParents?: ReadonlyArray<MelParentInput>;
   readonly resolveTag: ResolveTag;
   /** Addresses profile-borne claims. Defaults to `DEFAULT_PROFILE_SOURCE`. */
   readonly profileSource?: ProfileSourceRef;
@@ -135,6 +184,14 @@ export type SkipReason =
   | 'unresolvable-child-tag'
   /** `resolveTag` returned `null` for the parent spelling. */
   | 'unresolvable-parent-tag'
+  /**
+   * The spelling names several assets, so it names no one asset.
+   *
+   * Never a pick. See {@link DuplicateTagTarget}: the duplicate itself is
+   * already a review item from the asset catalog, and this says which rule went
+   * dead because of it.
+   */
+  | 'duplicate-target'
   /** The input parents an asset to itself. */
   | 'self-parent';
 
