@@ -2,17 +2,21 @@ import { useCallback, useEffect, useState, type JSX } from 'react';
 
 import type {
   WireAnatomyExample,
+  WireAssignmentSuggestion,
   WireClassSuggestion,
   WireDerivedAttribute,
   WireDraftPatch,
   WireDraftProfile,
   WireFieldSuggestion,
   WireHierarchyLevel,
+  WireHierarchyProjectionLevel,
   WirePropertySuggestion,
   WireQuickSetupSuggestions,
   WireResolverTemplate,
+  WireRolePairSuggestion,
   WireSuggestionTarget,
 } from '../../../shared/schemas';
+import { starterProfile } from '../../../shared/starter-profile';
 import { call, count, messageOf, percent } from '../api';
 import { Callout, Panel, Stat, StatRow, TableScroll } from '../components/Panel';
 import { usePreview } from '../usePreview';
@@ -72,9 +76,19 @@ const STEPS: readonly QuickStep[] = [
     lede: 'Which Navisworks classes are commissionable equipment, judged by which ones actually carry equipment tags.',
   },
   {
+    id: 'sources',
+    title: 'Which building each file is for',
+    lede: 'A federation usually says which building a model is for in its file name and nowhere else. These rules read it off, and they only fill a gap — anything an object states itself still wins.',
+  },
+  {
+    id: 'roles',
+    title: 'What hangs off what',
+    lede: 'Pairings your own model already draws: tagged equipment published inside other tagged equipment. Accepting one teaches the rule, not the individual parents.',
+  },
+  {
     id: 'hierarchy',
     title: 'How the register is grouped',
-    lede: 'The standard commissioning stack, and the one thing about it you have to read before publishing.',
+    lede: 'The standard commissioning stack, what it would do to your assets, and the one thing about it you have to read before publishing.',
   },
 ];
 
@@ -245,6 +259,10 @@ function StepBody({
       return <ResolverStep suggestions={suggestions} context={context} onAccepted={onAccepted} />;
     case 'classes':
       return <ClassesStep suggestions={suggestions} context={context} onAccepted={onAccepted} />;
+    case 'sources':
+      return <SourcesStep suggestions={suggestions} context={context} onAccepted={onAccepted} />;
+    case 'roles':
+      return <RolesStep suggestions={suggestions} context={context} onAccepted={onAccepted} />;
     case 'hierarchy':
       return <HierarchyStep suggestions={suggestions} context={context} onAccepted={onAccepted} />;
     default:
@@ -337,6 +355,12 @@ function patchForFields(
   }
 
   return {
+    // The starter rule set, merged on the first thing anybody accepts. It is
+    // three decisions a fast setup is entitled to make on a site's behalf
+    // (identity normalization, the full ladder) and nothing about what this
+    // site calls things — `starterProfile` states why, and a project that never
+    // enters Quick Setup never sees it.
+    ...starterProfile(),
     propertyMappings: mappings,
     derivedAttributes: derived,
     parentTagProperty,
@@ -374,6 +398,13 @@ function FieldsStep({
       chosen.set(targetKey(field.target), { field, candidate });
     }
   }
+
+  // The impact of THIS step is the tag: every other mapping decorates an asset,
+  // and the tag is what decides whether there is one.
+  const tagImpact =
+    chosen.get(
+      targetKey({ kind: 'mapped-field', field: 'equipmentTag' }),
+    )?.candidate ?? null;
 
   return (
     <>
@@ -477,6 +508,9 @@ function FieldsStep({
           }}
         >
           Accept {count(chosen.size)} {chosen.size === 1 ? 'mapping' : 'mappings'}
+          {tagImpact === null
+            ? ''
+            : ` — ${count(tagImpact.objectCount)} of ${count(suggestions.objectCount)} objects carry that tag`}
         </button>
       </div>
     </>
@@ -584,7 +618,8 @@ function AnatomyStep({
               .then(onAccepted, onAccepted);
           }}
         >
-          Accept this tag shape
+          Accept this tag shape — it splits {count(anatomy.matchedCount)} of{' '}
+          {count(anatomy.totalCount)} tags
         </button>
       </div>
     </>
@@ -710,6 +745,11 @@ function ResolverStep({
           }}
         >
           Accept this arrangement
+          {preview.data === null || preview.data === undefined || preview.data.state !== 'ready'
+            ? ''
+            : ` — ${count(preview.data.resolvedCount)} of ${count(
+                preview.data.subjectCount,
+              )} assets get a system, in ${count(preview.data.distinctSystemCount)} systems`}
         </button>
       </div>
     </>
@@ -835,14 +875,228 @@ function ClassesStep({
               .then(onAccepted, onAccepted);
           }}
         >
-          Accept these class lists
+          Accept these class lists — {count(keptObjects)} objects stay,{' '}
+          {count(removedObjects)} leave
         </button>
       </div>
     </>
   );
 }
 
-/* --------------------------------------------------------- step 5: hierarchy */
+/* --------------------------------------------------- step 5: source assignments */
+
+function SourcesStep({
+  suggestions,
+  context,
+  onAccepted,
+}: {
+  readonly suggestions: WireQuickSetupSuggestions;
+  readonly context: WizardContext;
+  readonly onAccepted: () => void;
+}): JSX.Element {
+  const [accepting, setAccepting] = useState<ReadonlySet<string>>(
+    () => new Set(suggestions.sourceAssignments.map((entry) => entry.rule.match)),
+  );
+  const chosen = suggestions.sourceAssignments.filter((entry) =>
+    accepting.has(entry.rule.match),
+  );
+  const objects = chosen.reduce((total, entry) => total + entry.matchedObjectCount, 0);
+
+  if (suggestions.sourceAssignments.length === 0) {
+    return (
+      <Callout tone="info">
+        Nothing to propose here. Either these file names carry no building code, or the rules are
+        already in your profile. Screen 6 of the full setup writes them by hand — and if an object
+        property already states the building, you do not need a rule at all.
+      </Callout>
+    );
+  }
+
+  return (
+    <>
+      <Panel
+        title="Rules read off the file names"
+        description="A rule only fills a gap. Anything an object states for itself still wins, every time."
+      >
+        <TableScroll>
+          <table className="table table--compact" data-testid="quick-assignments">
+            <thead>
+              <tr>
+                <th>Accept</th>
+                <th>Pattern</th>
+                <th>Assigns</th>
+                <th className="table__number">Files</th>
+                <th className="table__number">Objects</th>
+              </tr>
+            </thead>
+            <tbody>
+              {suggestions.sourceAssignments.map((entry: WireAssignmentSuggestion): JSX.Element => (
+                <tr key={entry.rule.match}>
+                  <td className="table__number">
+                    <input
+                      type="checkbox"
+                      aria-label={`Accept the rule for ${entry.rule.match}`}
+                      data-testid={`quick-assignment-${entry.rule.match}`}
+                      checked={accepting.has(entry.rule.match)}
+                      onChange={(): void => {
+                        const next = new Set(accepting);
+                        if (next.has(entry.rule.match)) {
+                          next.delete(entry.rule.match);
+                        } else {
+                          next.add(entry.rule.match);
+                        }
+                        setAccepting(next);
+                      }}
+                    />
+                  </td>
+                  <td>{entry.rule.match}</td>
+                  <td>
+                    Building = {entry.rule.assign.building}
+                    <span className="candidate__why"> {entry.why}</span>
+                  </td>
+                  <td className="table__number">{count(entry.matchedFileCount)}</td>
+                  <td className="table__number">{count(entry.matchedObjectCount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
+      </Panel>
+
+      <div className="button-row">
+        <button
+          className="button button--primary"
+          type="button"
+          data-testid="quick-accept-sources"
+          disabled={chosen.length === 0}
+          onClick={(): void => {
+            void context
+              .update(
+                (draft): WireDraftPatch => ({
+                  sourceAssignments: [
+                    ...draft.sourceAssignments,
+                    ...chosen.map((entry) => entry.rule),
+                  ],
+                }),
+              )
+              .then(onAccepted, onAccepted);
+          }}
+        >
+          Accept {count(chosen.length)} {chosen.length === 1 ? 'rule' : 'rules'} —{' '}
+          {count(objects)} of {count(suggestions.objectCount)} objects get a building
+        </button>
+      </div>
+    </>
+  );
+}
+
+/* -------------------------------------------------------------- step 6: roles */
+
+function RolesStep({
+  suggestions,
+  context,
+  onAccepted,
+}: {
+  readonly suggestions: WireQuickSetupSuggestions;
+  readonly context: WizardContext;
+  readonly onAccepted: () => void;
+}): JSX.Element {
+  const pairKey = (pair: WireRolePairSuggestion): string =>
+    `${pair.parentRole} ${pair.childRole}`;
+  const [accepting, setAccepting] = useState<ReadonlySet<string>>(
+    () => new Set(suggestions.rolePairs.map(pairKey)),
+  );
+  const chosen = suggestions.rolePairs.filter((pair) => accepting.has(pairKey(pair)));
+  const nestings = chosen.reduce((total, pair) => total + pair.count, 0);
+
+  if (suggestions.rolePairs.length === 0) {
+    return (
+      <Callout tone="info">
+        Nothing to propose here. Either no tag shape has been accepted yet — the roles come from
+        it — or this model never publishes tagged equipment inside other tagged equipment, which is
+        ordinary. Screen 7 of the full setup teaches pairings by hand.
+      </Callout>
+    );
+  }
+
+  return (
+    <>
+      <Panel
+        title="Pairings your model already draws"
+        description="Counted off the model tree. Accepting one teaches the RULE — that this kind of thing hangs off that kind of thing — and the ladder still decides each individual parent."
+      >
+        <TableScroll>
+          <table className="table table--compact" data-testid="quick-role-pairs">
+            <thead>
+              <tr>
+                <th>Accept</th>
+                <th>Parent role</th>
+                <th>Child role</th>
+                <th className="table__number">Times drawn</th>
+                <th>For example</th>
+              </tr>
+            </thead>
+            <tbody>
+              {suggestions.rolePairs.map((pair: WireRolePairSuggestion): JSX.Element => (
+                <tr key={pairKey(pair)}>
+                  <td className="table__number">
+                    <input
+                      type="checkbox"
+                      aria-label={`Accept ${pair.parentRole} to ${pair.childRole}`}
+                      data-testid={`quick-role-${pair.parentRole}-${pair.childRole}`}
+                      checked={accepting.has(pairKey(pair))}
+                      onChange={(): void => {
+                        const next = new Set(accepting);
+                        if (next.has(pairKey(pair))) {
+                          next.delete(pairKey(pair));
+                        } else {
+                          next.add(pairKey(pair));
+                        }
+                        setAccepting(next);
+                      }}
+                    />
+                  </td>
+                  <td>{pair.parentRole}</td>
+                  <td>{pair.childRole}</td>
+                  <td className="table__number">{count(pair.count)}</td>
+                  <td className="muted">{pair.examples.join(', ')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
+      </Panel>
+
+      <div className="button-row">
+        <button
+          className="button button--primary"
+          type="button"
+          data-testid="quick-accept-roles"
+          disabled={chosen.length === 0}
+          onClick={(): void => {
+            void context
+              .update(
+                (draft): WireDraftPatch =>
+                  starterProfile([
+                    ...draft.roleGraph.rules,
+                    ...chosen.map((pair) => ({
+                      parentRole: pair.parentRole,
+                      childRole: pair.childRole,
+                    })),
+                  ]),
+              )
+              .then(onAccepted, onAccepted);
+          }}
+        >
+          Accept {count(chosen.length)} {chosen.length === 1 ? 'pairing' : 'pairings'} —{' '}
+          {count(nestings)} nestings this model already draws
+        </button>
+      </div>
+    </>
+  );
+}
+
+/* --------------------------------------------------------- step 7: hierarchy */
 
 function HierarchyStep({
   suggestions,
@@ -856,12 +1110,36 @@ function HierarchyStep({
   const [confirmed, setConfirmed] = useState<boolean>(false);
   const levels = suggestions.hierarchy.levels;
   const boundaries = levels.filter((level) => level.boundary);
+  const projection = suggestions.hierarchyProjection;
+  const projected =
+    projection.state === 'ready'
+      ? new Map(projection.levels.map((level) => [level.levelId, level] as const))
+      : new Map<string, WireHierarchyProjectionLevel>();
+
+  /** The sentence the Accept button carries — the whole point of this step. */
+  const impact = ((): string => {
+    if (projection.state !== 'ready') {
+      return '';
+    }
+    const parts = projection.levels
+      .filter((level) => level.boundary)
+      .map(
+        (level) =>
+          `${count(level.distinctValueCount)} ${level.displayName.toLowerCase()} groups` +
+          (level.assetsWithoutValue === 0
+            ? ''
+            : `, ${count(level.assetsWithoutValue)} without one`),
+      );
+    return ` — ${count(projection.assetCount)} assets in ${
+      parts.length === 0 ? 'no structural levels' : parts.join('; ')
+    }`;
+  })();
 
   return (
     <>
       <Panel
         title="The standard commissioning stack"
-        description="Building, then SSM Discipline, then System. This is what a new project starts from."
+        description="Building, then SSM Discipline, then System — and what each one would do to the assets you have right now."
       >
         <TableScroll>
           <table className="table table--compact" data-testid="quick-hierarchy">
@@ -870,23 +1148,56 @@ function HierarchyStep({
                 <th>Level</th>
                 <th>Grouped by</th>
                 <th>Structural?</th>
+                <th className="table__number">Groups</th>
+                <th className="table__number">Assets with no value</th>
               </tr>
             </thead>
             <tbody>
-              {levels.map((level: WireHierarchyLevel): JSX.Element => (
-                <tr key={level.levelId}>
-                  <td>{level.displayName}</td>
-                  <td className="muted">{level.attributeKey}</td>
-                  <td>
-                    {level.boundary
-                      ? 'Yes — equipment cannot nest across it'
-                      : 'No — a grouping only'}
-                  </td>
-                </tr>
-              ))}
+              {levels.map((level: WireHierarchyLevel): JSX.Element => {
+                const measured = projected.get(level.levelId);
+                return (
+                  <tr key={level.levelId}>
+                    <td>{level.displayName}</td>
+                    <td className="muted">{level.attributeKey}</td>
+                    <td>
+                      {level.boundary
+                        ? 'Yes — equipment cannot nest across it'
+                        : 'No — a grouping only'}
+                    </td>
+                    <td className="table__number">
+                      {measured === undefined ? (
+                        <span className="muted">—</span>
+                      ) : (
+                        count(measured.distinctValueCount)
+                      )}
+                    </td>
+                    <td className="table__number">
+                      {measured === undefined ? (
+                        <span className="muted">—</span>
+                      ) : (
+                        count(measured.assetsWithoutValue)
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </TableScroll>
+
+        {projection.state === 'blocked' ? (
+          <Callout tone="info">{projection.reason}</Callout>
+        ) : null}
+
+        {/* Why a boundary flag is on or off, in this project's own numbers. The
+            audit's B3 is precisely this sentence never being written: a stack
+            whose top level nobody can state compiles into a flat list of roots,
+            and nothing said so until after the publish. */}
+        {suggestions.hierarchyNotes.map((note: string): JSX.Element => (
+          <Callout key={note} tone={note.includes('grouping rather than') ? 'warning' : 'info'}>
+            {note}
+          </Callout>
+        ))}
 
         {/* The P0-5 confirmation, inline. Screen 9 asks it again before a
             revision is saved; asking it here as well is deliberate, because
@@ -929,7 +1240,7 @@ function HierarchyStep({
               .then(onAccepted, onAccepted);
           }}
         >
-          Accept this stack
+          Accept this stack{impact}
         </button>
       </div>
     </>

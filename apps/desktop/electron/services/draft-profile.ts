@@ -27,6 +27,10 @@ import type {
 } from '@matchline/domain';
 
 import { liftMappedProperty, MAPPED_PROPERTY_FIELDS } from '../../shared/schemas.js';
+// Re-exported so the draft's starting point and its one recommendation are
+// found in the same place; the function itself is shared because the Quick
+// Setup screen builds the patch and the renderer cannot import main.
+export { starterProfile } from '../../shared/starter-profile.js';
 import type {
   WireAssetFilters,
   WireAttributeResolver,
