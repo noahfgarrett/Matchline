@@ -43,9 +43,9 @@ import type {
  *
  * This is a preview and says so: it reports coverage, which rung answered and
  * eight examples. It never writes, and the compile remains the only thing whose
- * numbers are the answer. `derived-preview.test.mjs` pins the three rules above
- * against the compiler's own behaviour on the Dragon fixture, which is what
- * stops the restatement drifting.
+ * numbers are the answer. `derived-preview.test.mjs` pins the MEL join against
+ * the refusals the compile takes, which is what stops the restatement drifting
+ * on the one rung that reaches outside this file.
  */
 
 /** Everything one asset's chain may consult. Assembled once per asset. */
