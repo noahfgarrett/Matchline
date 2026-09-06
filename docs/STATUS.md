@@ -6,9 +6,9 @@ Living document. Updated at every phase merge. Newest entries at the top of the 
 
 | Item | Needs | Where it's specified |
 |---|---|---|
-| Navisworks extraction proof run | Windows + Navisworks Manage 2025 | docs/WINDOWS-RUNBOOK.md (35 VERIFY-ON-WINDOWS flags) |
+| Navisworks extraction proof run | Windows + Navisworks Manage 2025 | docs/WINDOWS-RUNBOOK.md; 52 VERIFY-ON-WINDOWS flags repo-wide as of 2026-09-04 (`grep -rn "VERIFY-ON-WINDOWS" native/ docs/ \| wc -l`), 44 of them in `native/**` |
 | Code signing (MSIX/EXE) | Certificate purchase + org verification | DECISIONS.md open items |
-| Navisworks 2024/2026 adapters | Those product versions installed | PRODUCT.md Phase 7 (M7 landed the projects; both are `stub-compiled-unverified` until a real install proves them) |
+| Navisworks 2024/2025/2026 adapters | Those product versions installed | PRODUCT.md Phase 7 (M7 landed the projects; all three are `stub-compiled-unverified` until a real install proves one) |
 | Multi-site pilots / baseline refinement | Real sites | PRODUCT.md Phase 8 |
 
 Consequence: the deliverable of this build-out is a feature-complete app, fully tested against
@@ -44,6 +44,50 @@ Windows build. Extraction is exercised for real on Noah's first runbook run.
   value with status CONFLICTING + a review item — visibility, not nullification. Deliberate.
 
 ## Log
+
+### 2026-09-04 — audit work packages landed (branch `claude/matchline-1.0.0-hardening-20260810`)
+
+Seven of docs/AUDIT-2026-09-02-NWD-TO-SSM.md's eight work packages landed in 45
+commits following the audit commit (`731c883`). Suite: 2326 tests, 0 failures.
+Build clean, renderer bundles. No `dotnet` on this machine — every C# change is
+written and stub-compiled only, never run against a real Navisworks install.
+
+- **Shipped the toolchain (WP1).** The launcher and adapter DLLs are staged into
+  the packaged app (`apps/desktop/scripts/stage-native.mjs` + `extraResources`);
+  CI builds, packages and smoke-executes the launcher; the release workflow now
+  signs the tree before packaging rather than after.
+- **Launcher/service hardening (WP2), unverified on Windows.** Stall timeout,
+  end-record grace kill, Job Object, stdin-EOF cancel, `PLUGIN_NOT_DEPLOYED` /
+  `PLUGIN_NOT_FOUND` / `NW_STALLED`, `%LOCALAPPDATA%` cache, rejected caches moved
+  aside, quit confirmation, pre-launch file re-check.
+- **Cache schema v3 (WP4), unverified on Windows.** Authoring ids keyed on
+  (kind, id), structural keys, flags, set GUIDs, real search-set membership
+  resolved before the walk, nested/appended models, NWF `ref` records and
+  `SOURCE_MODEL_MISSING`. 2025's adapter label was corrected from
+  `pending-real-proof` to `stub-compiled-unverified` — the stronger claim had
+  never been earned; every adapter build in this repo's history used
+  `native/navisworks-stubs`.
+- **Compile completeness (WP5).** `CompletenessReport`, counted review kinds
+  (`missing-boundary-level`, `unresolved-system`, `boundary-demotion`), the
+  `mel-parent` ladder rung, `unicodeFold`, `validateProfile`, indexed MEL lookup,
+  `possible-rematch` review items for a tag-only identity match.
+- **Workspace/outputs (WP6).** Tree and Flow roots page to their real totals; SSM
+  hierarchy workbook export; last compile restored on open; every save path gated
+  behind screen 9's publish confirmation (compiling an unpublished draft is now a
+  preview that records nothing); property pickers search the full catalog.
+- **Store robustness (WP7).** Guarded transaction commit with a busy timeout;
+  verified, fsynced pre-migration backup; read-only/locked open results; schema
+  v7 (draft slot, `compile_assets`, retention); system overrides reach the
+  compiler; one override row per asset regardless of key spelling.
+- **Quick Setup for real models (WP8).** Revit-shaped fixture; building from
+  Workset/Level/filename rules; bare-mark tag shape; projected group counts;
+  starter profile from accepted suggestions only.
+
+**Not done.** WP3, the real Navisworks proof, still needs Noah's Windows box —
+everything above is a prerequisite that now exists but has not been exercised
+against a real install. Also still open: the signing certificate, the update
+path, and a clean-machine install E2E. See docs/RELEASE-1.0-PLAN.md's gate
+tracker for the authoritative per-gate status.
 
 ### 2026-08-11 — 1.0.0-rc.1 assembled
 All ten milestones' code work complete; suite 2155/0 at the rc commit; acceptance

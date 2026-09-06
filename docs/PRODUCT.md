@@ -29,6 +29,7 @@ the binding text — and each is logged in [`DECISIONS.md`](DECISIONS.md).
 | 6 | Hierarchy levels come from raw, joined or derived fields (§2.4) without saying where a derived field is defined. | A versioned profile-level **derived attribute registry**: `DerivedAttributeDefinition` with seven resolver kinds (model-property, tag-segment, source-assignment, system-field, composite, mel-lookup, manual). The profile defines the field, the compiler resolves it deterministically, the Composer lists it, and a missing value stays missing — no fallback value ever feeds a boundary. | P0-7; gate 7. |
 | 7 | One property mapping per standard field (§4, §13.2). | **Ordered fallback chains with optional per-source overrides** on every standard field, plus profile-level **source assignment rules** resolved object property > source-model > logical file > confirmed filename pattern > review, with provenance naming the tier and the rule. Existing single mappings migrate to a one-rung chain. | P0-8; gates 5–6. Editors for the chains, the assignment rules and the derived-attribute registry are still open. |
 | 8 | Identity is reconciled per compile (§9). | A persistent **asset identity ledger** in the project file: `{assetId, currentCanonicalTag, aliases, modelIdentities}`. Identity evidence runs profile-mapped stable id property > source persistent id + authoring object id > source persistent id + InstanceGuid > deterministic structural key > tag as last-resort reconciliation; a content hash is never part of identity. A corrected tag keeps its `assetId`, manual decisions recorded against it keep applying, and the diff reports a tag change rather than a remove plus an add. Overrides that cannot be mapped become orphaned-decision review items and are never dropped. | P0-9; gate 12. |
+| 9 | Screen 9 is "Publish Site Profile" (§7); nothing in the plan says a compile may publish a revision on its own. | **Compiling an unpublished draft is a preview.** `compileNow` (`project-session.ts`) only points a compile row at a `profile_revision` that is already saved; an unpublished draft still compiles, so a person can see the numbers before deciding the draft is right, but that run writes no compile row, no snapshot and no ledger — screen 8 is told `unsavedDraft: true` and says so. Publishing on screen 9 is the only thing that turns a draft into a revision a compile can record against. | Closes the audit's "boundary confirmation and publish gate are bypassable" finding — a compile used to publish a revision for itself, skipping screen 9's blockers. |
 
 Two smaller ones, for completeness: the stack trims in §14 were settled in
 DECISIONS.md #5 (no Zustand; Node's built-in `node:sqlite` instead of a driver
@@ -38,8 +39,9 @@ corrected tree there and the fuller table in the root `README.md`.
 Nothing in this document should be read as a claim about Navisworks version
 support. That claim lives in one place,
 `native/navisworks-common/Protocol/SupportedAdapters.cs`, and today no version is
-verified: 2025 is pending its real proof run and 2024/2026 are stub-compiled and
-unverified.
+verified: 2024, 2025 and 2026 are all `stub-compiled-unverified` — every adapter
+build in this project's history, CI included, has compiled only against
+`native/navisworks-stubs`, never against the real Autodesk assembly.
 
 ---
 

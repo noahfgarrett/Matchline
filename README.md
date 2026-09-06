@@ -96,7 +96,7 @@ newest installed version and says which one will open the file.
 6. **Review.** Conflicts, duplicates, unresolvable identities, cross-boundary
    demotions and orphaned decisions arrive as review items, never as silent fixes.
 7. **Export.** Generated MEL, template MEL, MEL comparison, EXTO workbook,
-   predecessor matrix, revision diff.
+   predecessor matrix, revision diff, SSM hierarchy workbook.
 
 **Dropping a raw `.nwd`/`.nwf`/`.nwc` now extracts it, on Windows.** The app detects
 the installed Navisworks that will open the file, runs the extraction in place with
@@ -288,8 +288,12 @@ docs/ORIGIN.md records what was inherited and what was deliberately changed.
 
 The repository version is 0.8.1 and the work toward 1.0.0 is in progress on a
 branch. docs/RELEASE-1.0-PLAN.md holds the directive and the live gate tracker;
-docs/STATUS.md holds the build log. Known-open, and stated here so nothing above
-reads as a promise: the real Navisworks hardware proof (in-app extraction is built
-and tested against a protocol-faithful fake, but has never driven the real
-Autodesk API), code signing, the update path, and verification of the 2024/2026
-adapters.
+docs/STATUS.md holds the build log. Suite: 2326 tests, 0 failures. Known-open, and
+stated here so nothing above reads as a promise: the real Navisworks hardware
+proof (the launcher and adapter are now packaged and shipped by CI, and hardened
+against stalls, orphaned processes and a missing plugin — but every C# change is
+still unverified against a real Autodesk assembly, having been written and
+compiled only against `native/navisworks-stubs` with no Windows/Navisworks
+machine in this project's history), code signing (the release workflow signs the
+tree before packaging, but there is no certificate yet), the update path, and
+verification of all three (2024/2025/2026) adapters.

@@ -159,15 +159,23 @@ observations + identity + anatomy + role graph + learned rules
      silently), every decision provenance'd, losing claims retained.
 - **`@matchline/asset-identity`** — the asset identity ledger (RELEASE-1.0-PLAN P0-9).
   Evidence order, strongest first: profile-mapped stable-id property → source-model
-  persistent id + authoring object id → source-model persistent id + InstanceGuid →
-  deterministic structural key (persistent id + root-relative child-index path + class) →
-  tag (reconciliation only, reported as its own event). Content hash is never identity, so
-  a re-extraction of an unchanged model moves nothing. `reconcileLedger` moves a ledger
+  persistent id + authoring object id, keyed on the pair (kind, id) so a Revit ElementId
+  and an AutoCAD handle sharing the same digits never merge → source-model persistent id +
+  InstanceGuid → structural (persistent id + root-relative child-index path + class,
+  derived from tree shape only) → structural-key (schema v3's `objects.structural_key`, a
+  digest of the ancestor chain of class/display-name/sibling-position from the model's
+  root — weaker than `structural` because it folds display names in, stronger than `tag`
+  because nothing a person edits changes it; absent on a pre-v3 cache) → tag (reconciliation
+  only, reported as its own event). Content hash is never identity, so a re-extraction of an
+  unchanged model moves nothing. `reconcileLedger` moves a ledger
   `{assetId, currentCanonicalTag, aliases, modelIdentities, status}` forward by one compile:
   a tier that names two previous entries identifies nothing and the walk falls through; one
   entry claimed by two assets SPLITS (both kept, event explains) and is never merged; an
-  entry no asset claimed is flagged `disappeared` and never deleted. Plain JSON, because
-  the project persists it.
+  entry no asset claimed is flagged `disappeared` and never deleted. A `tag`-only match
+  additionally raises a `possible-rematch` review item when nothing else agrees the two are
+  the same thing (the previous entry last showed `disappeared`, or its sources and the
+  current ones do not overlap) — the re-match still happens, but the person who knows the
+  site gets a chance to say it was wrong. Plain JSON, because the project persists it.
 - **`@matchline/compiler`** — the orchestrator that owns the E1 property-bag seam:
   model universe + spreadsheets + **SiteProfileV2** → asset catalog → **identity ledger** →
   subjects (property bags) → system resolution → identity → observations → claims →

@@ -170,6 +170,12 @@ refused, and the file is left exactly as found.
 - **v4 → v5** — adds the `ledger` table. Purely additive.
 - **v5 → v6** — widens the `config` CHECK by `derivedAttributes` and `sourceAssignmentRules`.
   Nothing is back-filled: a project that configured neither has no row for them.
+- **v6 → v7** — adds `profile_draft` and `compile_assets`, and `compiles.asset_count`. Every
+  existing compile's generated-MEL assets are lifted out of `stats_json` into
+  `compile_assets` (newest `COMPILE_ASSET_RETENTION` rows only; older rows keep
+  `asset_count` and lose the array, same as a new compile pruning them); `stats_json` is
+  rewritten to the summary alone. A `stats_json` this build does not recognize is left
+  exactly as found rather than guessed at.
 - **SiteProfileV2** — not a schema step but part of the same opening. A stored v1 profile
   revision is lifted on read, the legacy `config` sections are merged into a new revision
   the first time the project opens, and a v1 profile package is migrated on import rather

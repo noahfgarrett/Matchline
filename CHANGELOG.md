@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased — since 1.0.0-rc.1
+
+Seven of the eight work packages from docs/AUDIT-2026-09-02-NWD-TO-SSM.md landed on
+the hardening branch (docs/AUDIT-2026-09-02-NWD-TO-SSM.md, "Status after the work
+packages"). No `dotnet` on this machine: every C# change below is unverified
+against a real Autodesk assembly.
+
+- **Packaging:** the launcher and adapter DLLs are staged into the app
+  (`apps/desktop/scripts/stage-native.mjs` + `extraResources`); CI builds, packages
+  and smoke-executes the launcher; the release workflow signs the tree before
+  packaging rather than after; `.npmrc` guards `npm ci` install scripts.
+- **Launcher:** stall detection (`--stall-timeout-seconds`, default 900s), an
+  end-record grace kill before Roamer is force-killed, a kill-on-close Job Object,
+  a plugin pre-flight before Navisworks is started, quit confirmation, pre-launch
+  file re-check, `%LOCALAPPDATA%` cache with rejected caches moved aside. New codes
+  `NW_STALLED`, `PLUGIN_NOT_DEPLOYED`, `PLUGIN_NOT_FOUND`, `SOURCE_MODEL_MISSING`.
+- **Extraction cache:** schema v3 — authoring ids keyed on (kind, id), structural
+  keys, flags, set GUIDs, real search-set membership via `GetSelectedItems()`
+  resolved before the walk (memory-bounded), nested/appended models. NWF inputs are
+  never served from cache, and a document that opens without one of its models
+  fails `SOURCE_MODEL_MISSING` rather than committing a smaller cache.
+- **Navisworks adapters:** every year (2024, 2025, 2026) is now labelled
+  `stub-compiled-unverified` — 2025 was carrying the stronger `pending-real-proof`
+  label; every build in this project's history has compiled only against
+  `native/navisworks-stubs`, never the real assembly.
+- **Compiler:** publishes a `CompletenessReport` (nested vs. rooted, per-level gaps,
+  demotions, unresolved systems); new counted review kinds
+  `missing-boundary-level`, `unresolved-system`, `boundary-demotion`; a `mel-parent`
+  ladder rung joins the MEL's System Parent column through identity; `unicodeFold`
+  normalization; `validateProfile` up front; `possible-rematch` review items when a
+  tag-only identity match agrees with nothing else.
+- **Desktop:** the last compile is restored on project open instead of every
+  session starting blank; every save path is gated behind screen 9's publish
+  confirmation — compiling an unpublished draft is a preview that records nothing;
+  the SSM tree and Flow roots page to their real totals; property pickers search
+  the whole catalog, not a 500-row page; the review queue pages and surfaces stale
+  decisions; Quick Setup now reads Revit-shaped models (building from
+  Workset/Level/filename rules, bare-mark tag shapes, projected group counts).
+- **Exports:** SSM hierarchy workbook — one column per configured level, plus a
+  sheet naming the structural boundaries.
+- **Project store:** schema v7 (draft slot, `compile_assets` table, retention);
+  guarded transaction commit with a busy timeout; verified, fsynced pre-migration
+  backup; read-only/locked files open as results, not failures; system overrides
+  now reach the compiler; one override row per asset regardless of key spelling.
+- Suite: 2326 tests, 0 failures. Remaining gates: the real Navisworks proof, code
+  signing, the updater, and clean-machine install.
+
 ## 1.0.0-rc.1 — 2026-08-11 — release candidate
 
 The 1.0 hardening campaign (docs/RELEASE-1.0-PLAN.md), all nine P0 findings landed:
