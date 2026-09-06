@@ -9,6 +9,8 @@ import type {
 import { call, count, messageOf } from '../api';
 import { Callout, Panel, Stat, StatRow, TableScroll } from '../components/Panel';
 
+import { RecompileNotice } from './RecompileNotice';
+
 /**
  * The review queue: everything the compiler refused to decide on its own.
  *
@@ -98,6 +100,8 @@ const DECISIONS: ReadonlyArray<readonly [WireDecisionValue, string]> = [
 export function ReviewView({
   onUndecidedChange,
   restored,
+  onRecompile,
+  recompiling,
 }: {
   /**
    * Reports how many items are still waiting.
@@ -119,6 +123,8 @@ export function ReviewView({
    * one wrong answer this panel can give without showing a single bad number.
    */
   readonly restored?: boolean | undefined;
+  readonly onRecompile: () => Promise<void>;
+  readonly recompiling: boolean;
 }): JSX.Element {
   const [page, setPage] = useState<WireReviewPage | null>(null);
   /**
@@ -262,11 +268,12 @@ export function ReviewView({
 
         {rows.length === 0 ? (
           restored === true ? (
-            <Callout tone="info">
-              This project is showing the compile it had on file when it was opened. The review
-              queue is rebuilt by a compile — run one on screen 8 and whatever is still waiting
-              comes back here.
-            </Callout>
+            <RecompileNotice
+              sentence="The review queue is rebuilt by a compile rather than stored with it, so this project reopened without one. Everything still waiting comes back."
+              onRecompile={onRecompile}
+              recompiling={recompiling}
+              data-testid="review-restored"
+            />
           ) : (
             <Callout tone="success">
               Nothing here. The compiler settled everything it had evidence for.

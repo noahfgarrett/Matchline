@@ -11,6 +11,8 @@ import type {
 import { call, count, fileSize, messageOf } from '../api';
 import { Callout, Panel, TableScroll } from '../components/Panel';
 
+import { RecompileNotice } from './RecompileNotice';
+
 /**
  * The exports panel.
  *
@@ -18,6 +20,11 @@ import { Callout, Panel, TableScroll } from '../components/Panel';
  * the bytes, then say where the file went and what is in it. The note under a
  * success is not decoration — it is where an export admits what it could not
  * fill in, so a blank column is never mistaken for a value of nothing.
+ *
+ * On a restored compile four of these are refused by main — they read the
+ * compiled project, which the project file does not store. Saying so at the top
+ * is the honest place for it: the alternative is letting somebody name a file,
+ * choose a folder and press Save before finding out.
  */
 
 const XLSX_FILTERS = [{ name: 'Excel workbook', extensions: ['xlsx'] }];
@@ -26,7 +33,18 @@ type Toast =
   | { readonly tone: 'success'; readonly text: string }
   | { readonly tone: 'error'; readonly text: string };
 
-export function ExportsView({ projectName }: { readonly projectName: string }): JSX.Element {
+export function ExportsView({
+  projectName,
+  restored,
+  onRecompile,
+  recompiling,
+}: {
+  readonly projectName: string;
+  /** True when the workspace is showing the compile read back on open. */
+  readonly restored: boolean;
+  readonly onRecompile: () => Promise<void>;
+  readonly recompiling: boolean;
+}): JSX.Element {
   const [toast, setToast] = useState<Toast | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [analysis, setAnalysis] = useState<WireTemplateAnalysis | null>(null);
@@ -177,6 +195,15 @@ export function ExportsView({ projectName }: { readonly projectName: string }): 
       {toast === null ? null : (
         <Callout tone={toast.tone === 'success' ? 'success' : 'error'}>{toast.text}</Callout>
       )}
+
+      {restored ? (
+        <RecompileNotice
+          sentence="The generated MEL, the EXTO sheet, the predecessor matrix and the SSM hierarchy workbook are written from the compiled project, which the project file does not store. The register exports below work as they are."
+          onRecompile={onRecompile}
+          recompiling={recompiling}
+          data-testid="exports-restored"
+        />
+      ) : null}
 
       <Panel
         title="Generated MEL"

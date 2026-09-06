@@ -5,6 +5,8 @@ import type { WireFlowNode, WireFlowRoot } from '../../../shared/schemas';
 import { call, count, messageOf } from '../api';
 import { Callout, Panel } from '../components/Panel';
 
+import { RecompileNotice } from './RecompileNotice';
+
 /**
  * Electrical Flow (PRODUCT.md §10).
  *
@@ -16,6 +18,12 @@ import { Callout, Panel } from '../components/Panel';
  *   where the physical chain stays whole (DECISIONS.md #1).
  * - **It does not descend into instruments.** A PMD relation is a badge on the
  *   node it terminates at, not another rung of the tree.
+ *
+ * On a restored compile there is no projection to draw: it is built from the
+ * model and the project file does not store it. That is an ordinary state, not
+ * a fault, so this view says so and offers the compile rather than asking main
+ * for something it has already said it cannot give and painting the refusal
+ * red.
  */
 
 const ROW_HEIGHT = 44;
@@ -33,7 +41,16 @@ const STATUS_BADGE: Readonly<Record<string, string>> = {
   'pmd-only': 'badge--needs-attention',
 };
 
-export function FlowView(): JSX.Element {
+export function FlowView({
+  restored,
+  onRecompile,
+  recompiling,
+}: {
+  /** True when the workspace is showing the compile read back on open. */
+  readonly restored: boolean;
+  readonly onRecompile: () => Promise<void>;
+  readonly recompiling: boolean;
+}): JSX.Element {
   const [roots, setRoots] = useState<readonly WireFlowRoot[]>([]);
   const [rootTotal, setRootTotal] = useState<number>(0);
   const [selected, setSelected] = useState<string | null>(null);
@@ -51,6 +68,9 @@ export function FlowView(): JSX.Element {
    * the count is honest only if the rest can actually be asked for.
    */
   const loadRoots = useCallback(async (offset: number): Promise<void> => {
+    if (restored) {
+      return;
+    }
     try {
       const page = await call(window.matchline.flow.roots({ offset, limit: PAGE_SIZE }));
       setRootTotal(page.total);
@@ -61,7 +81,7 @@ export function FlowView(): JSX.Element {
     } catch (caught: unknown) {
       setError(messageOf(caught));
     }
-  }, []);
+  }, [restored]);
 
   useEffect((): void => {
     void loadRoots(0);
@@ -93,6 +113,19 @@ export function FlowView(): JSX.Element {
     estimateSize: (): number => ROW_HEIGHT,
     overscan: 12,
   });
+
+  if (restored) {
+    return (
+      <div className="workspace-pane" data-testid="flow-view">
+        <RecompileNotice
+          sentence="The electrical projection is built from the model and is not stored with a compile, so this project did not reopen with one."
+          onRecompile={onRecompile}
+          recompiling={recompiling}
+          data-testid="flow-restored"
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="workspace-pane" data-testid="flow-view">

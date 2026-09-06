@@ -182,11 +182,25 @@ export function Workspace({
       {error === null ? null : <Callout tone="error">{error}</Callout>}
 
       {tab === 'ssm' ? <SsmTreeView onRecompile={recompile} recompiling={recompiling} /> : null}
-      {tab === 'flow' ? <FlowView /> : null}
-      {tab === 'review' ? (
-        <ReviewView onUndecidedChange={setUndecided} restored={restored} />
+      {tab === 'flow' ? (
+        <FlowView restored={restored} onRecompile={recompile} recompiling={recompiling} />
       ) : null}
-      {tab === 'exports' ? <ExportsView projectName={projectName} /> : null}
+      {tab === 'review' ? (
+        <ReviewView
+          onUndecidedChange={setUndecided}
+          restored={restored}
+          onRecompile={recompile}
+          recompiling={recompiling}
+        />
+      ) : null}
+      {tab === 'exports' ? (
+        <ExportsView
+          projectName={projectName}
+          restored={restored}
+          onRecompile={recompile}
+          recompiling={recompiling}
+        />
+      ) : null}
     </div>
   );
 }
