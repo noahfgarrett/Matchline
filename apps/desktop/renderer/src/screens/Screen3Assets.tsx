@@ -1,4 +1,4 @@
-import { useCallback, type JSX } from 'react';
+import { useCallback, useState, type JSX } from 'react';
 
 import type {
   WireAssetFilters,
@@ -9,7 +9,9 @@ import type {
   WirePropertyCatalogRow,
   WirePropertyMappings,
   WireSampleAsset,
+  WireSelectionSetSummary,
   WireSourceImpact,
+  WireTagPatternPreview,
 } from '../../../shared/schemas';
 import { call, count, percent } from '../api';
 import { Field } from '../components/Field';
@@ -73,6 +75,64 @@ export function Screen3Assets({ context }: { readonly context: WizardContext }):
       });
     },
     [context],
+  );
+
+  const toggleSelectionSet = useCallback(
+    (name: string): void => {
+      void context.update((current) => {
+        const chosen = current.assetFilters.selectionSetNames;
+        const next = chosen.includes(name)
+          ? chosen.filter((entry: string): boolean => entry !== name)
+          : [...chosen, name].sort();
+        return { assetFilters: { ...current.assetFilters, selectionSetNames: next } };
+      });
+    },
+    [context],
+  );
+
+  const addTagPattern = useCallback(
+    (pattern: string): void => {
+      void context.update((current) => {
+        const patterns = current.assetFilters.acceptedTagPatterns;
+        // A pattern already on the list is not added twice: the engine ORs them,
+        // so a duplicate changes nothing except the count beside it.
+        return patterns.includes(pattern)
+          ? {}
+          : {
+              assetFilters: {
+                ...current.assetFilters,
+                acceptedTagPatterns: [...patterns, pattern],
+              },
+            };
+      });
+    },
+    [context],
+  );
+
+  const removeTagPattern = useCallback(
+    (pattern: string): void => {
+      void context.update((current) => ({
+        assetFilters: {
+          ...current.assetFilters,
+          acceptedTagPatterns: current.assetFilters.acceptedTagPatterns.filter(
+            (entry: string): boolean => entry !== pattern,
+          ),
+        },
+      }));
+    },
+    [context],
+  );
+
+  // Only the universe: the sets a model carries are a fact about the extraction,
+  // not about anything on this screen.
+  const selectionSets = usePreview(
+    JSON.stringify(context.universe?.sources.map((source) => source.sourceId) ?? []),
+    async () => (await call(window.matchline.model.selectionSets())).sets,
+  );
+
+  const tagPatterns = usePreview(
+    JSON.stringify([mappings, filters, context.universe?.sources.length ?? 0]),
+    async () => (await call(window.matchline.asset.tagPatterns())).preview,
   );
 
   // The universe is part of the key: adding or replacing a model source
@@ -272,6 +332,20 @@ export function Screen3Assets({ context }: { readonly context: WizardContext }):
             filters={filters}
             onToggle={toggleClass}
           />
+
+          <SelectionSetFilter
+            sets={selectionSets.data ?? []}
+            loading={selectionSets.data === null}
+            chosen={filters.selectionSetNames}
+            onToggle={toggleSelectionSet}
+          />
+
+          <TagPatternFilter
+            patterns={filters.acceptedTagPatterns}
+            preview={tagPatterns.data}
+            onAdd={addTagPattern}
+            onRemove={removeTagPattern}
+          />
         </Panel>
       </div>
 
@@ -437,6 +511,234 @@ function MappingField({
           onChange(field, mapping);
         }}
       />
+    </Field>
+  );
+}
+
+/**
+ * The selection-set filter (PRODUCT.md §6.6), chosen from what the models have.
+ *
+ * Every set the open extractions carry is offered, and the one fact that
+ * decides whether it can be used at all is on its face: a saved search whose
+ * membership the extraction could not resolve is not an empty set, it is a set
+ * nobody ran, and naming it blocks publication on screen 9. Marking it here is
+ * what stops that refusal being the first the person hears of it — the blocker
+ * text says to take the name off "the filter on screen 3", and this is it.
+ *
+ * A name on the filter that no open model carries is still listed, so it can be
+ * removed: a project part-way through adding its models has filters naming sets
+ * that do not exist yet, and hiding them would make them unremovable.
+ */
+function SelectionSetFilter({
+  sets,
+  loading,
+  chosen,
+  onToggle,
+}: {
+  readonly sets: readonly WireSelectionSetSummary[];
+  readonly loading: boolean;
+  readonly chosen: readonly string[];
+  readonly onToggle: (name: string) => void;
+}): JSX.Element {
+  const known = new Set(sets.map((set: WireSelectionSetSummary): string => set.name));
+  const orphans = chosen.filter((name: string): boolean => !known.has(name));
+
+  return (
+    <Field
+      label="Selection sets"
+      what="Keep only the objects inside the Navisworks selection sets you name. Leave every set off to accept the whole model. A set whose membership the extraction could not resolve cannot be used — publishing a profile that names one is refused."
+      example="Commissionable Equipment (24 objects)"
+    >
+      {loading ? (
+        <Callout tone="info">Reading the selection sets…</Callout>
+      ) : sets.length === 0 && orphans.length === 0 ? (
+        <Callout tone="info">
+          The models in this project recorded no selection sets, so there is nothing to
+          filter by here.
+        </Callout>
+      ) : (
+        <div className="chip-row" data-testid="selection-set-filter">
+          {sets.map((set: WireSelectionSetSummary): JSX.Element => (
+            <button
+              key={set.name}
+              className={`chip${chosen.includes(set.name) ? ' chip--active' : ''}`}
+              type="button"
+              aria-pressed={chosen.includes(set.name)}
+              data-testid={`selection-set-${set.name}`}
+              onClick={(): void => {
+                onToggle(set.name);
+              }}
+            >
+              <span className="chip__label">
+                {set.name}
+                {set.membershipResolved ? null : (
+                  <> <span className="badge badge--file-missing">unresolved</span></>
+                )}
+              </span>
+              <span className="chip__hint">
+                {set.membershipResolved
+                  ? `${set.kind} · ${count(set.memberCount)} objects · ${set.sourceNames.join(', ')}`
+                  : `${set.kind} · never run in ${set.unresolvedIn.join(', ')} · cannot be filtered on`}
+              </span>
+            </button>
+          ))}
+
+          {orphans.map((name: string): JSX.Element => (
+            <button
+              key={name}
+              className="chip chip--active"
+              type="button"
+              aria-pressed
+              data-testid={`selection-set-${name}`}
+              onClick={(): void => {
+                onToggle(name);
+              }}
+            >
+              <span className="chip__label">{name}</span>
+              <span className="chip__hint">
+                not in any model added so far · click to take it off the filter
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </Field>
+  );
+}
+
+/**
+ * The accepted-tag-pattern filter, with what each pattern actually keeps.
+ *
+ * Glob-lite and nothing more, because that is what the engine runs
+ * (`@matchline/asset-catalog`'s `isTagAccepted`): `*` stands for any run of
+ * characters and every other character is literal. Offering a regular
+ * expression box here would be offering something the compile cannot honour.
+ *
+ * The count beside each pattern is measured over the tags that actually reach
+ * this stage — after the class, set and tag-presence filters — so a pattern
+ * that keeps nothing says so before it is saved rather than after a compile
+ * comes back empty.
+ */
+function TagPatternFilter({
+  patterns,
+  preview,
+  onAdd,
+  onRemove,
+}: {
+  readonly patterns: readonly string[];
+  readonly preview: WireTagPatternPreview | null;
+  readonly onAdd: (pattern: string) => void;
+  readonly onRemove: (pattern: string) => void;
+}): JSX.Element {
+  const [draft, setDraft] = useState('');
+  const counts = new Map(
+    preview !== null && preview.state === 'ready'
+      ? preview.patterns.map((entry) => [entry.pattern, entry.matchCount] as const)
+      : [],
+  );
+
+  const submit = (): void => {
+    const trimmed = draft.trim();
+    if (trimmed === '') {
+      return;
+    }
+    onAdd(trimmed);
+    setDraft('');
+  };
+
+  return (
+    <Field
+      label="Accepted tag patterns"
+      what="Keep only equipment whose tag matches one of these. `*` stands for any run of characters; everything else is literal. Leave the list empty to accept every tag shape."
+      example="MAH* keeps MAH001-10-01 and MAH002-10-01"
+      htmlFor="tag-pattern-input"
+    >
+      {patterns.length === 0 ? (
+        <Callout tone="info">
+          No patterns, so every tag shape is accepted.
+          {preview !== null && preview.state === 'ready'
+            ? ` All ${count(preview.totalTags)} tagged assets stay.`
+            : ''}
+        </Callout>
+      ) : (
+        <TableScroll>
+          <table className="table table--compact" data-testid="tag-pattern-table">
+            <thead>
+              <tr>
+                <th>Pattern</th>
+                <th className="table__number">Tags kept</th>
+                <th className="table__number"> </th>
+              </tr>
+            </thead>
+            <tbody>
+              {patterns.map((pattern: string): JSX.Element => {
+                const matched = counts.get(pattern);
+                return (
+                  <tr key={pattern}>
+                    <td>
+                      <code>{pattern}</code>
+                      {matched === 0 ? (
+                        <> <span className="badge badge--file-missing">matches nothing</span></>
+                      ) : null}
+                    </td>
+                    <td className="table__number">
+                      {matched === undefined ? '—' : count(matched)}
+                    </td>
+                    <td className="table__number">
+                      <button
+                        className="button button--quiet button--small"
+                        type="button"
+                        aria-label={`Remove pattern ${pattern}`}
+                        onClick={(): void => {
+                          onRemove(pattern);
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </TableScroll>
+      )}
+
+      {preview !== null && preview.state === 'ready' && patterns.length > 0 ? (
+        <p className="field__example">
+          {count(preview.acceptedCount)} of {count(preview.totalTags)} tagged assets match at
+          least one pattern.
+        </p>
+      ) : null}
+
+      <div className="button-row">
+        <input
+          id="tag-pattern-input"
+          className="control control--text"
+          type="text"
+          value={draft}
+          placeholder="MAH*"
+          data-testid="tag-pattern-input"
+          onChange={(event): void => {
+            setDraft(event.target.value);
+          }}
+          onKeyDown={(event): void => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              submit();
+            }
+          }}
+        />
+        <button
+          className="button button--small"
+          type="button"
+          data-testid="tag-pattern-add"
+          disabled={draft.trim() === ''}
+          onClick={submit}
+        >
+          Add pattern
+        </button>
+      </div>
     </Field>
   );
 }

@@ -28,6 +28,8 @@ import {
   overrideRowSchema,
   profileSectionSchema,
   publishBlockerSchema,
+  selectionSetSummarySchema,
+  tagPatternPreviewSchema,
   projectConfigSchema,
   projectOpenResultSchema,
   projectSummarySchema,
@@ -741,7 +743,59 @@ export const IPC_CHANNELS = {
     },
   },
 
+  /**
+   * The Navisworks selection sets across every open model, with the one fact
+   * screen 3 cannot decide without: whether each one's membership resolved.
+   */
+  'model:selection-sets': {
+    request: z.void(),
+    response: z.object({ sets: z.array(selectionSetSummarySchema) }),
+    example: {
+      request: undefined,
+      response: {
+        sets: [
+          {
+            name: 'Commissionable Equipment',
+            kind: 'selection',
+            membershipResolved: true,
+            memberCount: 24,
+            sourceNames: ['dragon-mechanical'],
+            unresolvedIn: [],
+          },
+          {
+            name: 'All Air Handlers',
+            kind: 'search',
+            membershipResolved: false,
+            memberCount: 0,
+            sourceNames: ['dragon-mechanical'],
+            unresolvedIn: ['dragon-mechanical'],
+          },
+        ],
+      },
+    },
+  },
+
   /* ------------------------------------------- screens 3-5: live previews */
+
+  /**
+   * What the draft's accepted-tag patterns keep, per pattern, over the real
+   * tags reaching that stage.
+   */
+  'asset:tag-patterns': {
+    request: z.void(),
+    response: z.object({ preview: tagPatternPreviewSchema }),
+    example: {
+      request: undefined,
+      response: {
+        preview: {
+          state: 'ready',
+          totalTags: 34,
+          acceptedCount: 30,
+          patterns: [{ pattern: 'MAH*', matchCount: 12 }],
+        },
+      },
+    },
+  },
 
   /** Inclusion impact for the draft's mappings and filters (PRODUCT.md §6.6). */
   'asset:preview': {

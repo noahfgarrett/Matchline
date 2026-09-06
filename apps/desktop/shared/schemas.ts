@@ -660,6 +660,64 @@ export const classCountSchema = z.object({
 });
 export type WireClassCount = z.infer<typeof classCountSchema>;
 
+/**
+ * One Navisworks selection set, as screen 3's filter editor has to see it.
+ *
+ * `membershipResolved` is the whole reason this is on the wire. A saved search
+ * whose membership the extraction could not resolve is not an empty set — it is
+ * a set nobody ran — and naming it in a filter blocks publication
+ * (`publishBlockerSchema`). The editor marks it before the person picks it, so
+ * the refusal on screen 9 is never the first time they hear about it.
+ *
+ * Named sets are summed across the open sources: a filter names a set, and a
+ * set two models both carry is one decision, not two. `unresolvedIn` lists the
+ * sources whose copy is unresolved, by short label, so a set that resolved
+ * everywhere except one file says which file.
+ */
+export const selectionSetSummarySchema = z.object({
+  name: z.string().min(1),
+  kind: z.enum(['folder', 'selection', 'search']),
+  /** False when any source's copy of this set was recorded without members. */
+  membershipResolved: z.boolean(),
+  /** Objects the resolved copies name, summed across sources. */
+  memberCount: z.number().int().nonnegative(),
+  /** Short labels of the sources carrying it. */
+  sourceNames: z.array(z.string().min(1)).min(1),
+  /** Short labels of the sources whose copy is unresolved. Empty when none is. */
+  unresolvedIn: z.array(z.string().min(1)),
+});
+export type WireSelectionSetSummary = z.infer<typeof selectionSetSummarySchema>;
+
+/**
+ * One accepted-tag pattern and how much of the model it keeps.
+ *
+ * Glob-lite, exactly as the engine reads it (`@matchline/asset-catalog`'s
+ * `isTagAccepted`): `*` stands for any run of characters and everything else is
+ * literal. Not a regular expression — a Site Profile is hand-editable JSON and
+ * must never be able to hand the engine a pattern that backtracks
+ * catastrophically. `matchCount` is what this pattern alone would keep, so a
+ * pattern that keeps nothing is visible before it is saved.
+ */
+export const tagPatternMatchSchema = z.object({
+  pattern: z.string().min(1),
+  matchCount: z.number().int().nonnegative(),
+});
+export type WireTagPatternMatch = z.infer<typeof tagPatternMatchSchema>;
+
+/** What the draft's accepted-tag patterns keep, measured over the real tags. */
+export const tagPatternPreviewSchema = z.discriminatedUnion('state', [
+  z.object({ state: z.literal('blocked'), reason: z.string().min(1) }),
+  z.object({
+    state: z.literal('ready'),
+    /** Tags reaching the pattern stage — after every earlier filter. */
+    totalTags: z.number().int().nonnegative(),
+    /** Tags at least one pattern keeps. Equals `totalTags` when there are none. */
+    acceptedCount: z.number().int().nonnegative(),
+    patterns: z.array(tagPatternMatchSchema),
+  }),
+]);
+export type WireTagPatternPreview = z.infer<typeof tagPatternPreviewSchema>;
+
 /* ------------------------------------------------------------ asset preview */
 
 /** One stage of PRODUCT.md §6.6 filtering, with its plain-language label. */

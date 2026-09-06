@@ -1112,3 +1112,122 @@ test('a v1 cache’s saved search blocks publication, and its fixed selection do
     service.close();
   }
 });
+
+/* ----------------------------------------- screen 3: the two filter editors */
+
+/**
+ * The selection-set catalog screen 3 chooses from.
+ *
+ * `publishBlockersFor` tells a person to take a set "off the filter on screen
+ * 3"; until this existed there was no such control, and no way to see which set
+ * was the problem before the refusal. The catalog carries the one fact that
+ * decides it: whether each set's membership resolved.
+ */
+test('the selection-set catalog names every set and marks the unresolved one', async () => {
+  const searchCachePath = join(workDir, 'Dragon-SetCatalog.matchline-cache');
+  writeDragonFixtureWithUnresolvedSearch(searchCachePath);
+
+  const service = newService();
+  try {
+    service.create(join(workDir, 'SetCatalog.matchline'), 'Set Catalog');
+    await service.addSources([searchCachePath]);
+
+    const sets = service.selectionSetCatalog();
+    // Folders are offered too: naming a folder means its contents.
+    assert.deepEqual(
+      sets.map((set) => set.name).sort(),
+      ['Air Handling', DRAGON_UNRESOLVED_SET_NAME, 'Dragon Systems', 'PLC Panels'].sort(),
+    );
+
+    // The unresolved one sorts first, because it is the one to act on.
+    assert.equal(sets[0].name, DRAGON_UNRESOLVED_SET_NAME);
+    assert.equal(sets[0].membershipResolved, false);
+    assert.equal(sets[0].memberCount, 0, 'a set nobody ran names nothing');
+    assert.equal(sets[0].unresolvedIn.length, 1, 'and the source whose copy is unresolved');
+
+    const airHandling = sets.find((set) => set.name === 'Air Handling');
+    assert.equal(airHandling.membershipResolved, true);
+    assert.equal(airHandling.kind, 'selection');
+    assert.ok(airHandling.memberCount > 0, 'a resolved set names its objects');
+    assert.equal(airHandling.unresolvedIn.length, 0);
+
+    // Exactly the set the publish blocker names, so the editor can mark it.
+    const blockedNames = new Set(
+      (() => {
+        teachEnoughToPublish(service);
+        filterOnSets(service, [DRAGON_UNRESOLVED_SET_NAME]);
+        return service.publishBlockers().map((blocker) => blocker.setName);
+      })(),
+    );
+    assert.deepEqual(
+      sets.filter((set) => !set.membershipResolved).map((set) => set.name),
+      [...blockedNames],
+      'the editor marks exactly what publication would refuse',
+    );
+  } finally {
+    service.close();
+  }
+});
+
+test('the selection-set catalog is empty before any model is open', async () => {
+  const service = newService();
+  try {
+    service.create(join(workDir, 'SetCatalogEmpty.matchline'), 'Set Catalog Empty');
+    assert.deepEqual(service.selectionSetCatalog(), []);
+  } finally {
+    service.close();
+  }
+});
+
+/**
+ * What each accepted-tag pattern keeps, measured where it matters.
+ *
+ * The count has to be taken over the tags REACHING the pattern stage, not over
+ * the catalog the patterns already filtered -- otherwise every pattern reports
+ * keeping everything, which is the one number that can never be wrong and can
+ * never be useful.
+ */
+test('each accepted-tag pattern reports what it alone would keep', async () => {
+  const service = newService();
+  try {
+    service.create(join(workDir, 'TagPatterns.matchline'), 'Tag Patterns');
+    await service.addSources([cachePath]);
+
+    assert.equal(
+      service.tagPatternPreview().state,
+      'blocked',
+      'a pattern cannot be measured before a tag property is chosen',
+    );
+
+    teachDragon(service);
+    const none = service.tagPatternPreview();
+    assert.equal(none.state, 'ready');
+    assert.equal(none.totalTags, DRAGON_TAGGED_COUNT);
+    assert.equal(none.acceptedCount, DRAGON_TAGGED_COUNT, 'no patterns accepts every shape');
+    assert.deepEqual(none.patterns, []);
+
+    const { draft } = service.draftState();
+    service.updateDraft({
+      assetFilters: { ...draft.assetFilters, acceptedTagPatterns: ['MAH*', 'ZZZ*'] },
+    });
+
+    const measured = service.tagPatternPreview();
+    assert.equal(measured.state, 'ready');
+    assert.equal(
+      measured.totalTags,
+      DRAGON_TAGGED_COUNT,
+      'still measured against every tag reaching the stage, not the ones kept',
+    );
+    const byPattern = new Map(measured.patterns.map((entry) => [entry.pattern, entry.matchCount]));
+    assert.ok(byPattern.get('MAH*') > 0, 'a pattern that matches says how much');
+    assert.equal(byPattern.get('ZZZ*'), 0, 'and one that matches nothing says zero');
+    assert.equal(
+      measured.acceptedCount,
+      byPattern.get('MAH*'),
+      'the union is what the filter would keep',
+    );
+    assert.ok(measured.acceptedCount < DRAGON_TAGGED_COUNT, 'which is less than everything');
+  } finally {
+    service.close();
+  }
+});

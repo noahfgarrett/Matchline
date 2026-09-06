@@ -35,7 +35,9 @@ export type SessionChannel = Extract<
   | 'model:scan'
   | 'model:property-page'
   | 'model:class-list'
+  | 'model:selection-sets'
   | 'asset:preview'
+  | 'asset:tag-patterns'
   | 'anatomy:preview'
   | 'resolver:preview'
   | 'derived:preview'
@@ -284,8 +286,16 @@ export function createSessionHandlers(
       return { classes: [...guard(() => service.classList())] };
     },
 
+    async 'model:selection-sets'(): Promise<IpcResponse<'model:selection-sets'>> {
+      return { sets: [...guard(() => service.selectionSetCatalog())] };
+    },
+
     async 'asset:preview'(): Promise<IpcResponse<'asset:preview'>> {
       return { preview: guard(() => service.assetPreview()) };
+    },
+
+    async 'asset:tag-patterns'(): Promise<IpcResponse<'asset:tag-patterns'>> {
+      return { preview: guard(() => service.tagPatternPreview()) };
     },
 
     async 'anatomy:preview'(): Promise<IpcResponse<'anatomy:preview'>> {

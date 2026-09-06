@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   buildAssetCatalog,
   buildUniversePropertyCatalog,
+  isTagAccepted,
   type AssetCatalog,
   type UniversePropertyCatalogEntry,
 } from '@matchline/asset-catalog';
@@ -92,6 +93,7 @@ import type {
   WireResolverPreview,
   WireReviewPage,
   WireReviewRow,
+  WireSelectionSetSummary,
   WireSheetSummary,
   WireSourceAssignmentRule,
   WireSourceModelSummary,
@@ -99,6 +101,7 @@ import type {
   WireSourceSummary,
   WireStaleDecision,
   WireSystemResolver,
+  WireTagPatternPreview,
   WireTemplateAnalysis,
   WireTemplateBinding,
   WireTreeNode,
@@ -375,6 +378,11 @@ export interface ProjectService {
   /** Navisworks class names with counts, summed across every open cache. */
   classList(): readonly WireClassCount[];
   /**
+   * Every named selection set across the open caches, with whether its
+   * membership resolved. Screen 3's selection-set filter is chosen from this.
+   */
+  selectionSetCatalog(): readonly WireSelectionSetSummary[];
+  /**
    * The internal handle id of each open extraction cache, by source id.
    *
    * Not a wire type and not read by any screen. It exists because "replacing
@@ -390,6 +398,10 @@ export interface ProjectService {
   saveProfile(note: string): SaveProfileResult;
 
   assetPreview(): WireAssetPreview;
+  /**
+   * What each accepted-tag pattern keeps, over the tags that reach that stage.
+   */
+  tagPatternPreview(): WireTagPatternPreview;
   anatomyPreview(): WireAnatomyPreview;
   resolverPreview(): WireResolverPreview;
 
@@ -1633,6 +1645,32 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
   /** Compact per-source names for the rows that name several sources at once. */
   function modelLabels(active: Session): ReadonlyMap<string, string> {
     return shortSourceLabels(orderedModels(active).map((model) => model.sourceId));
+  }
+
+  /**
+   * Every node of a selection-set forest, folders included.
+   *
+   * Folders are sets a filter may name — naming one means its contents — so a
+   * list that showed only leaves would hide half the choices. A cycle would
+   * only be reachable through a corrupt cache; `seen` makes it a truncation
+   * rather than a hang.
+   */
+  function flattenSelectionSets(
+    roots: readonly SelectionSetNode[],
+  ): readonly SelectionSetNode[] {
+    const flat: SelectionSetNode[] = [];
+    const stack: SelectionSetNode[] = [...roots];
+    const seen = new Set<number>();
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (node === undefined || seen.has(node.id)) {
+        continue;
+      }
+      seen.add(node.id);
+      flat.push(node);
+      stack.push(...node.children);
+    }
+    return flat;
   }
 
   /**
@@ -3458,6 +3496,77 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         );
     },
 
+    selectionSetCatalog(): readonly WireSelectionSetSummary[] {
+      const active = requireSession();
+      if (active.models.size === 0) {
+        return [];
+      }
+      const labels = modelLabels(active);
+
+      /** Accumulated by name, because a filter names a set, not a set per file. */
+      interface Accumulator {
+        name: string;
+        kind: WireSelectionSetSummary['kind'];
+        membershipResolved: boolean;
+        memberCount: number;
+        readonly sourceNames: string[];
+        readonly unresolvedIn: string[];
+      }
+      const byName = new Map<string, Accumulator>();
+
+      for (const model of orderedModels(active)) {
+        const label = labels.get(model.sourceId) ?? model.displayName;
+        for (const node of flattenSelectionSets(model.cache.selectionSets())) {
+          const existing = byName.get(node.name);
+          const entry: Accumulator = existing ?? {
+            name: node.name,
+            kind: node.kind,
+            membershipResolved: true,
+            memberCount: 0,
+            sourceNames: [],
+            unresolvedIn: [],
+          };
+          if (existing === undefined) {
+            byName.set(node.name, entry);
+          } else if (existing.kind !== node.kind) {
+            // Two files calling different things by one name. `search` is the
+            // one that can be unresolved, so it is the honest label for the
+            // pair: it is what the filter has to be judged against.
+            entry.kind = node.kind === 'search' || existing.kind === 'search' ? 'search' : entry.kind;
+          }
+          entry.memberCount += node.memberObjectIds.length;
+          if (!entry.sourceNames.includes(label)) {
+            entry.sourceNames.push(label);
+          }
+          if (!node.membershipResolved) {
+            entry.membershipResolved = false;
+            if (!entry.unresolvedIn.includes(label)) {
+              entry.unresolvedIn.push(label);
+            }
+          }
+        }
+      }
+
+      // Unresolved first, because that is the one a person has to act on, then
+      // by name so the list does not reorder itself as models are added.
+      return [...byName.values()]
+        .map(
+          (entry): WireSelectionSetSummary => ({
+            name: entry.name,
+            kind: entry.kind,
+            membershipResolved: entry.membershipResolved,
+            memberCount: entry.memberCount,
+            sourceNames: [...entry.sourceNames],
+            unresolvedIn: [...entry.unresolvedIn],
+          }),
+        )
+        .sort((left, right) =>
+          left.membershipResolved === right.membershipResolved
+            ? left.name.localeCompare(right.name)
+            : Number(left.membershipResolved) - Number(right.membershipResolved),
+        );
+    },
+
     cacheHandleIds(): ReadonlyMap<string, number> {
       const active = requireSession();
       return new Map([...active.models].map(([sourceId, model]) => [sourceId, model.handleId]));
@@ -3544,6 +3653,45 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         };
       }
       return buildAssetPreview(requireDerived(active).catalog, modelLabels(active));
+    },
+
+    tagPatternPreview(): WireTagPatternPreview {
+      const active = requireSession();
+      if (active.models.size === 0 || !hasMappings(active.draft)) {
+        return {
+          state: 'blocked',
+          reason:
+            'Choose an equipment tag property first — a pattern is measured against real tags.',
+        };
+      }
+      // Measured against the tags reaching the pattern stage, which means a
+      // catalog built with the patterns themselves removed. Counting against
+      // the ordinary catalog would count the tags the patterns had already
+      // kept, so every pattern would report keeping everything.
+      const mappings = toPropertyMappings(active.draft.propertyMappings);
+      const sources = openSources(active);
+      const withoutPatterns = buildAssetCatalog(
+        sources,
+        mappings,
+        toAssetFilters({ ...active.draft.assetFilters, acceptedTagPatterns: [] }),
+        migrateSourceAssignmentRules(toSourceAssignments(active.draft)),
+      );
+      const tags = catalogTags(withoutPatterns);
+      const patterns = active.draft.assetFilters.acceptedTagPatterns;
+      return {
+        state: 'ready',
+        totalTags: tags.length,
+        // No patterns is "the site did not restrict tag shapes", which keeps
+        // every tag -- the engine's own reading (`isTagAccepted`).
+        acceptedCount:
+          patterns.length === 0
+            ? tags.length
+            : tags.filter((tag: string): boolean => isTagAccepted(tag, patterns)).length,
+        patterns: patterns.map((pattern: string) => ({
+          pattern,
+          matchCount: tags.filter((tag: string): boolean => isTagAccepted(tag, [pattern])).length,
+        })),
+      };
     },
 
     anatomyPreview(): WireAnatomyPreview {
