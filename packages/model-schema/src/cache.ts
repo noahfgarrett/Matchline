@@ -7,7 +7,7 @@
  * why the integrity check exists (a killed worker must never leave a
  * valid-looking cache).
  */
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, type StatementSync } from 'node:sqlite';
 
 import { CacheValidationError } from './errors.js';
 import {
@@ -486,6 +486,16 @@ class SqliteExtractionCache implements ExtractionCache {
   readonly #objectColumns: string;
   readonly #sourceModelColumns: string;
 
+  /**
+   * Prepared statements, keyed by SQL and owned by this handle.
+   *
+   * A compile calls `object()` and `propertiesOf()` once per object — tens of
+   * thousands of times on a real model — and re-preparing the same SQL each
+   * time is pure overhead. `close()` drops the map; SQLite finalizes the
+   * statements themselves when the database handle closes.
+   */
+  readonly #statements = new Map<string, StatementSync>();
+
   constructor(db: DatabaseSync, path: string, meta: ExtractionCacheMeta) {
     this.#db = db;
     this.path = path;
@@ -502,6 +512,24 @@ class SqliteExtractionCache implements ExtractionCache {
     return this.#db;
   }
 
+  /**
+   * The statement for `sql`, prepared once per open handle.
+   *
+   * Only for statements consumed eagerly (`get`/`all`): a cached statement is a
+   * single cursor, so the streaming `iterate()` readers prepare their own and
+   * two concurrent walks cannot tread on each other.
+   */
+  #statement(sql: string): StatementSync {
+    const db = this.#open();
+    const existing = this.#statements.get(sql);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const prepared = db.prepare(sql);
+    this.#statements.set(sql, prepared);
+    return prepared;
+  }
+
   meta(): ExtractionCacheMeta {
     return this.#meta;
   }
@@ -511,8 +539,9 @@ class SqliteExtractionCache implements ExtractionCache {
   }
 
   sourceModels(): readonly SourceModelNode[] {
-    const rows = this.#open()
-      .prepare(`SELECT ${this.#sourceModelColumns} FROM source_models ORDER BY id`)
+    const rows = this.#statement(
+      `SELECT ${this.#sourceModelColumns} FROM source_models ORDER BY id`,
+    )
       .all()
       .map((row) => readSourceModel(row, this.#withV3));
 
@@ -543,24 +572,24 @@ class SqliteExtractionCache implements ExtractionCache {
   }
 
   object(id: number): ModelObject | undefined {
-    const row = this.#open()
-      .prepare(`SELECT ${this.#objectColumns} FROM objects WHERE id = ?`)
-      .get(id);
+    const row = this.#statement(`SELECT ${this.#objectColumns} FROM objects WHERE id = ?`).get(
+      id,
+    );
     return row === undefined ? undefined : readObject(row, this.#withV3);
   }
 
   rootObjects(): readonly ModelObject[] {
-    return this.#open()
-      .prepare(
-        `SELECT ${this.#objectColumns} FROM objects WHERE parent_id IS NULL ORDER BY path_index, id`,
-      )
+    return this.#statement(
+      `SELECT ${this.#objectColumns} FROM objects WHERE parent_id IS NULL ORDER BY path_index, id`,
+    )
       .all()
       .map((row) => readObject(row, this.#withV3));
   }
 
   childrenOf(objectId: number): readonly ModelObject[] {
-    return this.#open()
-      .prepare(`SELECT ${this.#objectColumns} FROM objects WHERE parent_id = ? ORDER BY path_index, id`)
+    return this.#statement(
+      `SELECT ${this.#objectColumns} FROM objects WHERE parent_id = ? ORDER BY path_index, id`,
+    )
       .all(objectId)
       .map((row) => readObject(row, this.#withV3));
   }
@@ -600,10 +629,9 @@ class SqliteExtractionCache implements ExtractionCache {
   }
 
   propertiesOf(objectId: number): readonly ObjectProperty[] {
-    return this.#open()
-      .prepare(
-        `SELECT ${PROPERTY_COLUMNS} FROM properties WHERE object_id = ? ORDER BY rowid`,
-      )
+    return this.#statement(
+      `SELECT ${PROPERTY_COLUMNS} FROM properties WHERE object_id = ? ORDER BY rowid`,
+    )
       .all(objectId)
       .map(readObjectProperty);
   }
@@ -629,15 +657,14 @@ class SqliteExtractionCache implements ExtractionCache {
     if (this.#withV3) {
       columns += ', guid';
     }
-    const rows = db
-      .prepare(`SELECT ${columns} FROM selection_sets ORDER BY id`)
+    const rows = this.#statement(`SELECT ${columns} FROM selection_sets ORDER BY id`)
       .all()
       .map((row) => readSelectionSet(row, hasMembershipColumn, this.#withV3));
 
     const members = new Map<number, number[]>();
-    for (const row of db
-      .prepare('SELECT set_id, object_id FROM selection_set_members ORDER BY set_id, object_id')
-      .all()) {
+    for (const row of this.#statement(
+      'SELECT set_id, object_id FROM selection_set_members ORDER BY set_id, object_id',
+    ).all()) {
       const setId = requireInteger(row, 'selection_set_members', 'set_id');
       const objectId = requireInteger(row, 'selection_set_members', 'object_id');
       const bucket = members.get(setId);
@@ -677,14 +704,18 @@ class SqliteExtractionCache implements ExtractionCache {
   }
 
   warnings(): readonly CacheWarning[] {
-    return this.#open()
-      .prepare('SELECT id, severity, code, message, object_id FROM warnings ORDER BY id')
+    return this.#statement(
+      'SELECT id, severity, code, message, object_id FROM warnings ORDER BY id',
+    )
       .all()
       .map(readWarning);
   }
 
   close(): void {
     if (this.#db !== null) {
+      // Closing the database finalizes every statement prepared on it, so the
+      // map only has to stop holding the finalized handles.
+      this.#statements.clear();
       this.#db.close();
       this.#db = null;
     }
