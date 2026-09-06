@@ -8,6 +8,14 @@
 # work happens, and the publish job refuses to report success for a push it did
 # not perform.
 #
+# The packaging is deliberately in two stages. `electron-builder --win --dir`
+# produces the application tree, every binary in it is signed (Matchline.exe, the
+# Electron DLLs, and the staged C# launcher and Navisworks adapters under
+# resources/), and only then does `electron-builder --win --prepackaged` build the
+# NSIS installer and the portable zip out of that signed tree. Signing after
+# packaging -- which is what this workflow used to do -- leaves the copy of
+# Matchline.exe inside both the installer payload and the zip unsigned.
+#
 # SECRETS ARE NAMED HERE, NEVER VALUED. WINDOWS_SIGNING_CERT_B64,
 # WINDOWS_SIGNING_CERT_PASSWORD and UPDATE_FEED_TOKEN are repository secrets the
 # owner sets; see docs/RELEASE-RUNBOOK.md for what each one is and where it goes.
@@ -110,9 +118,11 @@ jobs:
       - name: Stage the launcher for packaging
         run: node apps/desktop/scripts/stage-native.mjs
 
-      - name: Package Windows
-        run: npm run package:win
-
+      # The certificate first, because the unpacked tree is signed BEFORE the
+      # installer and the zip are built from it. Packaging first and signing
+      # afterwards is what shipped a signed installer wrapped around an unsigned
+      # Matchline.exe, and a portable zip that was unsigned all the way through.
+      #
       # The certificate lands on disk under RUNNER_TEMP, never in the workspace,
       # and is deleted in the cleanup step below whatever happens. The base64 is
       # decoded through a pipe so the secret is never an argv entry.
@@ -129,28 +139,37 @@ jobs:
           fi
           echo "certificate materialised"
 
-      # ---------------------------------------------------------------------
-      # UNEXERCISED. The two `signtool sign` invocations below have never run:
-      # there is no certificate yet, and nothing about them can be validated
-      # without one. The first real release run is what validates them — treat a
-      # failure here as expected first-run friction, not as a regression.
+      # Stage one of two: the application tree only. `--dir` stops before the
+      # NSIS installer and the portable zip, which is the whole point — those two
+      # are built in stage two, out of the tree the signing step below has
+      # already been over.
       #
-      # KNOWN GAP, and it is a real one. apps/desktop/electron-builder.yml
-      # currently disables signing outright (`signExecutable: false`,
-      # `signtoolOptions: null`, `forceCodeSigning: false`), so electron-builder
-      # packages an unsigned Matchline.exe and this job signs the artifacts
-      # afterwards. That signs the installer and the unpacked executable, but the
-      # copy of Matchline.exe *inside* the portable zip stays unsigned. Closing
-      # it means letting electron-builder do the signing during packaging, which
-      # is an app-side change to electron-builder.yml, not a workflow change.
-      # Tracked in docs/RELEASE-RUNBOOK.md, "Open items before 1.0.0".
+      # electron-builder is invoked directly rather than through `package:win`,
+      # which would run the full target list in one go and leave nothing to sign
+      # in between. `stage-native.mjs` has already run above.
+      - name: Package the application tree (unpacked, unsigned)
+        working-directory: apps/desktop
+        run: npx electron-builder --win --dir
+
+      # ---------------------------------------------------------------------
+      # UNEXERCISED. The `signtool sign` invocations below have never run: there
+      # is no certificate yet, and nothing about them can be validated without
+      # one. The first real release run is what validates them — treat a failure
+      # here as expected first-run friction, not as a regression.
+      #
+      # apps/desktop/electron-builder.yml disables electron-builder's own signing
+      # (`signExecutable: false`, `signtoolOptions: null`, `forceCodeSigning:
+      # false`) so that signing happens here, in a known order, over a tree that
+      # is complete. That includes what electron-builder would never have signed
+      # anyway: the C# launcher and the Navisworks plugin adapters under
+      # `resources/`, which are staged by `stage-native.mjs`.
       #
       # /p puts the password on a command line, where other processes on the box
       # can read it. Acceptable on an ephemeral GitHub-hosted runner; if this
       # ever moves to a self-hosted machine, import the .pfx into the certificate
       # store and sign by thumbprint (/sha1) instead.
       # ---------------------------------------------------------------------
-      - name: Sign the application executable and the installer
+      - name: Sign every binary in the unpacked tree
         shell: pwsh
         env:
           WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
@@ -166,13 +185,27 @@ jobs:
           Write-Host "signtool: $($signtool.FullName)"
 
           $pfx = Join-Path $env:RUNNER_TEMP 'matchline-signing.pfx'
-          $release = 'apps/desktop/release'
+          $unpacked = 'apps/desktop/release/win-unpacked'
+          if (-not (Test-Path $unpacked)) {
+            throw "No unpacked tree at $unpacked. The --dir package step produced nothing."
+          }
 
-          $targets = @()
-          $targets += Get-ChildItem (Join-Path $release 'win-unpacked/Matchline.exe') -ErrorAction SilentlyContinue
-          $targets += Get-ChildItem (Join-Path $release '*-Setup-*.exe') -ErrorAction SilentlyContinue
+          # Everything executable, wherever it is: Matchline.exe, the Electron
+          # DLLs beside it, and the staged native tree under resources/ (the
+          # launcher and the Navisworks plugin adapters).
+          $targets = Get-ChildItem $unpacked -Recurse -File -Include *.exe, *.dll
           if ($targets.Count -eq 0) {
-            throw "Nothing to sign under $release. Packaging produced no executable."
+            throw "Nothing to sign under $unpacked."
+          }
+
+          # The two that must be there. A tree missing either is a staging
+          # failure that would otherwise ship as a quietly smaller release.
+          $required = @(
+            (Join-Path $unpacked 'Matchline.exe'),
+            (Join-Path $unpacked 'resources/extractor/Matchline.Extractor.exe')
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) { throw "Expected to sign $path, which does not exist." }
           }
 
           foreach ($target in $targets) {
@@ -187,9 +220,53 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "signtool sign failed for $($target.FullName)" }
           }
 
+          Write-Host "signed $($targets.Count) binaries"
+
+      # Stage two: the installer and the portable zip, built from the tree that
+      # has just been signed. `--prepackaged` is what makes that possible — it
+      # tells electron-builder to package what is already there rather than to
+      # produce the application tree again.
+      - name: Package the installer and the portable zip
+        working-directory: apps/desktop
+        run: npx electron-builder --win --prepackaged release/win-unpacked
+
+      # The installer is itself an executable, and it is produced after the
+      # signing pass above, so it gets its own.
+      - name: Sign the installer
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' -ErrorAction SilentlyContinue |
+            Sort-Object FullName |
+            Select-Object -Last 1
+          if (-not $signtool) { throw 'signtool.exe was not found under the Windows 10 SDK.' }
+
+          $pfx = Join-Path $env:RUNNER_TEMP 'matchline-signing.pfx'
+          $installers = @(Get-ChildItem 'apps/desktop/release/*-Setup-*.exe' -ErrorAction SilentlyContinue)
+          if ($installers.Count -eq 0) {
+            throw 'Packaging produced no installer to sign.'
+          }
+
+          foreach ($target in $installers) {
+            Write-Host "signing $($target.FullName)"
+            & $signtool.FullName sign `
+              /f $pfx `
+              /p $env:WINDOWS_SIGNING_CERT_PASSWORD `
+              /fd sha256 `
+              /tr $env:MATCHLINE_TIMESTAMP_URL `
+              /td sha256 `
+              $target.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signtool sign failed for $($target.FullName)" }
+          }
+
       # Not ceremony: this is what turns "we ran a signing command" into "the
       # artifact is signed and chains to a trusted root". If signing silently did
-      # nothing, this fails.
+      # nothing, this fails. The unpacked tree is verified as well as the
+      # installer, because the portable zip is that tree — a zip is not something
+      # signtool can verify, so its contents are verified instead.
       - name: Verify the signatures
         shell: pwsh
         run: |
@@ -201,9 +278,16 @@ jobs:
           if (-not $signtool) { throw 'signtool.exe was not found under the Windows 10 SDK.' }
 
           $release = 'apps/desktop/release'
+          $unpacked = Join-Path $release 'win-unpacked'
+
           $targets = @()
-          $targets += Get-ChildItem (Join-Path $release 'win-unpacked/Matchline.exe') -ErrorAction SilentlyContinue
+          $targets += Get-ChildItem (Join-Path $unpacked 'Matchline.exe') -ErrorAction SilentlyContinue
+          $targets += Get-ChildItem (Join-Path $unpacked 'resources/extractor/Matchline.Extractor.exe') -ErrorAction SilentlyContinue
+          $targets += Get-ChildItem (Join-Path $unpacked 'resources/plugins') -Recurse -File -Include *.dll -ErrorAction SilentlyContinue
           $targets += Get-ChildItem (Join-Path $release '*-Setup-*.exe') -ErrorAction SilentlyContinue
+          if ($targets.Count -eq 0) {
+            throw "Nothing to verify under $release."
+          }
 
           foreach ($target in $targets) {
             & $signtool.FullName verify /pa /v $target.FullName

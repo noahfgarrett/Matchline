@@ -38,6 +38,28 @@ Three rules the pipeline enforces rather than documents:
    check is the first step of the Windows release job, before checkout.
 3. **A release that publishes nothing does not report success.** The publish job
    fails while the distribution channel is undecided.
+4. **Nothing is packaged around an unsigned binary.** The application tree is
+   built first (`electron-builder --win --dir`), every executable in it is
+   signed, and only then are the installer and the portable zip built from that
+   tree (`electron-builder --win --prepackaged`). Signing after packaging leaves
+   the copies inside the NSIS payload and the zip unsigned.
+
+### What gets signed
+
+In this order, all with `signtool` and an RFC 3161 timestamp:
+
+1. Every `*.exe` and `*.dll` under `apps/desktop/release/win-unpacked` —
+   `Matchline.exe`, the Electron runtime DLLs beside it, and the staged native
+   tree under `resources/`: `resources/extractor/Matchline.Extractor.exe` and
+   the Navisworks plugin adapter DLLs under `resources/plugins/`. The job fails
+   if `Matchline.exe` or `Matchline.Extractor.exe` is not there, because a tree
+   missing either would otherwise ship as a quietly smaller release.
+2. `Matchline-<version>-Setup-x64.exe`, after it is built from that tree.
+
+The portable zip carries no signature of its own — a zip is not something
+`signtool` can sign or verify — but everything inside it was signed at step 1.
+Verification re-checks `Matchline.exe`, the launcher, the adapter DLLs and the
+installer with `signtool verify /pa`.
 
 ---
 
@@ -61,7 +83,7 @@ esbuild build in place.
 | Job | Runner | Notes |
 | --- | --- | --- |
 | `hosted-matrix` | (calls `ci.yml`) | Must be entirely green before anything else starts. |
-| `windows-release` | windows-latest | Requires the signing secrets, builds, packages, signs, verifies the signatures, uploads the artifacts with 30-day retention. |
+| `windows-release` | windows-latest | Requires the signing secrets, builds, packages the application tree with `electron-builder --win --dir`, signs every binary in it, builds the installer and the portable zip from that signed tree with `--prepackaged`, signs the installer, verifies the signatures, uploads the artifacts with 30-day retention. |
 | `publish` | ubuntu-latest | Gated on the same secrets plus `UPDATE_FEED_TOKEN`. **Currently fails on purpose** — see §7. |
 
 ### `.github/workflows/navisworks-proof.yml` — manual dispatch only
@@ -302,19 +324,11 @@ when the app side proves this, not when the pipeline can push a file.
    deliberate failure until it is made. Implementing it also needs
    `actions/download-artifact` added to the approved action set and
    `permissions: contents: write` on that job.
-3. **Signing happens after packaging, not during it.**
-   `apps/desktop/electron-builder.yml` disables signing explicitly
-   (`signExecutable: false`, `signtoolOptions: null`,
-   `forceCodeSigning: false`), so `release.yml` signs the installer and the
-   unpacked `Matchline.exe` afterwards — which leaves the copy of
-   `Matchline.exe` *inside the portable zip* unsigned. Closing that means
-   letting electron-builder sign during packaging, an app-side change to that
-   config file.
-4. **The `signtool` commands have never run.** There is no certificate to run
+3. **The `signtool` commands have never run.** There is no certificate to run
    them with. The first real release validates them; treat a failure there as
    first-run friction, not a regression.
-5. **Windows only.** This pipeline builds and signs Windows. The macOS zip stays
+4. **Windows only.** This pipeline builds and signs Windows. The macOS zip stays
    a local `npm run package:mac` artifact with `identity: null` — unsigned, not
    notarised, not distributed.
-6. **The Navisworks proof scripts exist and are tested** (§6) but have not yet
+5. **The Navisworks proof scripts exist and are tested** (§6) but have not yet
    run against a real Navisworks install — that happens on Noah's Windows box.
