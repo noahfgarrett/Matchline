@@ -81,6 +81,21 @@ await expect(
   EXIT_CODES.invalidArguments,
 );
 
+/**
+ * A hash the launcher is told rather than made to compute.
+ *
+ * The NW_NOT_INSTALLED probe needs a real file, because the launcher checks the
+ * input exists before it looks for Navisworks (ExtractionRunner.Run). It does
+ * NOT need that file hashed: hashing comes first in the same method, so without
+ * this flag the probe reads every byte of the proof model -- a full pass over a
+ * multi-gigabyte NWD -- to reach a failure that has nothing to do with its
+ * contents. `--input-sha256` is documented as an assertion the launcher trusts
+ * rather than verifies, and trusting a dummy is safe here precisely because the
+ * run fails before anything is written: no cache is filed under this name, and
+ * the only thing the value addresses is a `<sha>.sqlite` that does not exist.
+ */
+const DUMMY_SHA256 = 'f'.repeat(64);
+
 // A --navisworks-dir with no Roamer.exe in it is the documented way to reach
 // NW_NOT_INSTALLED without uninstalling anything.
 if (settings.modelPath === null) {
@@ -92,7 +107,13 @@ if (settings.modelPath === null) {
   const emptyInstall = mkdtempSync(path.join(os.tmpdir(), 'matchline-no-navisworks-'));
   await expect(
     'an install directory with no Navisworks in it',
-    [...extractorArguments(settings.modelPath, scratch), '--navisworks-dir', emptyInstall],
+    [
+      ...extractorArguments(settings.modelPath, scratch),
+      '--input-sha256',
+      DUMMY_SHA256,
+      '--navisworks-dir',
+      emptyInstall,
+    ],
     'NW_NOT_INSTALLED',
     EXIT_CODES.navisworksNotInstalled,
   );
