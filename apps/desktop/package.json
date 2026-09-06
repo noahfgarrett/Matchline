@@ -30,6 +30,7 @@
     "@matchline/domain": "0.1.0",
     "@matchline/electrical-flow": "0.1.0",
     "@matchline/exto-export": "0.1.0",
+    "@matchline/identity": "0.1.0",
     "@matchline/learned-rules": "0.1.0",
     "@matchline/mel-export": "0.1.0",
     "@matchline/model-schema": "0.1.0",

@@ -87,7 +87,7 @@ export function buildHierarchyProjection(
   contexts: readonly DerivedPreviewSubject[],
   derivedDefinitions: readonly WireDerivedAttribute[],
   disciplineProjection: ReadonlyMap<string, string>,
-  melByTag: ReadonlyMap<string, readonly MelCatalogRow[]>,
+  melByAsset: ReadonlyMap<string, readonly MelCatalogRow[]>,
 ): WireHierarchyProjection {
   if (levels.length === 0) {
     return {
@@ -116,7 +116,7 @@ export function buildHierarchyProjection(
       const value =
         definition === undefined
           ? (builtIn.get(entry.attributeKey) ?? null)
-          : resolveDerived(definition, context, melByTag);
+          : resolveDerived(definition, context, melByAsset);
       if (value === null) {
         entry.without += 1;
         continue;

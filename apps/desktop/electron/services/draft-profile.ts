@@ -26,6 +26,8 @@ import type {
   TagAnatomyConfig,
 } from '@matchline/domain';
 
+import type { IdentityConfig } from '@matchline/identity';
+
 import { liftMappedProperty, MAPPED_PROPERTY_FIELDS } from '../../shared/schemas.js';
 // Re-exported so the draft's starting point and its one recommendation are
 // found in the same place; the function itself is shared because the Quick
@@ -589,6 +591,38 @@ export function toDisciplineProjection(
   draft: WireDraftProfile,
 ): ReadonlyArray<DisciplineRewrite> {
   return draft.ssmDisciplineProjection.map((rewrite) => ({ ...rewrite }));
+}
+
+/**
+ * The identity index config a draft implies, assembled the way `compileProject`
+ * assembles it from the saved profile.
+ *
+ * Screen 6's previews join the MEL through identity, and they must reach the
+ * same rows the compile reaches: the same normalization steps, the same
+ * aliases, the same fuzzy distance, and the draft's own anatomy enabling the
+ * anatomy tier without having to be configured twice. Anything the draft has
+ * not stated is omitted rather than defaulted, because the engine's defaults
+ * are the engine's to choose.
+ */
+export function toIdentityIndexConfig(draft: WireDraftProfile): IdentityConfig {
+  const profileConfig = toIdentityConfig(draft.identityConfig);
+  const anatomy = toTagAnatomy(draft.tagAnatomy);
+  return {
+    ...(profileConfig.tagNormalization.length === 0
+      ? {}
+      : { tagNormalization: profileConfig.tagNormalization }),
+    ...(profileConfig.aliases.length === 0
+      ? {}
+      : {
+          aliases: new Map(
+            profileConfig.aliases.map((alias) => [alias.from, alias.to] as const),
+          ),
+        }),
+    ...(profileConfig.fuzzyMaxDistance === undefined
+      ? {}
+      : { fuzzyMaxDistance: profileConfig.fuzzyMaxDistance }),
+    ...(anatomy === null ? {} : { anatomy }),
+  };
 }
 
 /** `fuzzyMaxDistance: 0` is the wire's "use the engine's default", so it is dropped. */

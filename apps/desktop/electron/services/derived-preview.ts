@@ -1,5 +1,6 @@
 import type { AssetCatalog, ModelAsset } from '@matchline/asset-catalog';
 import type { SegmentName, TagAnatomyConfig } from '@matchline/domain';
+import { buildIdentityIndex, resolveTag, type IdentityConfig } from '@matchline/identity';
 import { applyAnatomy, type AnatomyResult } from '@matchline/tag-anatomy';
 import { expandComposite, type MelCatalogRow, type ResolverSubject } from '@matchline/system-resolver';
 
@@ -36,7 +37,9 @@ import type {
  * called rather than copied: `composite` is `expandComposite` from
  * `@matchline/system-resolver` — the same one the compiler uses, so a site that
  * taught Matchline `{segment:role}` for its systems meets exactly one spelling —
- * and `tag-segment` reads `applyAnatomy`'s own result.
+ * `tag-segment` reads `applyAnatomy`'s own result, and `mel-lookup` joins
+ * through `@matchline/identity` exactly as `compileProject` does, so a MEL row
+ * the compile finds is a MEL row this preview finds.
  *
  * This is a preview and says so: it reports coverage, which rung answered and
  * eight examples. It never writes, and the compile remains the only thing whose
@@ -119,7 +122,7 @@ export function describeResolver(resolver: WireAttributeResolver): string {
 function evaluateRung(
   resolver: WireAttributeResolver,
   context: DerivedPreviewSubject,
-  melByTag: ReadonlyMap<string, readonly MelCatalogRow[]>,
+  melByAsset: ReadonlyMap<string, readonly MelCatalogRow[]>,
 ): string | null {
   const { asset, subject } = context;
 
@@ -161,12 +164,12 @@ function evaluateRung(
     }
 
     case 'mel-lookup': {
-      if (asset.canonicalTag === '') {
-        return null;
-      }
-      // First row that both matches the tag and actually states the field —
+      // Addressed by asset, not by tag: `indexMelByAsset` already ran the join
+      // through identity, so an asset whose MEL row is spelled with an en dash
+      // is reached here for the same reason the compile reaches it.
+      // First row that both matches the asset and actually states the field —
       // the same rule the system resolver's tag join follows.
-      for (const row of melByTag.get(asset.canonicalTag) ?? []) {
+      for (const row of melByAsset.get(asset.assetId) ?? []) {
         const value = meaningful(
           (row as unknown as Record<string, string | undefined>)[resolver.returnField],
         );
@@ -201,10 +204,10 @@ function evaluateRung(
 export function resolveDerived(
   definition: WireDerivedAttribute,
   context: DerivedPreviewSubject,
-  melByTag: ReadonlyMap<string, readonly MelCatalogRow[]>,
+  melByAsset: ReadonlyMap<string, readonly MelCatalogRow[]>,
 ): string | null {
   for (const resolver of definition.resolverChain) {
-    const value = evaluateRung(resolver, context, melByTag);
+    const value = evaluateRung(resolver, context, melByAsset);
     if (value !== null) {
       return value;
     }
@@ -213,26 +216,62 @@ export function resolveDerived(
 }
 
 /**
- * The MEL indexed the one way a derived rung joins into it: by equipment tag.
+ * The MEL re-addressed onto the assets its rows are about.
+ *
+ * This is `compileProject`'s own join, not a second one: the rows are resolved
+ * through `@matchline/identity` under the profile's own identity config, so the
+ * normalization a site taught (`unicodeFold` and the rest), its aliases and its
+ * anatomy apply to the preview's MEL exactly as they apply to the compile's. A
+ * preview that bucketed by the raw `equipmentTag` instead would miss every row
+ * whose spelling differs from the model's by a character nobody typed on
+ * purpose — an en dash for a hyphen, a non-breaking space — and would then
+ * report a coverage the compile disagrees with.
+ *
+ * The refusals are the compile's too: a tag that resolves to nothing, or to
+ * several assets carrying one duplicated tag, joins to nothing rather than to a
+ * guess.
  *
  * Built once per preview rather than per asset, because a 40,000-asset project
  * with a 6,000-row MEL would otherwise be a quarter of a billion comparisons on
  * a screen that recomputes as somebody types.
  */
-export function indexMelByTag(
+export function indexMelByAsset(
   rows: readonly MelCatalogRow[],
+  assets: readonly ModelAsset[],
+  identityConfig: IdentityConfig = {},
 ): ReadonlyMap<string, readonly MelCatalogRow[]> {
-  const byTag = new Map<string, MelCatalogRow[]>();
+  const index = buildIdentityIndex(
+    assets.map((asset) => ({ assetId: asset.assetId, canonicalTag: asset.canonicalTag })),
+    identityConfig,
+  );
+
+  // Tags are resolved once each, not once per row: a MEL naming the same tag on
+  // twenty rows is one identity lookup, and the ladder is the expensive half.
+  const assetIdByTag = new Map<string, string | null>();
+  const byAsset = new Map<string, MelCatalogRow[]>();
+
   for (const row of rows) {
     const tag = row.equipmentTag?.trim() ?? '';
     if (tag === '') {
       continue;
     }
-    const bucket = byTag.get(tag) ?? [];
+    let assetId = assetIdByTag.get(tag);
+    if (assetId === undefined) {
+      // Fuzzy never matches (§9.2), so ranking proposals here would cost a
+      // bounded Levenshtein per unmatched tag and change no answer.
+      const outcome = resolveTag(index, tag, { includeFuzzy: false });
+      assetId =
+        outcome.status === 'matched' && outcome.sharingAssets === 1 ? outcome.assetId : null;
+      assetIdByTag.set(tag, assetId);
+    }
+    if (assetId === null) {
+      continue;
+    }
+    const bucket = byAsset.get(assetId) ?? [];
     bucket.push(row);
-    byTag.set(tag, bucket);
+    byAsset.set(assetId, bucket);
   }
-  return byTag;
+  return byAsset;
 }
 
 /**
@@ -282,7 +321,7 @@ export function derivedSubjectsFor(
 export function buildDerivedPreview(
   definition: WireDerivedAttribute,
   contexts: readonly DerivedPreviewSubject[],
-  melByTag: ReadonlyMap<string, readonly MelCatalogRow[]>,
+  melByAsset: ReadonlyMap<string, readonly MelCatalogRow[]>,
 ): WireDerivedPreview {
   if (definition.resolverChain.length === 0) {
     return {
@@ -302,7 +341,7 @@ export function buildDerivedPreview(
     let winner: { readonly value: string; readonly rungIndex: number } | null = null;
 
     for (const [rungIndex, resolver] of definition.resolverChain.entries()) {
-      const value = evaluateRung(resolver, context, melByTag);
+      const value = evaluateRung(resolver, context, melByAsset);
       if (value === null) {
         continue;
       }

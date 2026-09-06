@@ -134,7 +134,7 @@ import { buildAssignmentPreview, type AssignmentDocument } from './assignment-pr
 import {
   buildDerivedPreview,
   derivedSubjectsFor,
-  indexMelByTag,
+  indexMelByAsset,
 } from './derived-preview.js';
 import {
   applyPatch,
@@ -146,6 +146,7 @@ import {
   hasResolver,
   liftWireMappings,
   toAssetFilters,
+  toIdentityIndexConfig,
   toPropertyMappings,
   toSiteProfile,
   toSourceAssignments,
@@ -1894,7 +1895,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       contexts,
       active.draft.derivedAttributes,
       new Map(active.draft.ssmDisciplineProjection.map((rewrite) => [rewrite.from, rewrite.to])),
-      indexMelByTag(active.melRows),
+      indexMelByAsset(active.melRows, derived.catalog.assets, toIdentityIndexConfig(active.draft)),
     );
   }
 
@@ -3557,7 +3558,11 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         toTagAnatomy(active.draft.tagAnatomy),
         systems,
       );
-      return buildDerivedPreview(definition, contexts, indexMelByTag(active.melRows));
+      return buildDerivedPreview(
+        definition,
+        contexts,
+        indexMelByAsset(active.melRows, derived.catalog.assets, toIdentityIndexConfig(active.draft)),
+      );
     },
 
     assignmentPreview(rule: WireSourceAssignmentRule): WireAssignmentPreview {
