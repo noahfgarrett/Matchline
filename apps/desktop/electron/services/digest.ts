@@ -40,6 +40,14 @@ const HASH_PROGRESS_INTERVAL_BYTES = 32 * 1024 * 1024;
 
 export type DigestProgress = (bytesDone: number, bytesTotal: number) => void;
 
+/** Thrown when a hash was abandoned because its signal was aborted. */
+export class DigestAbortedError extends Error {
+  constructor(absolutePath: string) {
+    super(`Hashing was cancelled: ${absolutePath}`);
+    this.name = 'DigestAbortedError';
+  }
+}
+
 /**
  * The sha256 of a file, streamed.
  *
@@ -52,14 +60,41 @@ export type DigestProgress = (bytesDone: number, bytesTotal: number) => void;
  *
  * Progress is reported for a file big enough for the wait to be noticeable,
  * which is the same reason the launcher's own hash stage reports it.
+ *
+ * `signal` stops the read where it is. Without it, cancelling a job that is
+ * hashing a 40 GB federated model only takes effect when the last byte has been
+ * read — the button says the work stopped while the disk says otherwise. The
+ * stream is destroyed and the promise rejects with {@link DigestAbortedError},
+ * which callers distinguish from a genuine read failure.
  */
-export function digestFile(absolutePath: string, onProgress?: DigestProgress): Promise<FileDigest> {
+export function digestFile(
+  absolutePath: string,
+  onProgress?: DigestProgress,
+  signal?: AbortSignal,
+): Promise<FileDigest> {
   const byteSize = statSync(absolutePath).size;
   const reportProgress = onProgress !== undefined && byteSize > HASH_PROGRESS_THRESHOLD_BYTES;
 
   return new Promise<FileDigest>((resolve, reject): void => {
+    // Already aborted before a single byte was read: no stream is opened at
+    // all, rather than one opened and torn down on the next tick.
+    if (signal?.aborted === true) {
+      reject(new DigestAbortedError(absolutePath));
+      return;
+    }
     const hash = createHash('sha256');
     const stream = createReadStream(absolutePath, { highWaterMark: HASH_CHUNK_BYTES });
+
+    // The listener is removed on every exit path: a service that hashes forty
+    // files under one controller would otherwise accumulate forty listeners.
+    const onAbort = (): void => {
+      stream.destroy();
+      reject(new DigestAbortedError(absolutePath));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    const release = (): void => {
+      signal?.removeEventListener('abort', onAbort);
+    };
     let done = 0;
     /** How far along the last progress event was, so they land evenly. */
     let reportedAt = 0;
@@ -77,9 +112,11 @@ export function digestFile(absolutePath: string, onProgress?: DigestProgress): P
       }
     });
     stream.on('error', (error: Error): void => {
+      release();
       reject(error);
     });
     stream.on('end', (): void => {
+      release();
       if (reportProgress) {
         onProgress(done, byteSize);
       }

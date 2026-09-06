@@ -1219,6 +1219,43 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
   }
 
   /**
+   * The extraction cache of a model whose raw file has gone, when that cache is
+   * still on disk and still readable — otherwise `null`.
+   *
+   * A model that has been extracted has already given the project everything a
+   * compile reads: the raw NWD is needed to extract it AGAIN, not to use what
+   * was extracted. Losing the file (a detached drive, a moved share) used to
+   * take the model out of every compile, which turned a missing file into a
+   * register that had quietly lost a building.
+   *
+   * "Still readable" is proved, not assumed: the cache is opened, which is what
+   * validates its schema version and object count, and its `input_sha256` has
+   * to be the bytes this source recorded. A cache that fails either check is no
+   * cache at all here — the source stays missing outright rather than compiling
+   * from a file belonging to some other model.
+   */
+  function cacheWithoutItsFile(source: ProjectSource): string | null {
+    if (source.role !== 'model' || source.derivedCacheSha256 === null) {
+      return null;
+    }
+    const cachePath = path.join(extractionCacheDir, cacheFileName(source.rawSha256));
+    if (!existsSync(cachePath)) {
+      return null;
+    }
+    let cache: ExtractionCache;
+    try {
+      cache = openExtractionCache(cachePath);
+    } catch {
+      return null;
+    }
+    try {
+      return cache.meta().inputSha256 === source.rawSha256 ? cachePath : null;
+    } finally {
+      cache.close();
+    }
+  }
+
+  /**
    * Re-finds the files a reopened project refers to, and re-proves they are the
    * same files.
    *
@@ -1259,14 +1296,22 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     for (const source of active.store.listSources()) {
       const knownPath = appState.sourcePath(source.rawSha256);
       if (knownPath === undefined || !existsSync(knownPath)) {
+        // A model whose extraction is still on this machine is not lost. The
+        // row keeps saying `file-missing`, because the file IS missing and
+        // re-extracting it needs the file back, but the compile reads the cache
+        // and the project stays workable in the meantime.
+        const survivingCache = cacheWithoutItsFile(source);
         active.details.set(source.sourceId, {
           absolutePath: '',
           status: 'file-missing',
           note:
-            `Matchline recorded ${source.rawFileName} but cannot find it on this machine. ` +
-            'Add the file again to work with it.',
+            survivingCache === null
+              ? `Matchline recorded ${source.rawFileName} but cannot find it on this machine. ` +
+                'Add the file again to work with it.'
+              : `Matchline recorded ${source.rawFileName} but cannot find it on this machine. ` +
+                'Cache available; locate the file to re-extract.',
           sheets: [],
-          cachePath: null,
+          cachePath: survivingCache,
         });
         continue;
       }
@@ -1408,7 +1453,15 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       return null;
     }
     const detail = active.details.get(source.sourceId);
-    if (detail === undefined || !isReadableStatus(detail.status)) {
+    if (detail === undefined) {
+      return null;
+    }
+    // A missing file with a surviving cache is readable through that cache:
+    // `cacheWithoutItsFile` proved it opens and belongs to these bytes, and the
+    // row keeps its `file-missing` status so the screen still says what is
+    // wrong. Every other unreadable status has no cache to offer.
+    const missingButCached = detail.status === 'file-missing' && detail.cachePath !== null;
+    if (!isReadableStatus(detail.status) && !missingButCached) {
       return null;
     }
     // The cache, not the file: a raw model is read through the extraction the
@@ -2432,7 +2485,10 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       const status = active.details.get(source.sourceId)?.status;
       if (status === 'file-changed') {
         blocked.push(`${source.logicalName} has changed on disk`);
-      } else if (status === 'file-missing') {
+      } else if (status === 'file-missing' && !active.models.has(source.sourceId)) {
+        // Missing WITH a surviving cache is not a hole in the universe: the
+        // model is open and contributing, and the row already says the file has
+        // to be found before it can be extracted again.
         blocked.push(`${source.logicalName} cannot be found on this machine`);
       } else if (!active.models.has(source.sourceId)) {
         blocked.push(`${source.logicalName} could not be opened`);

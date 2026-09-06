@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
   appendFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -1570,4 +1571,295 @@ test('a cancel during the integrity check settles cancelled, and keeps what was 
     1,
     'the committed cache is kept, so adding the file again costs nothing',
   );
+});
+
+/* ------------------------------------------- hardening: partials have an owner */
+
+/**
+ * The partial files are named after the CONTENT hash, not after the job, so
+ * "clean up after yourself" and "clean up after these bytes" are two different
+ * sentences. Sweeping on the second meaning deleted files belonging to a run
+ * that was still writing them: a job that failed before it launched anything
+ * removed a live partial, and two sources holding the same model removed each
+ * other's.
+ */
+
+/** A launcher that is a stub, so the test decides exactly what a run does. */
+function scriptedLauncher(script) {
+  let launched = 0;
+  return (args, callbacks) => {
+    const index = launched;
+    launched += 1;
+    setTimeout(() => {
+      script(index, callbacks, args);
+    }, 5);
+    return { requestCancel() {}, kill() {} };
+  };
+}
+
+test('a job that never launched an extractor leaves the partials where they are', async (t) => {
+  const cacheDir = newCacheDir('unowned');
+  const modelPath = writeModel('Dragon-Unowned.nwd');
+  const sha = createHash('sha256').update(readFileSync(modelPath)).digest('hex');
+  const partialPath = join(cacheDir, `${sha}.sqlite.partial`);
+  const streamPath = join(cacheDir, `${sha}.ndjson.tmp`);
+  writeFileSync(partialPath, 'written by a run this job knows nothing about');
+  writeFileSync(streamPath, 'and so is this');
+
+  const extraction = createExtractionService({
+    cacheDirectory: cacheDir,
+    launcher: () => {
+      throw new Error('a cancelled queued job must never launch anything');
+    },
+    onChanged: () => {},
+    onSettled: () => {},
+  });
+  t.after(() => {
+    extraction.shutdown();
+  });
+
+  extraction.enqueue({
+    sourceId: 'model:unowned',
+    fileName: 'Dragon-Unowned.nwd',
+    inputPath: modelPath,
+    rawSha256: sha,
+  });
+  // In the same tick, so the job is still queued: `enqueue` defers the pump.
+  assert.equal(extraction.cancel('model:unowned'), true);
+  await extraction.whenIdle();
+
+  assert.equal(extraction.job('model:unowned').status, 'cancelled');
+  assert.ok(existsSync(partialPath), 'the partial cache survived a job that wrote nothing');
+  assert.ok(existsSync(streamPath), 'and so did the stream');
+});
+
+test('the sweep waits while another job is still working on the same bytes', async (t) => {
+  const cacheDir = newCacheDir('shared-bytes');
+  const modelPath = writeModel('Dragon-Shared.nwd');
+  const sha = createHash('sha256').update(readFileSync(modelPath)).digest('hex');
+  const partialPath = join(cacheDir, `${sha}.sqlite.partial`);
+  const streamPath = join(cacheDir, `${sha}.ndjson.tmp`);
+
+  const settled = [];
+  const extraction = createExtractionService({
+    cacheDirectory: cacheDir,
+    launcher: scriptedLauncher((index, callbacks) => {
+      if (index === 0) {
+        // What a run holds while it is working, written by the run itself.
+        writeFileSync(partialPath, 'the first run is writing this');
+        writeFileSync(streamPath, 'and this');
+      }
+      callbacks.onMessage({ type: 'error', code: LAUNCHER_ERROR_CODES.openFailed, message: 'no' });
+      callbacks.onExit({ code: 3, signal: null, diagnostics: '' });
+    }),
+    onChanged: () => {},
+    onSettled: (job) => {
+      settled.push({
+        sourceId: job.sourceId,
+        partial: existsSync(partialPath),
+        stream: existsSync(streamPath),
+      });
+    },
+  });
+  t.after(() => {
+    extraction.shutdown();
+  });
+
+  // Two sources, one model. Enqueued in the same tick so the second is queued
+  // while the first runs.
+  for (const sourceId of ['model:shared-a', 'model:shared-b']) {
+    extraction.enqueue({
+      sourceId,
+      fileName: 'Dragon-Shared.nwd',
+      inputPath: modelPath,
+      rawSha256: sha,
+    });
+  }
+  await extraction.whenIdle();
+
+  assert.deepEqual(
+    settled.map((entry) => entry.sourceId),
+    ['model:shared-a', 'model:shared-b'],
+  );
+  assert.deepEqual(
+    settled[0],
+    { sourceId: 'model:shared-a', partial: true, stream: true },
+    'the first job left the second job\'s files alone',
+  );
+  // The last job for these bytes owns them, and a failure keeps the stream as
+  // the evidence the launcher would have kept.
+  assert.equal(settled[1].partial, false, 'the last job swept the partial cache');
+  assert.equal(settled[1].stream, true, 'and kept the stream a failure is diagnosed from');
+});
+
+/* --------------------------------------- hardening: cancelling during the hash */
+
+test('aborting a digest stops the read instead of finishing it', async () => {
+  const bigPath = join(workDir, 'Abortable.nwd');
+  const chunk = Buffer.alloc(1024 * 1024, 3);
+  writeFileSync(bigPath, '');
+  for (let written = 0; written < 200; written += 1) {
+    appendFileSync(bigPath, chunk);
+  }
+  const totalBytes = 200 * 1024 * 1024;
+
+  const abort = new AbortController();
+  let lastDone = 0;
+  const failure = await digestFile(
+    bigPath,
+    (done) => {
+      lastDone = done;
+      // The first progress event is 0 bytes; the second proves the read began.
+      if (done > 0) {
+        abort.abort();
+      }
+    },
+    abort.signal,
+  ).then(
+    () => null,
+    (error) => error,
+  );
+
+  assert.ok(failure !== null, 'the digest rejected rather than returning a hash');
+  assert.equal(failure.name, 'DigestAbortedError');
+  assert.ok(
+    lastDone < totalBytes,
+    `the read stopped part-way (${String(lastDone)} of ${String(totalBytes)} bytes)`,
+  );
+
+  // Already aborted before the first byte: no stream is opened at all.
+  const immediate = await digestFile(bigPath, undefined, abort.signal).then(
+    () => null,
+    (error) => error,
+  );
+  assert.equal(immediate.name, 'DigestAbortedError');
+
+  rmSync(bigPath, { force: true });
+});
+
+test('cancelling a job that is hashing settles it without reading the rest', async (t) => {
+  const cacheDir = newCacheDir('hash-cancel');
+  const bigPath = join(workDir, 'Dragon-Hashing.nwd');
+  const chunk = Buffer.alloc(1024 * 1024, 5);
+  writeFileSync(bigPath, 'MATCHLINE-FAKE {}\n');
+  for (let written = 0; written < 200; written += 1) {
+    appendFileSync(bigPath, chunk);
+  }
+
+  const extraction = createExtractionService({
+    cacheDirectory: cacheDir,
+    launcher: () => {
+      throw new Error('a job cancelled while hashing must never launch anything');
+    },
+    onChanged: (job) => {
+      // The moment the hash is genuinely under way, not merely announced.
+      if (job.status === 'hashing' && job.progress !== null && job.progress > 0) {
+        extraction.cancel('model:hashing');
+      }
+    },
+    onSettled: () => {},
+  });
+  t.after(() => {
+    extraction.shutdown();
+  });
+
+  extraction.enqueue({
+    sourceId: 'model:hashing',
+    fileName: 'Dragon-Hashing.nwd',
+    inputPath: bigPath,
+    rawSha256: null,
+  });
+  await extraction.whenIdle();
+
+  const job = extraction.job('model:hashing');
+  assert.equal(job.status, 'cancelled');
+  assert.equal(job.errorCode, LAUNCHER_ERROR_CODES.cancelled);
+  assert.match(job.detail, /while the file was being read/);
+
+  rmSync(bigPath, { force: true });
+});
+
+/* ------------------------------------ hardening: a moved model, an intact cache */
+
+/**
+ * Losing the raw model is not losing the extraction.
+ *
+ * The NWD is what an extraction is made FROM; the cache is what every compile
+ * actually reads. A detached drive or a moved share used to take the model out
+ * of the universe entirely — the row said `file-missing` and the compile
+ * refused, which turned a misplaced file into a register that had quietly lost
+ * a building. The row still says the file is missing, because it is and because
+ * re-extracting needs it back; the compile reads the cache in the meantime.
+ */
+test('a model whose file has gone still compiles from the cache it produced', async (t) => {
+  const cacheDir = newCacheDir('moved-model');
+  const modelPath = writeModel('Dragon-Moved.nwd');
+  const projectPath = projectFile('Moved');
+
+  const first = newService(cacheDir);
+  first.create(projectPath, 'Moved');
+  await first.addSources([modelPath]);
+  await first.extractionIdle();
+  teachDragon(first);
+  assert.equal((await first.compile()).state, 'done', 'it compiles while the file is there');
+  first.close();
+
+  // The file goes; its extraction stays where the app put it.
+  rmSync(modelPath, { force: true });
+
+  const second = newService(cacheDir);
+  t.after(() => {
+    second.close();
+  });
+  assert.equal((await second.open(projectPath, false)).outcome, 'opened');
+  await second.extractionIdle();
+
+  const source = sourceById(second, 'model:dragon-moved.nwd');
+  assert.equal(source.status, 'file-missing', 'the row still says the file cannot be found');
+  assert.match(source.note, /cannot find it on this machine/);
+  assert.match(source.note, /Cache available; locate the file to re-extract\./);
+
+  assert.equal(second.modelUniverse().sourceCount, 1, 'the model is still in the universe');
+  assert.equal(second.modelUniverse().objectCount, DRAGON_OBJECT_COUNT);
+  teachDragon(second);
+  assert.equal((await second.compile()).state, 'done', 'and the compile still runs');
+  assert.equal(
+    launchLog(cacheDir).filter((line) => line.startsWith('start')).length,
+    1,
+    'without the extractor being asked to run over a file that is not there',
+  );
+});
+
+test('a model whose file AND cache have gone is refused rather than compiled', async (t) => {
+  const cacheDir = newCacheDir('lost-both');
+  const modelPath = writeModel('Dragon-Lost.nwd');
+  const projectPath = projectFile('Lost');
+
+  const first = newService(cacheDir);
+  first.create(projectPath, 'Lost');
+  await first.addSources([modelPath]);
+  await first.extractionIdle();
+  teachDragon(first);
+  first.close();
+
+  rmSync(modelPath, { force: true });
+  for (const name of readdirSync(cacheDir).filter((entry) => entry.endsWith('.sqlite'))) {
+    rmSync(join(cacheDir, name), { force: true });
+  }
+
+  const second = newService(cacheDir);
+  t.after(() => {
+    second.close();
+  });
+  await second.open(projectPath, false);
+  await second.extractionIdle();
+
+  const source = sourceById(second, 'model:dragon-lost.nwd');
+  assert.equal(source.status, 'file-missing');
+  assert.match(source.note, /Add the file again to work with it\./);
+  assert.equal(second.modelUniverse(), null, 'nothing is open for it to read');
+
+  const refused = await second.compile();
+  assert.equal(refused.state, 'failed');
+  assert.match(refused.reason, /cannot be found on this machine/);
 });

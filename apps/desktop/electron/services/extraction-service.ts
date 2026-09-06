@@ -28,7 +28,7 @@ import {
   type ExtractionMessage,
 } from './extraction-protocol.js';
 import type { ExtractorChild, ExtractorLauncher } from './extractor-launcher.js';
-import { digestFile } from './digest.js';
+import { DigestAbortedError, digestFile } from './digest.js';
 
 /**
  * The Navisworks extraction service (RELEASE-1.0-PLAN P0-2).
@@ -233,6 +233,24 @@ interface Job {
    * rather than one every thirty seconds.
    */
   stallWarnedMinutes: number;
+  /**
+   * True once this job actually started an extractor child.
+   *
+   * The partial files are named after the content hash, not after the job, so
+   * only a job that launched something can have written one. A job that failed
+   * before that -- the file changed under it, the cache directory would not be
+   * created, it was cancelled while queued -- owns nothing on disk, and
+   * sweeping on its way out would delete files belonging to whoever does.
+   */
+  launchedChild: boolean;
+  /**
+   * Aborts the service's own hash, when one is in flight.
+   *
+   * `null` whenever no hash is running, which is most of a job's life: the
+   * session usually supplies the hash and only a re-extraction computes one
+   * here.
+   */
+  hashAbort: AbortController | null;
   /** The file's size when the job was queued, or `null` when it could not be read. */
   readonly expectedByteSize: number | null;
   /** The file's mtime when the job was queued, or `null` when it could not be read. */
@@ -444,6 +462,27 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
   }
 
   /**
+   * Whether another job that is still queued or running is writing the files
+   * this job's hash names.
+   *
+   * Two sources can be the same bytes -- the same model added twice, or a
+   * re-extraction of a file another source also points at -- and the partial
+   * names carry only the content hash, so the second job's `.partial` is the
+   * first job's `.partial`.
+   */
+  function sharesPartialsWithLiveJob(job: Job): boolean {
+    for (const other of jobs.values()) {
+      if (other === job || other.rawSha256 !== job.rawSha256) {
+        continue;
+      }
+      if (RUNNING_STATUSES.has(other.status)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * Removes what a run that did not finish can leave in the cache directory.
    *
    * The launcher deletes its own partial cache in a `finally` and its stream
@@ -455,6 +494,13 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
    */
   function cleanPartials(job: Job, includeStream: boolean): void {
     if (job.rawSha256 === null) {
+      return;
+    }
+    // Ownership, twice over. A job that never started a child never wrote one
+    // of these files, and a job whose bytes another job is still working on
+    // does not own the files named after those bytes: both sweeps would delete
+    // a live partial out from under a run that is minutes into a large model.
+    if (!job.launchedChild || sharesPartialsWithLiveJob(job)) {
       return;
     }
     const [partialCache, stream] = partialFileNames(job.rawSha256);
@@ -766,6 +812,7 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
         },
       );
 
+      job.launchedChild = true;
       active = { job, child, killTimer: null };
       // Cancelled between being queued and being launched: the child exists
       // now, so the request that could not be delivered then is delivered here.
@@ -836,17 +883,38 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
   async function runJob(job: Job): Promise<void> {
     if (job.rawSha256 === null) {
       moveTo(job, 'hashing', null, '');
+      // Cancelling while a 40 GB federated model is being hashed used to mean
+      // "stop when the last byte has been read". The controller stops the read
+      // itself; `cancel` aborts it, and a cancel that arrived before this line
+      // is honoured by starting the hash already aborted.
+      const abort = new AbortController();
+      job.hashAbort = abort;
+      if (job.cancelRequested) {
+        abort.abort();
+      }
       try {
-        const digest = await digestFile(job.inputPath, (done: number, total: number): void => {
-          moveTo(
-            job,
-            'hashing',
-            progressForStage('hash', done, total),
-            detailForStage('hash', done, total, null),
-          );
-        });
+        const digest = await digestFile(
+          job.inputPath,
+          (done: number, total: number): void => {
+            moveTo(
+              job,
+              'hashing',
+              progressForStage('hash', done, total),
+              detailForStage('hash', done, total, null),
+            );
+          },
+          abort.signal,
+        );
         job.rawSha256 = digest.sha256;
       } catch (error: unknown) {
+        if (error instanceof DigestAbortedError) {
+          settleFailure(
+            job,
+            LAUNCHER_ERROR_CODES.cancelled,
+            'Extraction cancelled while the file was being read.',
+          );
+          return;
+        }
         settleFailure(
           job,
           existsSync(job.inputPath)
@@ -855,6 +923,8 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
           error instanceof Error ? error.message : String(error),
         );
         return;
+      } finally {
+        job.hashAbort = null;
       }
     }
     const rawSha256 = job.rawSha256;
@@ -1049,6 +1119,7 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
         // rather than left to finish and associate a cache for a file this
         // project no longer describes.
         previous.cancelRequested = true;
+        previous.hashAbort?.abort();
         if (active?.job === previous) {
           escalateCancel();
         }
@@ -1071,6 +1142,8 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
         startedAt: new Date().toISOString(),
         finishedAt: null,
         cancelRequested: false,
+        launchedChild: false,
+        hashAbort: null,
         hashWasSupplied: request.rawSha256 !== null,
         lastMessageAt: Date.now(),
         stallWarnedMinutes: -1,
@@ -1102,9 +1175,10 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
         escalateCancel();
         return true;
       }
-      // Queued, or hashing before any child exists. Hashing finishes its
-      // current chunk and then sees the flag; a queued job is settled here so
+      // Queued, or hashing before any child exists. A hash in flight is aborted
+      // where it is rather than read to the end; a queued job is settled here so
       // the row stops saying it is waiting for something that will not happen.
+      job.hashAbort?.abort();
       if (job.status === 'queued') {
         settleFailure(job, LAUNCHER_ERROR_CODES.cancelled, 'Extraction cancelled before it started.');
       }
@@ -1127,6 +1201,7 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
       }
       if (RUNNING_STATUSES.has(job.status)) {
         job.cancelRequested = true;
+        job.hashAbort?.abort();
         if (active?.job === job) {
           escalateCancel();
         }
@@ -1140,6 +1215,7 @@ export function createExtractionService(options: ExtractionServiceOptions): Extr
       clearInterval(watchdog);
       for (const job of jobs.values()) {
         job.cancelRequested = true;
+        job.hashAbort?.abort();
       }
       const run = active;
       if (run === null) {
