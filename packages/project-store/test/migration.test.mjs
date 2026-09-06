@@ -8,6 +8,7 @@ import {
   createProject,
   deriveSourceId,
   deserializeLedger,
+  describeProjectStoreReason,
   openProject,
   PROJECT_SCHEMA_VERSION,
   ProjectStoreError,
@@ -2229,4 +2230,63 @@ test('a section name the schema does not know is refused by the argument check',
   } finally {
     store.close();
   }
+});
+
+/**
+ * Two Matchlines, one project file on a share.
+ *
+ * The version that chooses the step list is read before the file is closed and
+ * copied, so by the time the migration actually holds a write lock that reading
+ * is a claim about the past. If another process upgraded the file in between,
+ * these steps are the wrong steps -- a v1 walk applied to a file that is
+ * already v2 creates a table it has and counts a row twice.
+ *
+ * The race is staged rather than waited for: `BEGIN IMMEDIATE` is the exact
+ * moment the guard reads again, so a second connection commits the upgrade just
+ * before that statement runs. Nothing about the store is stubbed except when
+ * the other writer gets its turn.
+ */
+test('a project somebody else migrated first is refused, not migrated twice', () => {
+  const path = writeV1Project('raced.matchline');
+
+  const originalExec = DatabaseSync.prototype.exec;
+  let raced = false;
+  DatabaseSync.prototype.exec = function execSpy(sql) {
+    // Before the lock is taken, so the other writer can actually get in.
+    if (sql === 'BEGIN IMMEDIATE' && !raced) {
+      raced = true;
+      const other = new DatabaseSync(path);
+      try {
+        other.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(
+          String(PROJECT_SCHEMA_VERSION),
+        );
+      } finally {
+        other.close();
+      }
+    }
+    return originalExec.call(this, sql);
+  };
+
+  let failure;
+  try {
+    failure = reason(() => openProject(path, { migrate: true, now: frozenClock(MIGRATED_AT) }));
+  } finally {
+    DatabaseSync.prototype.exec = originalExec;
+  }
+
+  assert.ok(raced, 'the other writer took its turn');
+  assert.equal(failure.kind, 'migration-raced');
+  assert.equal(failure.expected, 1, 'the version the step list was chosen for');
+  assert.equal(failure.found, PROJECT_SCHEMA_VERSION, 'and the version the lock revealed');
+  assert.match(
+    describeProjectStoreReason(failure),
+    /another program upgraded it first/,
+    'the message says what happened rather than naming a table',
+  );
+
+  // Nothing was applied: the version the other writer set is the only change,
+  // and no migration row was recorded by this process.
+  assert.deepEqual(dumpTables(path, ['migrations']).migrations, [
+    JSON.stringify({ applied_at: CREATED_AT, version: 1 }),
+  ]);
 });

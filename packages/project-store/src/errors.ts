@@ -28,6 +28,18 @@ export type ProjectStoreReason =
       readonly found: number;
       readonly supported: number;
     }
+  /**
+   * The file changed version between planning the migration and taking the
+   * write lock -- another process upgraded it first.
+   */
+  | {
+      readonly kind: 'migration-raced';
+      readonly path: string;
+      /** The version the step list was chosen for. */
+      readonly expected: number;
+      /** What the file declared once this process held the write lock. */
+      readonly found: number;
+    }
   | {
       readonly kind: 'no-migration-path';
       readonly found: number;
@@ -106,6 +118,8 @@ export function describeProjectStoreReason(reason: ProjectStoreReason): string {
       return `project file schema_version ${reason.found} is newer than this build understands (${reason.supported}); upgrade Matchline to open it`;
     case 'migration-required':
       return `project file schema_version ${reason.found} predates this build (${reason.supported}); reopen it with migrate: true to upgrade it`;
+    case 'migration-raced':
+      return `project file at ${reason.path} was schema_version ${reason.expected} when its migration was planned but ${reason.found} when the write lock was taken; another program upgraded it first. Nothing was changed; open it again.`;
     case 'no-migration-path':
       return `project file schema_version ${reason.found} predates this build (${reason.supported}) and no migration from ${reason.found} exists; the file was left as it was found`;
     case 'malformed-row':

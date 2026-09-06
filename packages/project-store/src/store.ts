@@ -854,6 +854,12 @@ function applyStep(db: DatabaseSync, step: MigrationStep): void {
  * Everything after the backup runs in one transaction — the new tables, the
  * `migrations` rows and the `meta.schema_version` bump together — so a failure
  * anywhere leaves a file that still declares the version it really is.
+ *
+ * The version is read a second time inside that transaction, because the first
+ * read happened before the file was closed and copied: `BEGIN IMMEDIATE` is
+ * what makes this process the only writer, and everything learned before it is
+ * a claim about the past. A file somebody else upgraded in between is refused
+ * (`migration-raced`) rather than migrated twice.
  */
 function migrateProjectFile(path: string, found: number, clock: Clock): MigrationReport {
   const steps = migrationStepsFrom(found);
@@ -879,6 +885,26 @@ function migrateProjectFile(path: string, found: number, clock: Clock): Migratio
     const appliedAt = isoNow(clock);
     db.exec('BEGIN IMMEDIATE');
     try {
+      // Re-read under the write lock, which is the first moment this process
+      // can be sure nobody else is mid-upgrade. `found` was read before the
+      // backup was taken and the step list was chosen for it; if another
+      // program has moved the file on since -- a second Matchline window, a
+      // file on a share -- these steps are the wrong steps, and applying a v1
+      // migration to a file that is already v2 is how a project gets a table it
+      // already has or a row counted twice.
+      //
+      // The backup is left where it is. It is a copy of a real earlier state of
+      // this project, and deleting a user's only copy of it on an error path
+      // would be the worse of the two mistakes.
+      const current = requiredCount(readMetaEntries(db), 'schema_version');
+      if (current !== found) {
+        throw new ProjectStoreError({
+          kind: 'migration-raced',
+          path,
+          expected: found,
+          found: current,
+        });
+      }
       const record = db.prepare('INSERT INTO migrations (version, applied_at) VALUES (?, ?)');
       for (const step of steps) {
         applyStep(db, step);
