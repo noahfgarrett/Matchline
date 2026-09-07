@@ -69,6 +69,7 @@ import type {
   SkippedClaimInput,
 } from '@matchline/relationship-claims';
 import { readMelTable } from '@matchline/spreadsheet-import';
+import { auditCompiledProject } from '@matchline/ssm-audit';
 import { compileSnapshot, hierarchyTree } from '@matchline/ssm-compiler';
 import type { CompileSubject } from '@matchline/ssm-compiler';
 import { buildSystemCatalog, resolveSystems, UNSTATED_ROW } from '@matchline/system-resolver';
@@ -110,6 +111,7 @@ import {
 } from './properties.js';
 import type { AssetPropertyBag } from './properties.js';
 import { aggregateReviewItems } from './review.js';
+import { ssmAuditReviewItems } from './ssm-audit.js';
 import { DEFAULT_MEL_SHEET } from './types.js';
 import { validateProfile } from './validate.js';
 import type {
@@ -842,6 +844,16 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     melRowsDropped: mel.droppedRowCount,
   });
 
+  // --- 10c. the SSM Audit gate ----------------------------------------------------
+  // Last, and deliberately after the register exists: the rulebook audits the
+  // EXTO rows the export would carry, so it has to be handed a finished
+  // register rather than a half-built one. It changes nothing (docs/ENGINE.md,
+  // "SSM Audit gate"); its findings join the queue like any other stage's.
+  const ssmAudit = auditCompiledProject(
+    { generatedMel, identityIndex },
+    { disabledRuleIds: profile.ssmAudit.disabledRuleIds },
+  );
+
   // --- 11. one review queue -------------------------------------------------------
   stage('review');
   const reviewItems = aggregateReviewItems([
@@ -862,6 +874,8 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     // "34 assets have no system" used to be a number on a summary with nothing
     // behind it. It is a queue row now, grouped by the reasons that explain it.
     completeness.reviewItems,
+    // The gate: what Exto and the SOP would say about the register above.
+    ssmAuditReviewItems(ssmAudit),
   ]);
 
   const stats = statsOf({
@@ -901,6 +915,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     generatedMel,
     reviewItems,
     completeness: completeness.report,
+    ssmAudit,
     stats,
   };
 }

@@ -11,7 +11,7 @@ import type {
 import { call, count, messageOf } from '../api';
 import { Callout, Panel, Stat, StatRow, TableScroll } from '../components/Panel';
 
-import type { WizardContext } from './Wizard';
+import type { ReviewRequest, WizardContext } from './Wizard';
 
 /**
  * Screen 8 — Preview and QA (PRODUCT.md §7 screen 8).
@@ -135,9 +135,12 @@ const CARDS: readonly Card[] = [
 export function Screen8Preview({
   context,
   onCompiled,
+  onOpenReview,
 }: {
   readonly context: WizardContext;
   readonly onCompiled: () => void;
+  /** Opens the workspace review queue, filtered. The audit card uses it. */
+  readonly onOpenReview: (request: ReviewRequest) => void;
 }): JSX.Element {
   const [status, setStatus] = useState<WireCompileStatus>({ state: 'never-run' });
   const [running, setRunning] = useState<boolean>(false);
@@ -376,6 +379,8 @@ export function Screen8Preview({
           {openKind === null ? null : <IssueList kind={openKind} />}
 
           <CompletenessPanel summary={summary} />
+
+          <SsmAuditPanel summary={summary} context={context} onOpenReview={onOpenReview} />
 
           <IdentityPanel summary={summary} />
 
@@ -808,6 +813,182 @@ function IssueList({ kind }: { readonly kind: WireCompileIssueKind }): JSX.Eleme
           ) : null}
         </>
       )}
+    </Panel>
+  );
+}
+
+/**
+ * What the SSM Audit rulebook makes of the register this compile built.
+ *
+ * The card beside Completeness answers a different question from every other
+ * number on this screen. Completeness asks how much of the site the compile
+ * described; this asks whether what it described would survive contact with
+ * Exto and the SSM SOP — the same rules SSM-Audit applies to a finished Cx
+ * Registry, vendored byte for byte and never edited here.
+ *
+ * Each count opens the review queue filtered to that severity, because the
+ * number is only useful as a door: "34 Exto would refuse" is a start, and the
+ * 34 rows are the work.
+ *
+ * The rules disclosure below it is the other half of trusting a gate — every
+ * rule, its plain statement, how often it fired, and a switch. A site that
+ * cannot see what a rule says cannot fairly be asked to accept its findings,
+ * and a site that has a rule that is simply true of it by design has to be able
+ * to say so once rather than dismiss it forever.
+ */
+function SsmAuditPanel({
+  summary,
+  context,
+  onOpenReview,
+}: {
+  readonly summary: WireCompileSummary;
+  readonly context: WizardContext;
+  readonly onOpenReview: (request: ReviewRequest) => void;
+}): JSX.Element {
+  const audit = summary.ssmAudit;
+  const [rulesOpen, setRulesOpen] = useState<boolean>(false);
+  const [busyRule, setBusyRule] = useState<string | null>(null);
+
+  const severities: ReadonlyArray<readonly [string, string, number, string]> = [
+    ['blocker', 'Exto would refuse', audit.blockerCount, 'rows Exto itself would reject'],
+    ['error', 'Rules broken', audit.errorCount, 'the SSM SOP says otherwise'],
+    ['warning', 'To check', audit.warningCount, 'often deliberate — confirm it is'],
+    ['info', 'Notes', audit.infoCount, 'counted once per rule in the queue'],
+  ];
+
+  // Most findings first: on a healthy register this list is short, and on an
+  // unhealthy one the top of it is where the work is.
+  const fired = audit.rules
+    .filter((rule) => rule.findingCount > 0)
+    .slice()
+    .sort((left, right) => right.findingCount - left.findingCount);
+
+  const disabled = new Set(context.draft.ssmAudit.disabledRuleIds);
+
+  const toggleRule = async (ruleId: string): Promise<void> => {
+    setBusyRule(ruleId);
+    try {
+      await context.update((draft): { ssmAudit: { disabledRuleIds: string[] } } => {
+        const current = draft.ssmAudit.disabledRuleIds;
+        return {
+          ssmAudit: {
+            disabledRuleIds: current.includes(ruleId)
+              ? current.filter((id) => id !== ruleId)
+              : [...current, ruleId],
+          },
+        };
+      });
+    } finally {
+      setBusyRule(null);
+    }
+  };
+
+  return (
+    <Panel
+      title="SSM Audit"
+      description="Not what the compile did, but whether Exto and the SSM SOP would accept what it produced. The rulebook is SSM-Audit's own, shared byte for byte."
+    >
+      <StatRow>
+        {severities.map(([value, label, total, hint]): JSX.Element => (
+          <button
+            key={value}
+            type="button"
+            className={`qa-card${total > 0 && value !== 'info' ? ' qa-card--attention' : ''}`}
+            data-testid={`ssm-audit-${value}`}
+            title={hint}
+            onClick={(): void => {
+              onOpenReview({ kind: 'ssm-audit', severity: value });
+            }}
+          >
+            <span className="qa-card__value">{count(total)}</span>
+            <span className="qa-card__label">{label}</span>
+            <span className="qa-card__hint">{hint}</span>
+          </button>
+        ))}
+      </StatRow>
+
+      <p className="muted" data-testid="ssm-audit-line">
+        {audit.findingCount === 0
+          ? `${count(audit.checksRun)} checks over ${count(audit.rowCount)} rows found nothing.`
+          : `${count(audit.findingCount)} findings from ${count(audit.checksRun)} checks over ` +
+            `${count(audit.rowCount)} rows. Every count above opens the review queue.`}
+      </p>
+
+      {fired.length === 0 ? null : (
+        <TableScroll>
+          <table className="table table--compact" data-testid="ssm-audit-top-rules">
+            <thead>
+              <tr>
+                <th>Rule</th>
+                <th>Findings</th>
+              </tr>
+            </thead>
+            <tbody>
+              {fired.slice(0, 5).map((rule): JSX.Element => (
+                <tr key={rule.ruleId} data-testid={`ssm-audit-rule-${rule.ruleId}`}>
+                  <td>{rule.title}</td>
+                  <td>{count(rule.findingCount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
+      )}
+
+      <button
+        className="button button--small"
+        type="button"
+        data-testid="ssm-audit-rules-toggle"
+        onClick={(): void => {
+          setRulesOpen(!rulesOpen);
+        }}
+      >
+        {rulesOpen ? 'Hide the rules' : `Show all ${count(audit.rules.length)} rules`}
+      </button>
+
+      {rulesOpen ? (
+        <>
+          <p className="muted">
+            Every rule the audit runs, with what it says must be true. Switching one off drops
+            its findings and takes it out of the exported report; it does not stop the check
+            running, so the number of checks stays comparable between compiles. Recompile for a
+            change here to reach the queue.
+          </p>
+          <TableScroll>
+            <table className="table table--compact" data-testid="ssm-audit-rules">
+              <thead>
+                <tr>
+                  <th>Rule</th>
+                  <th>What must be true</th>
+                  <th>Findings</th>
+                  <th>On</th>
+                </tr>
+              </thead>
+              <tbody>
+                {audit.rules.map((rule): JSX.Element => (
+                  <tr key={rule.ruleId} data-testid={`ssm-audit-rules-${rule.ruleId}`}>
+                    <td>{rule.title}</td>
+                    <td className="muted">{rule.statement}</td>
+                    <td>{disabled.has(rule.ruleId) ? '—' : count(rule.findingCount)}</td>
+                    <td>
+                      <input
+                        type="checkbox"
+                        data-testid={`ssm-audit-switch-${rule.ruleId}`}
+                        aria-label={`Run the rule: ${rule.title}`}
+                        checked={!disabled.has(rule.ruleId)}
+                        disabled={busyRule !== null}
+                        onChange={(): void => {
+                          void toggleRule(rule.ruleId);
+                        }}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
+        </>
+      ) : null}
     </Panel>
   );
 }

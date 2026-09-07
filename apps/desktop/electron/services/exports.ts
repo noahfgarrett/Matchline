@@ -41,6 +41,7 @@ import {
   writePredecessorWorkbook,
   type PredecessorAsset,
 } from '@matchline/scheduling';
+import { writeSsmAuditWorkbook } from '@matchline/ssm-audit';
 import type { HierarchyAssetNode, HierarchyLevelNode } from '@matchline/ssm-compiler';
 
 import type {
@@ -530,6 +531,35 @@ type LevelPath = ReadonlyMap<string, string>;
  * disagree with the compile. An asset the projection did not place therefore
  * produces no row, and the note says how many.
  */
+/**
+ * The SSM Audit findings, on SSM-Audit's own All Findings and Rules columns.
+ *
+ * The gate itself runs inside the compile (docs/ENGINE.md, "SSM Audit gate");
+ * this hands over the report. Nothing is recomputed here — the findings are the
+ * ones on screen 8 and in the review queue, so the file and the app can never
+ * describe different registers.
+ *
+ * The note leads with the blockers, because "Exto would refuse 34 of these
+ * rows" is the sentence a coordinator needs before they open the file.
+ */
+export function exportSsmAudit(project: CompiledProject, absolutePath: string): WireExportResult {
+  const audit = project.ssmAudit;
+  const bytes = writeSsmAuditWorkbook(audit, { assets: project.generatedMel.assets });
+  const disabled = audit.rulesEnabled.filter((rule) => !rule.enabled).length;
+  const note =
+    `${count(audit.findings.length, 'finding', 'findings')} over ` +
+    `${count(audit.rowCount, 'row', 'rows')}: ` +
+    `${String(audit.bySeverity.blocker)} Exto would refuse, ` +
+    `${String(audit.bySeverity.error)} broken SOP rules, ` +
+    `${String(audit.bySeverity.warning)} to check, ` +
+    `${String(audit.bySeverity.info)} notes. ` +
+    (disabled === 0
+      ? 'Every rule is switched on.'
+      : `${count(disabled, 'rule is', 'rules are')} switched off for this site and ` +
+        'neither their findings nor they themselves are in the file.');
+  return write(absolutePath, bytes, note);
+}
+
 export function exportSsmHierarchy(
   project: CompiledProject,
   hierarchy: WireHierarchyConfig,

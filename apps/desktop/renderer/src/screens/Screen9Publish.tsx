@@ -6,8 +6,9 @@ import type {
   WireLevelCompleteness,
   WireProfileSection,
   WirePublishBlocker,
+  WireSsmAuditSummary,
 } from '../../../shared/schemas';
-import { call, messageOf } from '../api';
+import { call, count, messageOf } from '../api';
 import { Callout, Panel, TableScroll } from '../components/Panel';
 
 import type { WizardContext } from './Wizard';
@@ -86,6 +87,17 @@ export function Screen9Publish({
   const [unstatedBoundaries, setUnstatedBoundaries] = useState<
     readonly WireLevelCompleteness[]
   >([]);
+  /**
+   * The SSM Audit gate's blockers from the last compile, or `null`.
+   *
+   * A warning, deliberately, and never a refusal. A blocker means Exto would
+   * reject that row on upload — which is a fact about the register a compile
+   * produced, not about the profile being published, and a site is entitled to
+   * publish a profile whose register is not finished yet. What it is not
+   * entitled to is not being told: an upload rejected at Exto costs a day, and
+   * the number was sitting in the compile the whole time.
+   */
+  const [auditBlockers, setAuditBlockers] = useState<WireSsmAuditSummary | null>(null);
   const [note, setNote] = useState<string>('');
   const [busy, setBusy] = useState<boolean>(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -123,6 +135,7 @@ export function Screen9Publish({
               )
             : [],
         );
+        setAuditBlockers(data.status.state === 'done' ? data.status.summary.ssmAudit : null);
       },
       (): void => {
         // A status read that fails leaves the warning off. It is a warning
@@ -376,6 +389,22 @@ export function Screen9Publish({
           <span>These boundaries are right</span>
         </label>
       </Panel>
+
+      {auditBlockers === null || auditBlockers.blockerCount === 0 ? null : (
+        <Callout tone="warning" data-testid="publish-ssm-audit-blockers">
+          Exto would reject {count(auditBlockers.blockerCount)} of the{' '}
+          {count(auditBlockers.rowCount)} rows the last compile produced
+          {auditBlockers.rules.filter((rule) => rule.severity === 'blocker').length === 0
+            ? ''
+            : `: ${auditBlockers.rules
+                .filter((rule) => rule.severity === 'blocker')
+                .map((rule) => `${rule.title} (${String(rule.findingCount)})`)
+                .join('; ')}`}
+          . This does not stop you publishing the profile — the rows are the register's problem,
+          not the rule set's — but the upload would come back. The findings are on screen 8 and
+          in the review queue, and the Exports tab writes them out.
+        </Callout>
+      )}
 
       <Panel
         title="Save a revision"

@@ -44,6 +44,7 @@ import type { LearnedRuleSet, ProposedNesting } from '@matchline/learned-rules';
 import type { CanonicalMelRow, GeneratedMelAsset } from '@matchline/mel-export';
 import type { ExtractionCache } from '@matchline/model-schema';
 import type { AssembledClaims } from '@matchline/relationship-claims';
+import type { SsmAuditReport } from '@matchline/ssm-audit';
 import type { MelMapping } from '@matchline/spreadsheet-import';
 import type { CompileSubject, HierarchyTree } from '@matchline/ssm-compiler';
 import type {
@@ -435,5 +436,19 @@ export interface CompiledProject {
    * describes nothing still leaves open.
    */
   readonly completeness: CompletenessReport;
+  /**
+   * Stage 12: what the SSM Audit rulebook makes of the register this compile
+   * built (docs/ENGINE.md, "SSM Audit gate").
+   *
+   * A gate, not a stage of the fold: it reads the EXTO rows the export would
+   * carry and reports whether Exto and the SSM SOP would accept them. It
+   * changes nothing -- no claim, no parent, no cell -- which is why it can run
+   * last and why its findings arrive as review items rather than as errors.
+   *
+   * Always published, including for a project with no assets: "the rules ran
+   * and found nothing" and "the rules did not run" are different answers, and
+   * only the first has a rule list with every count at zero.
+   */
+  readonly ssmAudit: SsmAuditReport;
   readonly stats: CompileStats;
 }

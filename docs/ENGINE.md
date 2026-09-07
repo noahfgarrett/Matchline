@@ -191,6 +191,76 @@ observations + identity + anatomy + role graph + learned rules
   decisions and its ledger. A profile stored before the consolidation is lifted by
   `migrateSiteProfileV1` (`@matchline/domain`); nothing inside the engine sees a V1.
 
+## SSM Audit gate
+
+The last thing a compile does, and the only stage that changes nothing.
+
+`compileProject` finishes by handing the register it just built to
+`@matchline/ssm-audit`, which runs the **SSM-Audit rulebook** over it and publishes
+`CompiledProject.ssmAudit`. The question it answers is the one every other stage leaves
+open: not "did the engine place this equipment", but "would Exto and the SSM SOP accept
+what came out". A register that compiles cleanly and would be rejected on upload is a
+failure that used to surface a day later, in somebody else's tool.
+
+### The rulebook is vendored, never edited here
+
+`packages/ssm-audit/vendor/` holds SSM-Audit's own `src/audit/engine.js`,
+`src/audit/model.js`, `src/exto/rev21-contract.js`, `src/exto/vf-item-masters.js` and
+`src/core/text.js` **byte for byte**, with their relative imports untouched, plus two shims
+that complete the module graph — `io/workbook.js` (which the model layer imports and the
+audit path never calls) and `xlsx-global.js` (the one SheetJS utility a browser page would
+have put on `globalThis`). `packages/ssm-audit/test/parity.test.mjs` compares the five
+vendored files against the SSM-Audit checkout whenever one is present and fails on any
+difference; SSM-Audit pins the same files against its own integrated source, so the three
+copies are held to one rulebook. A rule that needs changing is changed in SSM-Audit and
+re-vendored. See DECISIONS.md.
+
+### What the rules read
+
+The audit rows are built through `@matchline/exto-export`'s own flattening, so the rulebook
+sees exactly what the upload sheet would carry, cell for cell, rather than a second
+flattening that could disagree with it. Three fields the Rev21 column map does not position
+are filled from what the compile knows: **Equipment Description**, which the entire
+commissioning-logic half of the rulebook reads (a VESDA, an RIO, a heat-trace panel are
+recognised by description); **Closest Parent Status**, written `NEW` exactly when Matchline
+can see the parent — another row of this upload, or the row's own System Name — and blank
+otherwise, because `NEW` asserts that the parent row is created by this upload and blanket
+`NEW` would silence the blocker that catches a Closest Parent naming nothing; and the two
+**milestone** levels, blank, because no P6 schedule reaches a compile and the rulebook
+checks milestones only when a project uses them.
+
+### Findings, and how they reach a person
+
+Each finding carries the rulebook's own words — `why`, `expected`, `recommendation`, the
+rule's `statement` — verbatim, plus the two things only Matchline can add: the compiled
+`assetId` behind the tag, resolved through the identity index's exact-tag rung, and the same
+for the related equipment. A tag naming no asset, or naming two, keeps `assetId: null`; a
+duplicated tag is exactly what one of these rules reports, and picking one of the two would
+file the finding against equipment nobody chose.
+
+They arrive in the one review queue as the `ssm-audit` kind. `blocker`, `error` and
+`warning` are each about one row and stay per asset; `info` is a note about a practice, and a
+real register carries thousands, so notes aggregate to one item per rule with a count and ten
+examples — the same rule the B-series aggregates follow. The review key is the rule, the
+equipment (asset id, or the tag when no asset answers to it), the field and the value found:
+not the sentences, so a reworded message never orphans a decision.
+
+### Severities
+
+`blocker` (Exto would refuse the row) · `error` (an SSM SOP rule is broken) · `warning`
+(worth a look, often deliberate) · `info` (a note). Screen 8 counts them beside Completeness
+and every count opens the queue filtered to it; screen 9 draws the blockers as a warning above
+Save — a warning, never a refusal, because a blocker is a fact about the register a compile
+produced and not about the profile being published.
+
+### Switching a rule off
+
+`SiteProfileV2.ssmAudit.disabledRuleIds` names rules whose findings this site does not want
+to be told about again. The rule still **runs** — `checksRun` counts every check, so the
+number stays comparable between compiles — and what is dropped is its findings, its queue
+rows and its place in the exported report. A site cannot reword a rule, re-grade it, or add
+one: the rulebook is shared, and a local edit would mean two apps disagreeing about one SOP.
+
 ## Binding semantics (all stages)
 
 1. Model-first: the asset universe comes ONLY from the extraction cache. MEL rows never

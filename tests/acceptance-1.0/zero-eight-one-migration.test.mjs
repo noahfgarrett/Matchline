@@ -761,7 +761,21 @@ test('a 0.8.1 project migrates, keeps every decision, and recompiles on them', a
   );
   assert.equal(row.decision, 'accepted', 'so the decision still resolves onto it');
   assert.equal(row.note, CROSSING_DECISION_NOTE, 'with the words the reviewer wrote');
-  assert.equal(review.undecidedCount, 0, 'nothing is waiting on a person again');
+  // `undecidedCount` is the whole queue, not this filter, and the whole queue
+  // now includes the SSM Audit gate reading the register this compile built —
+  // the Dragon fixture's system keys are not VF UPNs, and the rulebook is right
+  // to say so. What this migration is about is that nothing the FOLD refused is
+  // waiting again, so that is what is asserted, and the audit's rows are
+  // accounted for rather than silenced.
+  const undecided = service
+    .reviewPage('', 0, 500)
+    .rows.filter((entry) => entry.decision === null);
+  assert.equal(
+    undecided.every((entry) => entry.kind === 'ssm-audit'),
+    true,
+    'nothing the compiler refused to decide is waiting on a person again',
+  );
+  assert.equal(undecided.length > 0, true, 'and the audit did read the register');
 
   // The stale decision is untouched: not resolved, and not thrown away either.
   assert.equal(

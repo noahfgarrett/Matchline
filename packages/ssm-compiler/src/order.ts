@@ -385,6 +385,24 @@ export function reviewKey(item: ReviewItem): string {
       // a re-tag would change, and a person who has already answered "yes, same
       // unit" must not be asked again because a third source now carries it.
       return composeKey(item.kind, field(item.assetId), field(item.reason));
+    case 'ssm-audit':
+      // The rule, the equipment, the column and the value that was there. Not
+      // the sentences: `why` and `expected` are the rulebook rendering the same
+      // four things in words, so keying on them as well would only make the key
+      // longer, and a rulebook that reworded a message would orphan every
+      // decision recorded against it.
+      //
+      // An aggregate note has no equipment, column or value, so its key is the
+      // rule and nothing else -- which is exactly right: what a person decides
+      // about "every row on UPN MISC" is one decision, however many rows it was
+      // true of this time.
+      return composeKey(
+        item.kind,
+        field(item.ruleId),
+        field(item.assetId === '' ? item.equipmentTag : item.assetId),
+        field(item.field),
+        field(item.actual),
+      );
     case 'orphaned-decision':
       // Both spellings and the reason, but not the note: the note is what the
       // person wrote, and two people writing different notes about the same

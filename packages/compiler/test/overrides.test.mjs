@@ -125,8 +125,17 @@ test('proposal-grade learned rules reach the review queue as nesting proposals a
   assert.equal(project.stats.structuralClaimCount, 0);
   assert.equal(project.snapshot.stats.rootCount, 34);
 
-  assert.equal(project.reviewItems.length, 8);
-  assert.ok(project.reviewItems.every((item) => item.kind === 'nesting-proposal'));
+  // Eight proposals, plus what the SSM Audit gate makes of the register this
+  // compile built. The fixture's system keys (001, 002) are not VF UPNs, so the
+  // gate is right to say so; `ssm-audit.test.mjs` is where that is asserted in
+  // full. Silencing it here would hide a real finding to keep a count round.
+  const proposals = project.reviewItems.filter((item) => item.kind === 'nesting-proposal');
+  assert.equal(proposals.length, 8);
+  assert.ok(
+    project.reviewItems.every(
+      (item) => item.kind === 'nesting-proposal' || item.kind === 'ssm-audit',
+    ),
+  );
 
   const vfd = project.reviewItems.find((item) => item.assetId === idOf('VFD001-10-01'));
   assert.equal(vfd.proposedParentId, idOf('PLC001-10-01'));
@@ -142,7 +151,13 @@ test('claim-grade learned rules compete on the ladder and place the same eight a
   assert.ok(
     project.claims.structural.every((claim) => claim.ladderSource === 'learned-description'),
   );
-  assert.deepEqual(project.reviewItems, []);
+  // Nothing the fold refused to decide. What remains in the queue is the SSM
+  // Audit gate's reading of the finished register, which is a different
+  // question and is asserted in `ssm-audit.test.mjs`.
+  assert.deepEqual(
+    project.reviewItems.filter((item) => item.kind !== 'ssm-audit'),
+    [],
+  );
 
   assert.equal(project.snapshot.stats.rootCount, 26);
   const vfd = project.snapshot.nodes.get(idOf('VFD001-20-01'));

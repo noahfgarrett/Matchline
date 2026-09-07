@@ -1525,6 +1525,19 @@ export type WireProfileTestExample = z.infer<typeof profileTestExampleSchema>;
  * that predates the consolidation has no key for it and an absent key means
  * "this site configured none" — not "this file is unreadable".
  */
+/**
+ * What a site has said about the SSM Audit gate.
+ *
+ * One field, and deliberately only one: the rulebook is vendored from SSM-Audit
+ * and pinned by parity, so a site cannot reword a rule, re-grade it, or add
+ * one. What it can say is "we know, and we do not want to be told again" about
+ * a rule whose findings are true of this site by design.
+ */
+export const ssmAuditConfigSchema = z.object({
+  disabledRuleIds: z.array(z.string().min(1)).default([]),
+});
+export type WireSsmAuditConfig = z.infer<typeof ssmAuditConfigSchema>;
+
 export const draftProfileSchema = z.object({
   profileId: z.string().min(1),
   name: z.string().min(1),
@@ -1555,6 +1568,7 @@ export const draftProfileSchema = z.object({
   priorSsm: z.array(parentPairSchema).default([]),
   authorityRules: z.array(authorityRuleSchema).default([]),
   profileTestExamples: z.array(profileTestExampleSchema).default([]),
+  ssmAudit: ssmAuditConfigSchema.default({ disabledRuleIds: [] }),
 });
 export type WireDraftProfile = z.infer<typeof draftProfileSchema>;
 
@@ -1578,6 +1592,7 @@ export const draftPatchSchema = z.object({
   priorSsm: z.array(parentPairSchema).optional(),
   authorityRules: z.array(authorityRuleSchema).optional(),
   profileTestExamples: z.array(profileTestExampleSchema).optional(),
+  ssmAudit: ssmAuditConfigSchema.optional(),
 });
 export type WireDraftPatch = z.infer<typeof draftPatchSchema>;
 
@@ -1766,6 +1781,64 @@ export const completenessSchema = z.object({
 export type WireCompleteness = z.infer<typeof completenessSchema>;
 
 /** Everything screen 8's checklist prints (PRODUCT.md §7 screen 8). */
+/* ------------------------------------------------------------ SSM Audit gate */
+
+/**
+ * One rule of the SSM Audit rulebook, with what this compile made of it.
+ *
+ * The words are the rulebook's, carried through the wire untouched: `title` is
+ * its short name, `statement` is what must be true. A screen that reworded
+ * either would be putting a second voice on the same rule, and the rulebook is
+ * shared byte for byte with SSM-Audit precisely so that cannot happen.
+ */
+export const ssmAuditRuleSchema = z.object({
+  /** The rulebook's stable id, e.g. `parent.cross-upn`. The switch keys on it. */
+  ruleId: z.string().min(1),
+  title: z.string().min(1),
+  /** What must be true, in one or two plain sentences. */
+  statement: z.string(),
+  /** `registry`, `sop` or `logic`. */
+  source: z.string(),
+  category: z.string(),
+  /** `required`, `strong` or `description-rated`. */
+  confidence: z.string(),
+  /** False when the site switched the rule off in its profile. */
+  enabled: z.boolean(),
+  findingCount: z.number().int().nonnegative(),
+  /**
+   * The most severe level this rule's findings carried in this compile, or `''`
+   * when it produced none. A measurement of the compile, not of the rule.
+   */
+  severity: z.string(),
+});
+export type WireSsmAuditRule = z.infer<typeof ssmAuditRuleSchema>;
+
+/**
+ * What the SSM Audit gate made of the register this compile built.
+ *
+ * Carried on the compile summary for the same reason `completeness` is: it is
+ * read at exactly the moment the rest of these numbers are, and a screen that
+ * had to ask twice could show an audit of a different compile.
+ *
+ * The four counts are the rulebook's own severities. `blocker` means Exto would
+ * refuse the row — which is why screen 9 draws it as a warning above Save
+ * rather than as a number in a grid.
+ */
+export const ssmAuditSummarySchema = z.object({
+  /** Rows audited: one per EXTO row the export would write. */
+  rowCount: z.number().int().nonnegative(),
+  /** Checks the engine performed. Unchanged by switching a rule off. */
+  checksRun: z.number().int().nonnegative(),
+  findingCount: z.number().int().nonnegative(),
+  blockerCount: z.number().int().nonnegative(),
+  errorCount: z.number().int().nonnegative(),
+  warningCount: z.number().int().nonnegative(),
+  infoCount: z.number().int().nonnegative(),
+  /** Every rule in the rulebook, in id order. Disabled ones included. */
+  rules: z.array(ssmAuditRuleSchema),
+});
+export type WireSsmAuditSummary = z.infer<typeof ssmAuditSummarySchema>;
+
 export const compileSummarySchema = z.object({
   /**
    * The `compiles` row this result was recorded as, or `null`.
@@ -1830,6 +1903,15 @@ export const compileSummarySchema = z.object({
    * had to ask twice could show a completeness report from a different compile.
    */
   completeness: completenessSchema,
+
+  /**
+   * What the SSM Audit gate made of the register (docs/ENGINE.md).
+   *
+   * Every compile carries one, including a compile with no findings: "the rules
+   * ran and found nothing" and "the rules did not run" are different answers,
+   * and only the first has a rule list with every count at zero.
+   */
+  ssmAudit: ssmAuditSummarySchema,
 });
 export type WireCompileSummary = z.infer<typeof compileSummarySchema>;
 
@@ -2052,10 +2134,27 @@ export type WireDecisionValue = z.infer<typeof decisionValueSchema>;
 export const reviewRowSchema = z.object({
   reviewKey: z.string().min(1),
   kind: z.string().min(1),
+  /**
+   * The SSM Audit severity this row carries, or `''` for every other kind.
+   *
+   * Only the audit grades what it finds, so only its rows can be filtered by
+   * how much they claim. The filter reuses the queue's own `kind` filter for
+   * everything else; this is the one sub-filter, and it exists because "34
+   * blockers" and "38 notes" are different questions with different urgency.
+   */
+  severity: z.string().default(''),
   /** `reviewItemSummary`'s own sentence, never reworded here. */
   summary: z.string().min(1),
   /** The tags behind the ids, so the queue reads in site vocabulary. */
   detail: z.string(),
+  /**
+   * What must be true, for a row that comes from a rule. `''` otherwise.
+   *
+   * Only the SSM Audit gate has a rulebook to quote. The sentence is the
+   * rulebook's own and is never reworded on the way through: it is what a
+   * person needs in order to judge whether the finding applies to their site.
+   */
+  statement: z.string().default(''),
   /** `null` until somebody decides. */
   decision: decisionValueSchema.nullable(),
   decidedAt: z.string(),

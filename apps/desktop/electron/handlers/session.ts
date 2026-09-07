@@ -78,6 +78,7 @@ export type SessionChannel = Extract<
   | 'export:exto-template-clear'
   | 'export:exto'
   | 'export:predecessors'
+  | 'export:ssm-audit'
   | 'export:ssm-hierarchy'
   | 'export:revision-diff'
   | 'profile:sections'
@@ -480,7 +481,9 @@ export function createSessionHandlers(
     },
 
     async 'review:page'(request: IpcRequest<'review:page'>): Promise<IpcResponse<'review:page'>> {
-      return guard(() => service.reviewPage(request.kind, request.offset, request.limit));
+      return guard(() =>
+        service.reviewPage(request.kind, request.offset, request.limit, request.severity),
+      );
     },
 
     async 'review:decide'(
@@ -543,6 +546,12 @@ export function createSessionHandlers(
       request: IpcRequest<'export:predecessors'>,
     ): Promise<IpcResponse<'export:predecessors'>> {
       return { result: guard(() => service.exportPredecessors(requireGranted(request.path))) };
+    },
+
+    async 'export:ssm-audit'(
+      request: IpcRequest<'export:ssm-audit'>,
+    ): Promise<IpcResponse<'export:ssm-audit'>> {
+      return { result: guard(() => service.exportSsmAudit(requireGranted(request.path))) };
     },
 
     async 'export:ssm-hierarchy'(

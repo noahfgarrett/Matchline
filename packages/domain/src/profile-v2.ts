@@ -292,6 +292,25 @@ export interface ProfileTestExample {
  * different state from "this site defined zero of them", and an optional array
  * would give two spellings for one fact.
  */
+/**
+ * What a site has said about the SSM Audit gate (docs/ENGINE.md).
+ *
+ * One field, and deliberately only one: the rulebook is vendored from SSM-Audit
+ * and pinned by parity, so a site does not get to reword a rule, re-grade its
+ * severity, or add one. What it does get to say is "we know, and we do not want
+ * to be told again" -- a rule whose findings are true of this site by design
+ * (an electrical practice, a site-specific classification code) and which would
+ * otherwise bury the queue.
+ *
+ * A disabled rule still runs. Its findings are dropped and it is listed as off,
+ * so the rules screen can say what is being hidden and the count of checks
+ * performed stays comparable between compiles.
+ */
+export interface SsmAuditConfig {
+  /** Rule ids, e.g. `metadata.misc-upn-review`. Unknown ids are ignored. */
+  readonly disabledRuleIds: ReadonlyArray<string>;
+}
+
 export interface SiteProfileV2 {
   readonly formatVersion: 2;
   readonly profileId: string;
@@ -338,6 +357,9 @@ export interface SiteProfileV2 {
   /** Parent/child pairs from a previously accepted SSM (§11.1 tier 7). */
   readonly priorSsm: ReadonlyArray<ParentPair>;
 
+  /** Which SSM Audit rules this site has switched off. */
+  readonly ssmAudit: SsmAuditConfig;
+
   /** Stated, carried, not enforced. See {@link AuthorityRule}. */
   readonly authorityRules: ReadonlyArray<AuthorityRule>;
   /** Stated, carried, not executed. See {@link ProfileTestExample}. */
@@ -353,6 +375,7 @@ export interface SiteProfileV2 {
  */
 export interface SiteProfileV2Sections {
   readonly hierarchy?: HierarchyConfigInput;
+  readonly ssmAudit?: SsmAuditConfig;
   readonly roleGraph?: RoleGraphConfig;
   readonly ladder?: ParentLadderConfig;
   readonly ssmDisciplineProjection?: ReadonlyArray<DisciplineRewrite>;
@@ -388,6 +411,9 @@ export function emptyIdentityConfig(): ProfileIdentityConfig {
  *   written is a rung that profile never asked for, and a migration that turned
  *   one on would start seeding a live site's hierarchy from a source nobody
  *   chose.
+ * - `ssmAudit` defaults to **no rule disabled**: a V1 profile predates the gate
+ *   entirely, and a migration that switched a rule off would hide findings
+ *   nobody chose to hide.
  * - every other section defaults to empty or `null`, which is what "the project
  *   never configured this" meant on the compiler input it arrived on.
  *
@@ -420,6 +446,7 @@ export function migrateSiteProfileV1(
     identityConfig: ProfileIdentityConfig;
     profileLookup: ReadonlyArray<ParentPair>;
     priorSsm: ReadonlyArray<ParentPair>;
+    ssmAudit: SsmAuditConfig;
     authorityRules: ReadonlyArray<AuthorityRule>;
     profileTestExamples: ReadonlyArray<ProfileTestExample>;
   } = {
@@ -440,6 +467,9 @@ export function migrateSiteProfileV1(
     identityConfig: sections.identityConfig ?? emptyIdentityConfig(),
     profileLookup: sections.profileLookup ?? [],
     priorSsm: sections.priorSsm ?? [],
+    // Every rule on. A migration that silenced one would hide a finding the
+    // site never asked to hide.
+    ssmAudit: sections.ssmAudit ?? { disabledRuleIds: [] },
     authorityRules: sections.authorityRules ?? [],
     profileTestExamples: sections.profileTestExamples ?? [],
   };

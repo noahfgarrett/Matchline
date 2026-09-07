@@ -132,6 +132,7 @@ Milestone 6.
 | `packages/scheduling` | P6 import, milestone ladders, predecessor matrix. |
 | `packages/mel-export` | Generated MEL, template fill, comparison, revision diff. |
 | `packages/exto-export` | EXTO workbook export. |
+| `packages/ssm-audit` | The SSM Audit gate: SSM-Audit's rulebook, vendored byte-for-byte and pinned by parity, run over the compiled register. |
 | `packages/project-store` | The `.matchline` SQLite project file and its migrations. |
 | `packages/legacy-parity` | The SSManagement 4.2.2 donor, unmodified. Plain JS, its own build and tests. Behavioral reference, not a migration target. |
 | `apps/desktop` | Electron shell, preload façade, React renderer (wizard + workspace). |

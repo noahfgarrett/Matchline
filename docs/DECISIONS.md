@@ -147,6 +147,25 @@ each is proven.
     be unable to corrupt the app or a project on failure; migrations stay opt-in with a
     backup. Neither signing nor the updater is implemented yet — the certificate is still
     an open item below. (Directive "Updater / signing / release"; gates 18–19.)
+16. **The SSM Audit rulebook is vendored from SSM-Audit and pinned by parity, never
+    edited here.** `packages/ssm-audit/vendor/` holds SSM-Audit's own `audit/engine.js`,
+    `audit/model.js`, `exto/rev21-contract.js`, `exto/vf-item-masters.js` and
+    `core/text.js` byte for byte, with their relative imports untouched;
+    `packages/ssm-audit/test/parity.test.mjs` fails on any difference from the SSM-Audit
+    checkout whenever one is present, and SSM-Audit pins the same files against its own
+    integrated source. Two shims complete the module graph and are not rulebook files:
+    `io/workbook.js`, which the model layer imports and the audit path never calls, and
+    `xlsx-global.js`, the one SheetJS utility a browser page would have set on
+    `globalThis`. A rule that needs changing is changed in SSM-Audit and re-vendored —
+    editing one here would leave two apps quietly disagreeing about one SOP, which is the
+    single failure a shared rulebook exists to prevent, and no site is offered a way to
+    reword a rule, re-grade its severity or add one. What a site may say is which rules it
+    does not want to be told about (`SiteProfileV2.ssmAudit.disabledRuleIds`); the check
+    still runs, so the count of checks stays comparable between compiles, and only the
+    findings, the queue rows and the report entries go. The gate runs last in
+    `compileProject`, changes nothing, and reads the register through
+    `@matchline/exto-export`'s own flattening so it audits exactly what the upload sheet
+    would carry. (docs/ENGINE.md "SSM Audit gate".)
 
 ## Open items (not yet decided)
 

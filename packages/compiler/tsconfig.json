@@ -20,6 +20,7 @@
     { "path": "../ssm-compiler" },
     { "path": "../learned-rules" },
     { "path": "../mel-export" },
-    { "path": "../spreadsheet-import" }
+    { "path": "../spreadsheet-import" },
+    { "path": "../ssm-audit" }
   ]
 }

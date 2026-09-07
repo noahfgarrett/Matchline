@@ -1,0 +1,16 @@
+{
+  "//": "vendor/ holds the SSM-Audit rulebook byte-for-byte plus its .d.ts. It is deliberately outside `include`: nothing here compiles it, and `test/parity.test.mjs` is what pins it.",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../exto-export" },
+    { "path": "../identity" },
+    { "path": "../mel-export" },
+    { "path": "../spreadsheet-import" }
+  ]
+}

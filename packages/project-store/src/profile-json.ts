@@ -23,6 +23,7 @@ import {
   type SiteProfileV2,
   type SourceAssignmentScope,
   type SourceAssignmentsInput,
+  type SsmAuditConfig,
   type TagAlias,
   type MappedPropertyField,
   type MappedPropertyInput,
@@ -519,6 +520,28 @@ function readOptionalEach<T>(
   return value === undefined ? [] : readEach(value, field, read);
 }
 
+/**
+ * The SSM Audit section: a list of rule ids, or nothing.
+ *
+ * Ids are not checked against the rulebook. A profile written against a newer
+ * rulebook than this build carries names this build has never heard of, and
+ * refusing to open the project over one would be a worse answer than ignoring
+ * it -- which is what the audit itself does with an id it does not know.
+ */
+function readSsmAuditConfig(value: unknown): SsmAuditConfig {
+  if (value === undefined) {
+    return { disabledRuleIds: [] };
+  }
+  const record = requireRecordAt(value, 'profile.ssmAudit', fail);
+  return {
+    disabledRuleIds: readOptionalEach(
+      record['disabledRuleIds'],
+      'profile.ssmAudit.disabledRuleIds',
+      (item, at) => requireFilledStringAt(item, at, fail),
+    ),
+  };
+}
+
 function readPropertyRefOrNull(value: unknown, field: string): PropertyRef | null {
   return value === undefined || value === null ? null : readPropertyRef(value, field);
 }
@@ -821,6 +844,10 @@ export function validateSiteProfileV2(value: unknown): SiteProfileV2 {
       readParentPair,
     ),
     priorSsm: readOptionalEach(record['priorSsm'], 'profile.priorSsm', readParentPair),
+    // A revision written before the SSM Audit gate existed carries no section,
+    // and an absent one means every rule is on -- which is what a profile that
+    // never mentioned the gate always meant.
+    ssmAudit: readSsmAuditConfig(record['ssmAudit']),
     authorityRules: readOptionalEach(
       record['authorityRules'],
       'profile.authorityRules',

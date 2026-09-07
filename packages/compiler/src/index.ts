@@ -59,6 +59,8 @@ export type { AttributeKey } from './attributes.js';
 
 export { aggregateReviewItems } from './review.js';
 
+export { ssmAuditReviewItems } from './ssm-audit.js';
+
 /**
  * Which asset the model tree publishes each asset inside.
  *

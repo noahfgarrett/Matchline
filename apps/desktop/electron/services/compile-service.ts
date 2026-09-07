@@ -26,6 +26,7 @@ import type {
   WireLedgerEvent,
   WireReparentPreview,
   WireReviewRow,
+  WireSsmAuditRule,
   WireTreeNode,
 } from '../../shared/schemas.js';
 
@@ -299,6 +300,12 @@ function assetIdsOf(item: ReviewItem): readonly string[] {
     // recorded against, or a tag somebody reused?" (P0-9).
     case 'possible-rematch':
       return [item.assetId];
+    // Both ends, when the finding has two: the flagged row is where the fix
+    // goes, and the parent or dependency it names is where a reviewer looks to
+    // decide whether it is the finding or the relationship that is wrong. An
+    // aggregate note carries neither -- it is about a rule, not a row.
+    case 'ssm-audit':
+      return [item.assetId, item.relatedAssetId].filter((assetId) => assetId !== '');
     // A counted item is about a level, a rung or a resolver chain rather than
     // about one asset. Its examples name assets, but flagging ten tree rows out
     // of forty thousand would be arbitrary -- the row to work is the item.
@@ -624,11 +631,16 @@ export function createCompileView(
   const reviewRows: WireReviewRow[] = project.reviewItems.map((item): WireReviewRow => ({
     reviewKey: storableReviewKey(item),
     kind: item.kind,
+    // Only the SSM Audit grades what it found. Every other kind is a decision
+    // the fold refused to make, which has no severity to report.
+    severity: item.kind === 'ssm-audit' ? item.severity : '',
     summary: reviewItemSummary(item),
     detail: assetIdsOf(item)
       .map(tagOf)
       .filter((tag) => tag !== '')
       .join(', '),
+    // The rulebook's own sentence, carried through untouched.
+    statement: item.kind === 'ssm-audit' ? item.statement : '',
     decision: null,
     decidedAt: '',
     note: '',
@@ -824,6 +836,7 @@ export function createCompileView(
     summary(base: CompileSummaryBase): WireCompileSummary {
       const stats = project.stats;
       const completeness = project.completeness;
+      const audit = project.ssmAudit;
       return {
         compileId: base.compileId,
         profileRevision: base.profileRevision,
@@ -878,6 +891,30 @@ export function createCompileView(
             (group) => ({ skipReasons: [...group.skipReasons], assetCount: group.assetCount }),
           ),
           melRowsDropped: completeness.melRowsDropped,
+        },
+
+        // Read straight off the gate's own report for the same reason: the
+        // counts a screen prints and the counts the rulebook produced cannot
+        // drift apart if only one of them exists.
+        ssmAudit: {
+          rowCount: audit.rowCount,
+          checksRun: audit.checksRun,
+          findingCount: audit.findings.length,
+          blockerCount: audit.bySeverity.blocker,
+          errorCount: audit.bySeverity.error,
+          warningCount: audit.bySeverity.warning,
+          infoCount: audit.bySeverity.info,
+          rules: audit.rulesEnabled.map((rule): WireSsmAuditRule => ({
+            ruleId: rule.ruleId,
+            title: rule.title,
+            statement: rule.statement,
+            source: rule.source,
+            category: rule.category,
+            confidence: rule.confidence,
+            enabled: rule.enabled,
+            findingCount: rule.findingCount,
+            severity: rule.severity ?? '',
+          })),
         },
       };
     },
@@ -1249,11 +1286,16 @@ export function createRestoredCompileView(input: RestoredCompileInput): CompileV
   const reviewRows: WireReviewRow[] = input.snapshot.reviewItems.map((item): WireReviewRow => ({
     reviewKey: storableReviewKey(item),
     kind: item.kind,
+    // A restored compile carries the snapshot's own items, which the fold
+    // raised; the audit is not one of them, so there is no severity to report.
+    severity: item.kind === 'ssm-audit' ? item.severity : '',
     summary: reviewItemSummary(item),
     detail: assetIdsOf(item)
       .map(tagOf)
       .filter((tag) => tag !== '')
       .join(', '),
+    // The rulebook's own sentence, carried through untouched.
+    statement: item.kind === 'ssm-audit' ? item.statement : '',
     decision: null,
     decidedAt: '',
     note: '',

@@ -21,6 +21,7 @@ import type {
   SiteProfileV2,
   SourceAssignmentRuleInput,
   SourceAssignmentsInput,
+  SsmAuditConfig,
   SystemComponentConfig,
   SystemResolverConfig,
   TagAnatomyConfig,
@@ -187,6 +188,9 @@ export function emptyDraft(name: string): WireDraftProfile {
     },
     profileLookup: [],
     priorSsm: [],
+    // Every SSM Audit rule on. A rule a site wants silenced is a decision that
+    // site makes on screen 8, having seen what the rule actually says.
+    ssmAudit: { disabledRuleIds: [] },
     authorityRules: [],
     profileTestExamples: [],
   };
@@ -287,6 +291,7 @@ export function applyPatch(draft: WireDraftProfile, patch: WireDraftPatch): Wire
     identityConfig: patch.identityConfig ?? draft.identityConfig,
     profileLookup: patch.profileLookup ?? draft.profileLookup,
     priorSsm: patch.priorSsm ?? draft.priorSsm,
+    ssmAudit: patch.ssmAudit ?? draft.ssmAudit,
     authorityRules: patch.authorityRules ?? draft.authorityRules,
     profileTestExamples: patch.profileTestExamples ?? draft.profileTestExamples,
   };
@@ -687,6 +692,7 @@ export function toSiteProfile(draft: WireDraftProfile): SiteProfileV2 {
     identityConfig: ProfileIdentityConfig;
     profileLookup: ReadonlyArray<ParentPair>;
     priorSsm: ReadonlyArray<ParentPair>;
+    ssmAudit: SsmAuditConfig;
     authorityRules: ReadonlyArray<AuthorityRule>;
     profileTestExamples: ReadonlyArray<ProfileTestExample>;
   } = {
@@ -707,6 +713,7 @@ export function toSiteProfile(draft: WireDraftProfile): SiteProfileV2 {
     identityConfig: toIdentityConfig(draft.identityConfig),
     profileLookup: toParentPairs(draft.profileLookup),
     priorSsm: toParentPairs(draft.priorSsm),
+    ssmAudit: { disabledRuleIds: [...draft.ssmAudit.disabledRuleIds] },
     authorityRules: toAuthorityRules(draft),
     profileTestExamples: toTestExamples(draft),
   };
@@ -843,6 +850,9 @@ export function fromSiteProfile(profile: SiteProfileV2): WireDraftProfile {
     },
     profileLookup: profile.profileLookup.map((pair) => ({ ...pair })),
     priorSsm: profile.priorSsm.map((pair) => ({ ...pair })),
+    // A V1 revision predates the gate and carries no list; the migration
+    // supplies an empty one, so a reopened wizard shows every rule switched on.
+    ssmAudit: { disabledRuleIds: [...profile.ssmAudit.disabledRuleIds] },
     authorityRules: profile.authorityRules.map((rule) => ({
       field: rule.field,
       authority: rule.authority,

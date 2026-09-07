@@ -163,6 +163,7 @@ import {
   exportGeneratedMel,
   exportPredecessors,
   exportRevisionDiff,
+  exportSsmAudit,
   exportSsmHierarchy,
   exportTemplateMel,
   readExtoTemplate,
@@ -477,7 +478,8 @@ export interface ProjectService {
   flowRoots(offset: number, limit: number): Page<WireFlowRoot>;
   flowWalk(rootNodeId: string, offset: number, limit: number): Page<WireFlowNode>;
 
-  reviewPage(kind: string, offset: number, limit: number): WireReviewPage;
+  /** `severity` narrows an SSM Audit queue; every other kind carries `''`. */
+  reviewPage(kind: string, offset: number, limit: number, severity?: string): WireReviewPage;
   recordDecision(reviewKey: string, decision: WireDecisionValue, note: string): boolean;
   /** Forgets a decision the latest compile has no item for. See `removeDecision`. */
   deleteDecision(reviewKey: string): boolean;
@@ -497,6 +499,8 @@ export interface ProjectService {
   clearExtoTemplate(): WireProjectConfig;
   exportExto(filePath: string): WireExportResult;
   exportPredecessors(filePath: string): WireExportResult;
+  /** The SSM Audit findings, on SSM-Audit's own two sheets. */
+  exportSsmAudit(filePath: string): WireExportResult;
   /** The SSM hierarchy widened onto one sheet, a column per level (B5). */
   exportSsmHierarchy(filePath: string): WireExportResult;
   exportRevisionDiff(filePath: string, previousCompileId: number): WireExportResult;
@@ -4127,7 +4131,7 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       return requireView(requireSession()).flowWalk(rootNodeId, offset, limit);
     },
 
-    reviewPage(kind: string, offset: number, limit: number): WireReviewPage {
+    reviewPage(kind: string, offset: number, limit: number, severity = ''): WireReviewPage {
       const active = requireSession();
       const view = requireView(active);
       const decided = decisionsByKey(active);
@@ -4149,7 +4153,13 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         counts.set(row.kind, (counts.get(row.kind) ?? 0) + 1);
       }
 
-      const filtered = kind === '' ? all : all.filter((row) => row.kind === kind);
+      // Two filters, and the severity one narrows within the kind rather than
+      // beside it: only the SSM Audit grades its rows, so asking for a severity
+      // is already asking for that kind.
+      const filtered = all.filter(
+        (row) =>
+          (kind === '' || row.kind === kind) && (severity === '' || row.severity === severity),
+      );
       return {
         total: filtered.length,
         rows: filtered.slice(offset, offset + limit),
@@ -4245,6 +4255,13 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     exportPredecessors(filePath: string): WireExportResult {
       return exportPredecessors(
         requireCompiledProject(requireSession(), 'the predecessor matrix'),
+        filePath,
+      );
+    },
+
+    exportSsmAudit(filePath: string): WireExportResult {
+      return exportSsmAudit(
+        requireCompiledProject(requireSession(), 'the SSM Audit findings'),
         filePath,
       );
     },

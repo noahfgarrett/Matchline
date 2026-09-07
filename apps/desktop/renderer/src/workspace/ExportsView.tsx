@@ -231,6 +231,38 @@ export function ExportsView({
       </Panel>
 
       <Panel
+        title="SSM Audit findings"
+        description="What the SSM Audit rulebook makes of the register this compile produced — the same rules SSM-Audit applies to a finished Cx Registry, on the same two sheets."
+        actions={
+          <button
+            className="button button--small"
+            type="button"
+            data-testid="export-ssm-audit"
+            disabled={busy !== null}
+            onClick={(): void => {
+              void runExport('ssm-audit', 'SSM-Audit', async (path) =>
+                call(window.matchline.export.ssmAudit({ path })),
+              );
+            }}
+          >
+            Export
+          </button>
+        }
+      >
+        <p className="muted">
+          All Findings carries one row per finding with the rulebook's own words — what it saw,
+          what it expected, what to do — graded INVALID, RULE BROKEN, CHECK THIS or NOTE. Rules
+          carries every rule that is switched on, the plain sentence saying what must be true, and
+          how many times it fired.
+        </p>
+        <p className="muted">
+          Nothing here is recomputed for the file: these are the findings on screen 8 and in the
+          review queue, so the workbook and the app can never describe different registers. A rule
+          switched off on screen 8 is absent from both sheets.
+        </p>
+      </Panel>
+
+      <Panel
         title="SSM hierarchy"
         description="The tree itself rather than a flat list: one column per configured level, in stack order, so the shape the compile settled on is readable across the page."
         actions={

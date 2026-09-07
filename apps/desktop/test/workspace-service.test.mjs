@@ -1838,6 +1838,148 @@ test('the SSM hierarchy export writes a column per configured level', async (t) 
   ]);
 });
 
+/* ================================================= the SSM Audit gate ======= */
+
+/**
+ * The gate runs inside the compile, and everything the app shows comes off it.
+ *
+ * The Dragon fixture's system keys are `001`, `002` and `603`, and only `603`
+ * is a UPN the VF Exto Upload Template carries — so the audit is right that
+ * Exto would refuse most of these rows, and the number is asserted rather than
+ * silenced.
+ */
+test('the SSM Audit summary, its export, and switching a rule off', async (t) => {
+  const path = join(workDir, 'Audit.matchline');
+  rmSync(path, { force: true });
+  const service = newService();
+  t.after(() => {
+    service.close();
+  });
+
+  service.create(path, 'Audit');
+  await service.addSources([cachePath, melPath, easyPowerPath]);
+  service.updateDraft({
+    propertyMappings: PROPERTY_MAPPINGS,
+    assetFilters: ASSET_FILTERS,
+    tagAnatomy: DRAGON_ANATOMY,
+    systemResolver: DRAGON_RESOLVER,
+  });
+  service.saveProfile('before the audit');
+  const status = await service.compile();
+  assert.equal(status.state, 'done', status.state === 'failed' ? status.reason : '');
+
+  const audit = status.summary.ssmAudit;
+  assert.equal(audit.rowCount, DRAGON_ASSET_COUNT);
+  assert.equal(audit.blockerCount > 0, true, 'the fixture’s UPNs are not on the approved list');
+  assert.equal(
+    audit.blockerCount + audit.errorCount + audit.warningCount + audit.infoCount,
+    audit.findingCount,
+  );
+  assert.equal(audit.rules.length > 40, true, 'every rule is listed, fired or not');
+  const notApproved = audit.rules.find((rule) => rule.ruleId === 'metadata.upn-not-approved');
+  assert.equal(notApproved.enabled, true);
+  assert.equal(notApproved.severity, 'blocker');
+  assert.equal(notApproved.statement.length > 0, true, 'the rulebook’s own sentence is carried');
+
+  /* ---- the queue: blockers per row, notes counted once per rule ---- */
+
+  const blockers = service.reviewPage('ssm-audit', 0, 500, 'blocker');
+  assert.equal(blockers.total, audit.blockerCount);
+  assert.equal(blockers.rows.every((row) => row.severity === 'blocker'), true);
+  assert.equal(blockers.rows[0].statement.length > 0, true, 'the drawer has a rule to show');
+  const notes = service.reviewPage('ssm-audit', 0, 500, 'info');
+  assert.equal(
+    notes.total < audit.infoCount,
+    true,
+    'notes are one row per rule, not one per finding',
+  );
+  // Every other kind carries no severity, so a severity filter cannot pick one up.
+  assert.equal(service.reviewPage('', 0, 500, 'blocker').total, audit.blockerCount);
+
+  /* ---- the export: SSM-Audit's own two sheets ---- */
+
+  const out = join(workDir, 'Dragon-SSM-Audit.xlsx');
+  const result = service.exportSsmAudit(out);
+  assert.equal(result.written, true);
+  assert.match(result.note, /Exto would refuse/);
+  assert.match(result.note, /Every rule is switched on/);
+
+  const workbook = readWorkbook(readFileSync(out));
+  assert.deepEqual(workbook.sheetNames, ['All Findings', 'Rules']);
+  const findings = sheetAoa(workbook.getSheet('All Findings')).aoa;
+  assert.deepEqual(findings[0], [
+    'Severity',
+    'Milestone',
+    'Equipment ID',
+    'Description',
+    'Rule',
+    'Why',
+    'What to do',
+    'Field',
+    'Found',
+    'Expected',
+    'Sheet',
+    'Row',
+  ]);
+  assert.equal(findings.length - 1, audit.findingCount, 'one row per finding');
+  assert.equal(
+    findings.slice(1).some((row) => row[0] === 'INVALID'),
+    true,
+    'SSM-Audit’s own severity words',
+  );
+  const rules = sheetAoa(workbook.getSheet('Rules')).aoa;
+  assert.deepEqual(rules[0], ['Rule', 'What must be true', 'Source', 'Confidence', 'Findings count']);
+
+  // Byte-stable: the same compile exports the same file.
+  const again = join(workDir, 'Dragon-SSM-Audit-2.xlsx');
+  service.exportSsmAudit(again);
+  assert.deepEqual(readFileSync(again), readFileSync(out));
+
+  /* ---- switching a rule off: persisted in the profile, honoured next compile ---- */
+
+  service.updateDraft({ ssmAudit: { disabledRuleIds: ['metadata.upn-not-approved'] } });
+  assert.deepEqual(service.draftState().draft.ssmAudit.disabledRuleIds, [
+    'metadata.upn-not-approved',
+  ]);
+  assert.equal(service.saveProfile('quieten the UPN rule').revision > 0, true);
+
+  const after = await service.compile();
+  assert.equal(after.state, 'done', after.state === 'failed' ? after.reason : '');
+  const quieter = after.summary.ssmAudit;
+  assert.equal(quieter.blockerCount < audit.blockerCount, true);
+  assert.equal(
+    quieter.rules.find((rule) => rule.ruleId === 'metadata.upn-not-approved').enabled,
+    false,
+  );
+  // The check still ran; what the site switched off is the finding.
+  assert.equal(quieter.checksRun, audit.checksRun);
+  assert.equal(service.reviewPage('ssm-audit', 0, 500, 'blocker').total, quieter.blockerCount);
+
+  const quietPath = join(workDir, 'Dragon-SSM-Audit-off.xlsx');
+  const quietResult = service.exportSsmAudit(quietPath);
+  assert.match(quietResult.note, /1 rule is switched off/);
+  const quietRules = sheetAoa(
+    readWorkbook(readFileSync(quietPath)).getSheet('Rules'),
+  ).aoa;
+  assert.equal(
+    quietRules.some((row) => row[0] === 'UPN is not on the approved list'),
+    false,
+    'a rule a site switched off is absent from the report, not printed with a zero',
+  );
+
+  // Reopening the project brings the decision back: it is in the profile, not
+  // in the session.
+  service.close();
+  const reopened = newService();
+  t.after(() => {
+    reopened.close();
+  });
+  await reopened.open(path);
+  assert.deepEqual(reopened.draftState().draft.ssmAudit.disabledRuleIds, [
+    'metadata.upn-not-approved',
+  ]);
+});
+
 /* ========================= a boundary nothing states, and a failed recompile */
 
 /**

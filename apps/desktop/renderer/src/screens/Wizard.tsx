@@ -99,6 +99,17 @@ export interface WizardContext {
  */
 type SetupPath = 'choose' | 'quick' | 'advanced';
 
+/**
+ * A review queue to open, as one screen asks another for it.
+ *
+ * `kind` is the queue's own filter; `severity` is the SSM Audit sub-filter and
+ * is `''` for every other kind, which has none.
+ */
+export interface ReviewRequest {
+  readonly kind: string;
+  readonly severity: string;
+}
+
 export function Wizard({
   project,
   justCreated,
@@ -114,6 +125,17 @@ export function Wizard({
     justCreated && project.savedRevision === null ? 'choose' : 'advanced',
   );
   const [inWorkspace, setInWorkspace] = useState<boolean>(false);
+  /**
+   * A review queue the workspace should open on, or `null`.
+   *
+   * Screen 8's SSM Audit card counts findings by severity, and the thing a
+   * person wants after reading "34 Exto would refuse" is those 34 rows. The
+   * queue lives in the workspace, so the request is held here — the one place
+   * that knows about both — and cleared once the workspace has taken it, so
+   * coming back to the Review tab later does not silently re-apply an old
+   * filter.
+   */
+  const [reviewRequest, setReviewRequest] = useState<ReviewRequest | null>(null);
   const [draft, setDraft] = useState<WireDraftProfile | null>(null);
   const [config, setConfig] = useState<WireProjectConfig | null>(null);
   const [savedRevision, setSavedRevision] = useState<number | null>(project.savedRevision);
@@ -460,6 +482,10 @@ export function Wizard({
             projectName={project.name}
             status={compileStatus}
             onStatusChange={setCompileStatus}
+            openReview={reviewRequest}
+            onReviewOpened={(): void => {
+              setReviewRequest(null);
+            }}
           />
         ) : setupPath === 'choose' ? (
           <SetupFork
@@ -491,6 +517,10 @@ export function Wizard({
             onSourcesChanged={refreshSourcesAndModel}
             onSave={saveProfile}
             onImported={reloadFromMain}
+            onOpenReview={(request): void => {
+              setReviewRequest(request);
+              setInWorkspace(true);
+            }}
             onCompiled={(): void => {
               void call(window.matchline.compile.status()).then(
                 (data): void => {
@@ -595,6 +625,7 @@ function ScreenBody({
   onSave,
   onImported,
   onCompiled,
+  onOpenReview,
 }: {
   readonly screen: number;
   readonly context: WizardContext;
@@ -603,6 +634,7 @@ function ScreenBody({
   readonly onSave: (note: string) => Promise<number | null>;
   readonly onImported: () => Promise<void>;
   readonly onCompiled: () => void;
+  readonly onOpenReview: (request: ReviewRequest) => void;
 }): JSX.Element {
   switch (screen) {
     case 1:
@@ -620,7 +652,9 @@ function ScreenBody({
     case 7:
       return <Screen7Relationships context={context} />;
     case 8:
-      return <Screen8Preview context={context} onCompiled={onCompiled} />;
+      return (
+        <Screen8Preview context={context} onCompiled={onCompiled} onOpenReview={onOpenReview} />
+      );
     case 9:
       return (
         <Screen9Publish

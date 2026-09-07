@@ -375,6 +375,83 @@ export interface PossibleRematchReviewItem {
   readonly sourceIds: ReadonlyArray<string>;
 }
 
+
+/**
+ * How much an SSM Audit finding is claiming.
+ *
+ * The four levels are the rulebook's own, and they are not renamed here: a
+ * finding printed in Matchline and the same finding printed in SSM-Audit have
+ * to be the same statement about the same row, or the two apps are quietly
+ * disagreeing about one SOP.
+ *
+ * - `blocker` — Exto would refuse the row.
+ * - `error` — a rule of the SSM SOP is broken.
+ * - `warning` — worth a second look, and often deliberate.
+ * - `info` — a note. Counted, never repeated per asset (see the aggregate rule
+ *   on {@link SsmAuditReviewItem}).
+ */
+export type SsmAuditSeverity = 'blocker' | 'error' | 'warning' | 'info';
+
+/**
+ * The SSM Audit rulebook found something in the register this compile built.
+ *
+ * The audit is a gate over the finished EXTO rows, not a stage of the fold
+ * (docs/ENGINE.md, "SSM Audit gate"): it reads what the upload sheet would
+ * carry and says whether Exto and the SSM SOP would accept it. Everything on
+ * this item is the rulebook's own wording, carried verbatim -- `why` is what it
+ * saw, `expected` is what it wanted, `recommendation` is what it would do --
+ * because the sentences are written for an engineer reading the report cold and
+ * a second voice on the same finding helps nobody.
+ *
+ * ## One item per asset, except for notes
+ *
+ * A `blocker`, an `error` and a `warning` are each about one row and stay that
+ * way: they name equipment somebody has to go and look at. An `info` is a note
+ * about a practice -- "this Item Master is a site-prefixed legacy name", "this
+ * row is on UPN MISC" -- and a register that has twenty thousand of them has
+ * one thing to decide, not twenty thousand. So notes aggregate: one item per
+ * rule, carrying {@link findingCount} and up to ten {@link exampleTags}. This
+ * is the same rule the B-series aggregate items follow, for the same reason --
+ * a queue nobody can work is the same as no queue at all.
+ *
+ * An aggregate carries no {@link assetId} and no {@link equipmentTag}: there is
+ * no single asset it is about, and naming one of the twenty thousand would be
+ * arbitrary.
+ */
+export interface SsmAuditReviewItem {
+  readonly kind: 'ssm-audit';
+  /** The rulebook's stable rule id, e.g. `parent.cross-upn`. */
+  readonly ruleId: string;
+  readonly severity: SsmAuditSeverity;
+  /** The rule's short name, as the rulebook titles it. */
+  readonly title: string;
+  /** What must be true, in the rulebook's words. Shown beside the finding. */
+  readonly statement: string;
+  /** What was seen. Empty on an aggregate, whose rows each saw something else. */
+  readonly why: string;
+  readonly expected: string;
+  readonly recommendation: string;
+  /** The Rev21 column the finding is about. `''` on an aggregate. */
+  readonly field: string;
+  /** The value the row carried. `''` on an aggregate. */
+  readonly actual: string;
+  /**
+   * The asset the finding is about. `''` on an aggregate, and `''` when the tag
+   * names no asset or names more than one -- a duplicated tag is exactly what
+   * one of these rules reports, and picking one of the two would file the
+   * finding against equipment nobody chose.
+   */
+  readonly assetId: string;
+  /** The Equipment ID as the row carried it. `''` on an aggregate. */
+  readonly equipmentTag: string;
+  /** The other end of a relationship finding, or `''`. */
+  readonly relatedAssetId: string;
+  /** Findings behind an aggregate. `0` on a per-asset item. */
+  readonly findingCount: number;
+  /** Up to ten tags an aggregate covers, in the order the audit reported them. */
+  readonly exampleTags: ReadonlyArray<string>;
+}
+
 export type ReviewItem =
   | SystemConflictReviewItem
   | DuplicateModelTagReviewItem
@@ -393,7 +470,8 @@ export type ReviewItem =
   | UnresolvableAliasReviewItem
   | AbsorbedTaggedComponentReviewItem
   | OrphanedDecisionReviewItem
-  | PossibleRematchReviewItem;
+  | PossibleRematchReviewItem
+  | SsmAuditReviewItem;
 
 /**
  * A one-line description of what needs deciding.
@@ -458,6 +536,13 @@ export function reviewItemSummary(item: ReviewItem): string {
         `asset ${item.assetId} (${item.canonicalTag}) kept its id on the tag alone ` +
         `(${item.reason})`
       );
+    case 'ssm-audit':
+      // An aggregate says how much of the register it covers; a per-asset item
+      // names the equipment and repeats what the rulebook saw, because that
+      // sentence is the whole of what a person is being asked to judge.
+      return item.findingCount > 0
+        ? `${String(item.findingCount)} rows: ${item.title} (${item.severity})`
+        : `${item.equipmentTag}: ${item.title} — ${item.why}`;
     case 'orphaned-decision': {
       // The other end is named only when the decision has one, so a make-root
       // or a system assignment does not read as a decision about nothing.

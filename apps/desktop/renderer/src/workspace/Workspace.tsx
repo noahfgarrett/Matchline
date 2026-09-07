@@ -4,6 +4,8 @@ import type { WireCompileStatus, WireCompileSummary } from '../../../shared/sche
 import { call, count, messageOf } from '../api';
 import { Callout } from '../components/Panel';
 
+import type { ReviewRequest } from '../screens/Wizard';
+
 import { ExportsView } from './ExportsView';
 import { FlowView } from './FlowView';
 import { ReviewView } from './ReviewView';
@@ -60,12 +62,23 @@ export function Workspace({
   projectName,
   status,
   onStatusChange,
+  openReview,
+  onReviewOpened,
 }: {
   readonly projectName: string;
   readonly status: WireCompileStatus;
   readonly onStatusChange: (status: WireCompileStatus) => void;
+  /**
+   * A queue to open on, or `null` for the ordinary "SSM Hierarchy first".
+   *
+   * Screen 8's SSM Audit card sends one: a person who has just read "34 Exto
+   * would refuse" wants those 34 rows, not the tab they happened to leave open.
+   */
+  readonly openReview?: ReviewRequest | null | undefined;
+  /** Told once the request has been taken, so it is not applied twice. */
+  readonly onReviewOpened?: (() => void) | undefined;
 }): JSX.Element {
-  const [tab, setTab] = useState<Tab>('ssm');
+  const [tab, setTab] = useState<Tab>(openReview == null ? 'ssm' : 'review');
   const [recompiling, setRecompiling] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   /**
@@ -191,6 +204,8 @@ export function Workspace({
           restored={restored}
           onRecompile={recompile}
           recompiling={recompiling}
+          openFilter={openReview ?? null}
+          onFilterApplied={onReviewOpened}
         />
       ) : null}
       {tab === 'exports' ? (

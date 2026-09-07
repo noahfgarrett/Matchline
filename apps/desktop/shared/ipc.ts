@@ -249,6 +249,9 @@ const EXAMPLE_DRAFT = {
   },
   profileLookup: [],
   priorSsm: [],
+  // No SSM Audit rule switched off: the state a site starts in, and the one it
+  // stays in unless somebody reads a rule and decides it does not apply here.
+  ssmAudit: { disabledRuleIds: [] },
   authorityRules: [],
   profileTestExamples: [],
 } as const;
@@ -325,6 +328,47 @@ const EXAMPLE_COMPILE_SUMMARY = {
     demotionsPerLevel: [{ levelId: 'system', ladderSource: 'flow-family', count: 1 }],
     unresolvedSystemBySkipReason: [],
     melRowsDropped: 0,
+  },
+  /**
+   * What the SSM Audit gate made of the register.
+   *
+   * Two rules of the fifty-odd, so the example stays readable; a real summary
+   * carries every rule in the rulebook, fired or not.
+   */
+  ssmAudit: {
+    rowCount: 34,
+    checksRun: 129,
+    findingCount: 2,
+    blockerCount: 1,
+    errorCount: 1,
+    warningCount: 0,
+    infoCount: 0,
+    rules: [
+      {
+        ruleId: 'metadata.upn-not-approved',
+        title: 'UPN is not on the approved list',
+        statement:
+          'The UPN must be one of the values in the VF Exto Upload Template. Three-digit numbers are the norm; RR, SEC, and MISC are the approved letter codes.',
+        source: 'registry',
+        category: 'metadata',
+        confidence: 'required',
+        enabled: true,
+        findingCount: 1,
+        severity: 'blocker',
+      },
+      {
+        ruleId: 'parent.cross-upn',
+        title: 'Parent is in a different UPN',
+        statement:
+          'A structural child stays inside its parent’s UPN. Anything that crosses UPNs is a dependency of the downstream equipment, not its parent.',
+        source: 'sop',
+        category: 'structure',
+        confidence: 'required',
+        enabled: true,
+        findingCount: 1,
+        severity: 'error',
+      },
+    ],
   },
 } as const;
 
@@ -1530,12 +1574,21 @@ export const IPC_CHANNELS = {
   'review:page': {
     request: z.object({
       kind: z.string(),
+      /**
+       * The SSM Audit sub-filter: one of its four severities, or `''` for all.
+       *
+       * The only sub-filter the queue has, because the audit is the only kind
+       * that grades what it found. A row of any other kind carries `''` and is
+       * therefore excluded whenever a severity is asked for, which is right:
+       * "show me the blockers" is a question only the audit can answer.
+       */
+      severity: z.string().default(''),
       offset: z.number().int().nonnegative(),
       limit: z.number().int().positive().max(500),
     }),
     response: reviewPageSchema,
     example: {
-      request: { kind: '', offset: 0, limit: 50 },
+      request: { kind: '', severity: '', offset: 0, limit: 50 },
       response: { total: 0, rows: [], kinds: [], undecidedCount: 0, staleDecisions: [] },
     },
   },
@@ -1702,6 +1755,31 @@ export const IPC_CHANNELS = {
           path: '/Users/dragon/Dragon-EXTO.xlsx',
           byteSize: 12288,
           note: '34 rows on the Rev21 upload sheet. No P6 schedule, so the milestone column is blank.',
+        },
+      },
+    },
+  },
+
+
+  /**
+   * The SSM Audit findings, on SSM-Audit's own two sheets.
+   *
+   * The gate runs inside every compile; this is the report a person hands to
+   * whoever has to fix the register. All Findings carries one row per finding
+   * with the rulebook's own words; Rules carries every rule that is switched
+   * on, its plain statement, and how many times it fired.
+   */
+  'export:ssm-audit': {
+    request: z.object({ path: z.string().min(1) }),
+    response: z.object({ result: exportResultSchema }),
+    example: {
+      request: { path: '/Users/dragon/Dragon-SSM-Audit.xlsx' },
+      response: {
+        result: {
+          written: true,
+          path: '/Users/dragon/Dragon-SSM-Audit.xlsx',
+          byteSize: 10240,
+          note: '72 findings over 34 rows: 34 Exto would refuse, 0 broken SOP rules, 0 to check, 38 notes.',
         },
       },
     },

@@ -3,6 +3,7 @@ import {
   type AttributeClaim,
   type DuplicateModelTagReviewItem,
   type ReviewItem,
+  type SsmAuditReviewItem,
 } from '@matchline/domain';
 
 /**
@@ -171,7 +172,56 @@ export const DRAGON_REVIEW_ITEMS = [
     previousSourceIds: ['model:dragon-mechanical.nwc'],
     sourceIds: ['model:dragon-mechanical.nwc'],
   },
+  {
+    // The SSM Audit gate: the register this compile built has a child nested
+    // under a parent in another UPN, which is the SOP rule the rulebook states
+    // as `parent.cross-upn`. Per-asset, because a person has to go and look at
+    // this one row.
+    kind: 'ssm-audit',
+    ruleId: 'parent.cross-upn',
+    severity: 'error',
+    title: 'Parent is in a different UPN',
+    statement:
+      'A structural child stays inside its parent’s UPN. Anything that crosses UPNs is a dependency of the downstream equipment, not its parent.',
+    why: 'This row is on UPN 118 but its parent is on UPN 602. A parent must be in the same UPN.',
+    expected: 'A parent in UPN 118',
+    recommendation: 'Keep MV-SWGR-01 as a dependency and pick a parent inside UPN 118.',
+    field: 'Closest Parent',
+    actual: 'HW-PUMP-01 (118) → MV-SWGR-01 (602)',
+    assetId: 'asset-0009',
+    equipmentTag: 'HW-PUMP-01',
+    relatedAssetId: 'asset-0004',
+    findingCount: 0,
+    exampleTags: [],
+  },
 ] as const satisfies ReadonlyArray<ReviewItem>;
+
+/**
+ * The other shape the one SSM Audit kind takes: a note, counted.
+ *
+ * Kept out of `DRAGON_REVIEW_ITEMS` for the same reason the cross-source
+ * duplicate is -- that array holds one item per kind, and this is the aggregate
+ * form of a kind already in it.
+ */
+export const SSM_AUDIT_AGGREGATE: SsmAuditReviewItem = {
+  kind: 'ssm-audit',
+  ruleId: 'metadata.misc-upn-review',
+  severity: 'info',
+  title: 'UPN MISC needs a second look',
+  statement:
+    'UPN MISC is a catch-all for equipment that has no proper system. Every row on MISC deserves a double-check — often an approved UPN fits after all.',
+  why: '',
+  expected: 'An approved UPN whenever one fits',
+  recommendation:
+    'Double-check the assignment. If an approved UPN covers this equipment, move the row to it; keep MISC only when nothing fits.',
+  field: '',
+  actual: '',
+  assetId: '',
+  equipmentTag: '',
+  relatedAssetId: '',
+  findingCount: 312,
+  exampleTags: ['MAH001-10-01', 'MAH009-10-01'],
+};
 
 /**
  * The same tag registered by two sources (P0-1).

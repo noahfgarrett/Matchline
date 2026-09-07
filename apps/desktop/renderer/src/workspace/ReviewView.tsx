@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type JSX } from 'react';
+import { Fragment, useCallback, useEffect, useState, type JSX } from 'react';
 
 import type {
   WireDecisionValue,
@@ -60,7 +60,34 @@ const KIND_LABELS: Readonly<Record<string, string>> = {
   'missing-boundary-level': 'A level placed nothing',
   'unresolved-system': 'No system could be found',
   'boundary-demotion': 'A boundary took parents away',
+  // The SSM Audit gate: not something the fold refused to decide, but something
+  // the rulebook says about the register the fold produced.
+  'ssm-audit': 'The SSM Audit found something',
 };
+
+/** The badge each severity wears in the queue. */
+const SEVERITY_LABELS: Readonly<Record<string, string>> = {
+  blocker: 'Exto would refuse',
+  error: 'Rule broken',
+  warning: 'Check this',
+  info: 'Note',
+};
+
+/** One line per severity, for the badge's tooltip and the filter chips. */
+const SEVERITY_HINTS: Readonly<Record<string, string>> = {
+  blocker: 'Exto itself would reject this row on upload.',
+  error: 'The SSM SOP says otherwise.',
+  warning: 'Often deliberate — confirm that it is.',
+  info: 'A note about a practice, counted once per rule.',
+};
+
+/** The four SSM Audit severities, in the order the rulebook grades them. */
+const SEVERITIES: ReadonlyArray<readonly [string, string, string]> = [
+  ['blocker', 'Exto would refuse', 'A row Exto itself would reject on upload'],
+  ['error', 'A rule is broken', 'The SSM SOP says otherwise'],
+  ['warning', 'Worth a look', 'Often deliberate; confirm it is'],
+  ['info', 'Notes', 'Counted once per rule, not once per row'],
+];
 
 /**
  * What a person is actually being asked, one sentence per kind.
@@ -89,6 +116,8 @@ const KIND_DESCRIPTIONS: Readonly<Record<string, string>> = {
     'Somebody set this parent by hand and an enabled boundary refused it — what needs deciding is which of the two is wrong.',
   'missing-boundary':
     'This asset states no value for a boundary level, so the level could not decide whether it nests or not.',
+  'ssm-audit':
+    'The SSM Audit rulebook read the register this compile built — the same rules SSM-Audit applies to a finished Cx Registry — and these are what it found. A blocker is a row Exto would refuse; a note is counted once per rule rather than once per row.',
 };
 
 const DECISIONS: ReadonlyArray<readonly [WireDecisionValue, string]> = [
@@ -102,6 +131,8 @@ export function ReviewView({
   restored,
   onRecompile,
   recompiling,
+  openFilter,
+  onFilterApplied,
 }: {
   /**
    * Reports how many items are still waiting.
@@ -125,6 +156,14 @@ export function ReviewView({
   readonly restored?: boolean | undefined;
   readonly onRecompile: () => Promise<void>;
   readonly recompiling: boolean;
+  /**
+   * A filter to open on, sent by screen 8's SSM Audit card, or `null`.
+   *
+   * Applied once, on mount. Re-applying it whenever the prop happened to be set
+   * would fight the person the moment they clicked a different chip.
+   */
+  readonly openFilter?: { readonly kind: string; readonly severity: string } | null | undefined;
+  readonly onFilterApplied?: (() => void) | undefined;
 }): JSX.Element {
   const [page, setPage] = useState<WireReviewPage | null>(null);
   /**
@@ -136,16 +175,32 @@ export function ReviewView({
    * on every page or letting the counts drift behind the newest answer.
    */
   const [rows, setRows] = useState<readonly WireReviewRow[]>([]);
-  const [kind, setKind] = useState<string>('');
+  const [kind, setKind] = useState<string>(openFilter?.kind ?? '');
+  /**
+   * The SSM Audit sub-filter: one of the four severities, or `''` for all.
+   *
+   * A severity is not a kind — every audit finding is the same kind — so it
+   * cannot be a chip in the row above. It is the one sub-filter in the queue,
+   * and it exists because "34 Exto would refuse" and "38 notes" are different
+   * questions with different urgency.
+   */
+  const [severity, setSeverity] = useState<string>(openFilter?.severity ?? '');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [staleOpen, setStaleOpen] = useState<boolean>(false);
+  /** Review keys whose full finding is open. Collapsed is the default. */
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
 
   const load = useCallback(
-    async (filter: string, offset: number): Promise<void> => {
+    async (filter: string, offset: number, level: string): Promise<void> => {
       try {
         const data = await call(
-          window.matchline.review.page({ kind: filter, offset, limit: PAGE_SIZE }),
+          window.matchline.review.page({
+            kind: filter,
+            severity: level,
+            offset,
+            limit: PAGE_SIZE,
+          }),
         );
         setPage(data);
         setRows((current) => (offset === 0 ? data.rows : [...current, ...data.rows]));
@@ -161,8 +216,19 @@ export function ReviewView({
   // accumulated rows go before the first page of the new one is asked for.
   useEffect((): void => {
     setRows([]);
-    void load(kind, 0);
-  }, [kind, load]);
+    void load(kind, 0, severity);
+  }, [kind, severity, load]);
+
+  // The request from screen 8 has been honoured by the state above; telling the
+  // wizard so is what stops it being re-applied on the next visit.
+  useEffect((): void => {
+    if (openFilter != null && onFilterApplied !== undefined) {
+      onFilterApplied();
+    }
+    // Deliberately once, on mount: the filter is a starting point, not a
+    // controlled value, and re-running this would undo a person's own click.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const decide = async (reviewKey: string, decision: WireDecisionValue): Promise<void> => {
     setBusy(reviewKey);
@@ -175,7 +241,7 @@ export function ReviewView({
       // describing an order the server no longer has. Re-paging is the honest
       // fix; the cost is that somebody deep in a long queue is sent back to
       // the first page.
-      await load(kind, 0);
+      await load(kind, 0, severity);
     } catch (caught: unknown) {
       setError(messageOf(caught));
     } finally {
@@ -195,7 +261,7 @@ export function ReviewView({
     setError(null);
     try {
       await call(window.matchline.decision.delete({ reviewKey }));
-      await load(kind, 0);
+      await load(kind, 0, severity);
     } catch (caught: unknown) {
       setError(messageOf(caught));
     } finally {
@@ -239,6 +305,7 @@ export function ReviewView({
             className={`chip${kind === '' ? ' chip--active' : ''}`}
             onClick={(): void => {
               setKind('');
+              setSeverity('');
             }}
           >
             <span className="chip__label">Everything</span>
@@ -252,6 +319,7 @@ export function ReviewView({
               data-testid={`review-filter-${entry.kind}`}
               onClick={(): void => {
                 setKind(entry.kind);
+                setSeverity('');
               }}
             >
               <span className="chip__label">{KIND_LABELS[entry.kind] ?? entry.kind}</span>
@@ -265,6 +333,34 @@ export function ReviewView({
             {KIND_DESCRIPTIONS[kind]}
           </p>
         )}
+
+        {kind === 'ssm-audit' ? (
+          <div className="chip-row" data-testid="review-severities">
+            <button
+              type="button"
+              className={`chip${severity === '' ? ' chip--active' : ''}`}
+              onClick={(): void => {
+                setSeverity('');
+              }}
+            >
+              <span className="chip__label">Every severity</span>
+            </button>
+            {SEVERITIES.map(([value, label, hint]): JSX.Element => (
+              <button
+                key={value}
+                type="button"
+                className={`chip${severity === value ? ' chip--active' : ''}`}
+                data-testid={`review-severity-${value}`}
+                title={hint}
+                onClick={(): void => {
+                  setSeverity(value);
+                }}
+              >
+                <span className="chip__label">{label}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         {rows.length === 0 ? (
           restored === true ? (
@@ -292,13 +388,51 @@ export function ReviewView({
               </thead>
               <tbody>
                 {rows.map((row: WireReviewRow): JSX.Element => (
+                  <Fragment key={row.reviewKey}>
                   <tr
-                    key={row.reviewKey}
                     className={row.decision === null ? '' : 'review-row--decided'}
                     data-testid={`review-${row.reviewKey}`}
                   >
-                    <td>{KIND_LABELS[row.kind] ?? row.kind}</td>
-                    <td>{row.summary}</td>
+                    <td>
+                      {KIND_LABELS[row.kind] ?? row.kind}
+                      {row.severity === '' ? null : (
+                        <>
+                          {' '}
+                          <span
+                            className="badge"
+                            data-testid={`review-badge-${row.severity}`}
+                            title={SEVERITY_HINTS[row.severity] ?? ''}
+                          >
+                            {SEVERITY_LABELS[row.severity] ?? row.severity}
+                          </span>
+                        </>
+                      )}
+                    </td>
+                    <td>
+                      {row.summary}
+                      {row.statement === '' ? null : (
+                        <>
+                          {' '}
+                          <button
+                            type="button"
+                            className="button button--quiet button--small"
+                            data-testid="review-rule-toggle"
+                            aria-expanded={expanded.has(row.reviewKey)}
+                            onClick={(): void => {
+                              setExpanded((current): ReadonlySet<string> => {
+                                const next = new Set(current);
+                                if (!next.delete(row.reviewKey)) {
+                                  next.add(row.reviewKey);
+                                }
+                                return next;
+                              });
+                            }}
+                          >
+                            {expanded.has(row.reviewKey) ? 'Hide the rule' : 'The rule'}
+                          </button>
+                        </>
+                      )}
+                    </td>
                     <td className="muted">{row.detail}</td>
                     <td>
                       {row.decision === null ? (
@@ -326,6 +460,14 @@ export function ReviewView({
                       )}
                     </td>
                   </tr>
+                  {expanded.has(row.reviewKey) && row.statement !== '' ? (
+                    <tr data-testid={`review-rule-${row.reviewKey}`}>
+                      <td className="muted" colSpan={4}>
+                        {row.statement}
+                      </td>
+                    </tr>
+                  ) : null}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -338,7 +480,7 @@ export function ReviewView({
             type="button"
             data-testid="review-show-more"
             onClick={(): void => {
-              void load(kind, rows.length);
+              void load(kind, rows.length, severity);
             }}
           >
             Show {count(Math.min(PAGE_SIZE, page.total - rows.length))} more

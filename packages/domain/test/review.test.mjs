@@ -6,10 +6,11 @@ import {
   DRAGON_REVIEW_ITEMS,
   DUPLICATE_ACROSS_SOURCES,
   DUPLICATE_WITHIN_ONE_SOURCE,
+  SSM_AUDIT_AGGREGATE,
 } from './dist/review.fixture.js';
 
 test('every review item kind summarizes to a non-empty line', () => {
-  assert.equal(DRAGON_REVIEW_ITEMS.length, 18);
+  assert.equal(DRAGON_REVIEW_ITEMS.length, 19);
   const kinds = new Set();
   for (const item of DRAGON_REVIEW_ITEMS) {
     kinds.add(item.kind);
@@ -234,4 +235,19 @@ test('a tag-only re-match against a vanished entry is a question, not a silence'
   assert.match(reviewItemSummary(rematch), /asset-0009/);
   assert.match(reviewItemSummary(rematch), /MAH009-10-01/);
   assert.match(reviewItemSummary(rematch), /reappeared/);
+});
+
+test('an SSM Audit finding names the equipment; a note names the count', () => {
+  const finding = DRAGON_REVIEW_ITEMS.find((item) => item.kind === 'ssm-audit');
+  assert.equal(
+    reviewItemSummary(finding),
+    'HW-PUMP-01: Parent is in a different UPN — This row is on UPN 118 but its parent is ' +
+      'on UPN 602. A parent must be in the same UPN.',
+  );
+  // A note is one row about a practice, not one row per asset: what it says is
+  // how much of the register it covers.
+  assert.equal(
+    reviewItemSummary(SSM_AUDIT_AGGREGATE),
+    '312 rows: UPN MISC needs a second look (info)',
+  );
 });

@@ -284,7 +284,11 @@ test('stage 11: the review queue is the MEL catalog conflict and the fuzzy ident
   const { reviewItems, stats } = project;
 
   assert.equal(stats.reviewItemCount, reviewItems.length);
-  assert.equal(reviewItems.length, 2);
+  // The two things the fold refused to decide. Everything else in the queue is
+  // the SSM Audit gate reading the finished register -- a different question,
+  // asserted in full in `ssm-audit.test.mjs`.
+  const refusals = reviewItems.filter((item) => item.kind !== 'ssm-audit');
+  assert.equal(refusals.length, 2);
 
   const catalogConflict = reviewItems.find((item) => item.kind === 'system-catalog-conflict');
   assert.equal(catalogConflict.systemKey, '603');
