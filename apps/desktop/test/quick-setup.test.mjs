@@ -268,7 +268,7 @@ test('every available starter template compiles this project', async () => {
     service.updateDraft({ tagAnatomy: inferred.anatomy });
 
     const templates = service.quickSetupSuggestions().resolverTemplates;
-    assert.equal(templates.length, 6);
+    assert.equal(templates.length, 7);
 
     for (const template of templates) {
       if (!template.available) {
@@ -454,7 +454,7 @@ test('the Revit path: a building nobody stated, read off the file names', async 
         entry.matchedObjectCount,
       ]),
       [
-        ['B14-*', 'B14', 2, 108],
+        ['B14-*', 'B14', 3, 140],
         ['B22-*', 'B22', 1, 40],
       ],
     );
@@ -474,10 +474,11 @@ test('the Revit path: a building nobody stated, read off the file names', async 
       ]),
       [
         ['Building', 2, 0],
-        ['SSM Discipline', 0, 12],
-        ['System', 7, 0],
+        ['SSM Discipline', 1, 12],
+        ['System', 8, 0],
       ],
-      'two buildings, nobody without one, and seven systems — none of it stated by a property',
+      'two buildings, nobody without one, and eight systems — none of it stated by a property; ' +
+        'the one discipline is I&C, which only the controls package states',
     );
     assert.deepEqual(
       last.hierarchy.levels.map((level) => [level.displayName, level.boundary]),
@@ -533,6 +534,71 @@ test('the anatomy and the resolver agree that the system is not in the mark', as
   }
 });
 
+/**
+ * The approved-UPN rung, proposed over the fixture's own marks.
+ *
+ * The federation is half and half — the MEP packages write `AHU-1` and `P101`,
+ * the controls package writes `MAH101-01` and `TIT101-01` — which is what a
+ * site part-way onto the standard looks like. (`P101` and its two siblings
+ * happen to spell an approved UPN as well, which is why nine rather than six of
+ * the eighteen read.) Quick Setup does not pretend otherwise: at half the tags
+ * the rung is offered with the real number in the reason, and filtered to the
+ * package that IS on the standard it is offered for real, with what it would
+ * resolve stated in assets.
+ */
+test('the approved-UPN rung is proposed for the package whose marks carry one', async () => {
+  const service = await newRevitProject();
+  try {
+    acceptFields(service, service.quickSetupSuggestions());
+
+    const mixed = service
+      .quickSetupSuggestions()
+      .resolverTemplates.find((entry) => entry.templateId === 'exto-approved-list');
+    assert.equal(
+      mixed.available,
+      false,
+      'nine marks in eighteen carry an approved UPN, which is not most of a site',
+    );
+    assert.match(mixed.unavailableReason, /9 of 18 tags carry exactly one approved Exto UPN/);
+
+    // Filtered to the controls package, every mark carries one.
+    const { draft } = service.draftState();
+    service.updateDraft({
+      assetFilters: { ...draft.assetFilters, includedSourceModelFiles: ['B14-Controls.nwc'] },
+    });
+
+    const controls = service
+      .quickSetupSuggestions()
+      .resolverTemplates.find((entry) => entry.templateId === 'exto-approved-list');
+    assert.equal(controls.available, true);
+    assert.deepEqual(controls.resolver.keyChain, [{ kind: 'upn-from-tag' }]);
+    assert.deepEqual(controls.resolver.descriptionChain, [
+      { kind: 'exto-system-name', allowUniqueUpn: true, descriptionProperty: null },
+    ]);
+    assert.equal(controls.resolver.applyIcDisciplineRule, true);
+    assert.match(controls.impact, /6 of 6 assets get an approved System Name/);
+
+    // And it is not a promise: accepting it resolves those six for real.
+    service.updateDraft({ systemResolver: controls.resolver });
+    const preview = service.resolverTemplatePreview(controls.resolver);
+    assert.equal(preview.state, 'ready');
+    assert.equal(preview.resolvedCount, 6);
+    assert.deepEqual(
+      [...new Set(preview.samples.map((sample) => sample.systemLabel))].sort(),
+      ['101  Cleanroom Makeup Air System', '102  Cleanroom Recirculation Air System'],
+      'the approved spelling, not a description anybody wrote next to it',
+    );
+    assert.deepEqual(preview.extoSystemName, {
+      exactCount: 0,
+      uniqueUpnCount: 6,
+      mismatchCount: 0,
+      unknownCount: 0,
+    });
+  } finally {
+    service.close();
+  }
+});
+
 test('accepting everything on a Revit model nests equipment and publishes', async () => {
   const service = await newRevitProject();
   try {
@@ -542,11 +608,16 @@ test('accepting everything on a Revit model nests equipment and publishes', asyn
       [
         ['AHU', 'P', 3],
         ['MCC', 'VFD', 2],
+        ['LCP', 'TIT', 1],
+        ['PLC', 'LCP', 1],
       ],
+      'the controls package draws its own two pairings, and they are the weakest',
     );
     assert.deepEqual(service.draftState().draft.roleGraph.rules, [
       { parentRole: 'AHU', childRole: 'P' },
       { parentRole: 'MCC', childRole: 'VFD' },
+      { parentRole: 'LCP', childRole: 'TIT' },
+      { parentRole: 'PLC', childRole: 'LCP' },
     ]);
     assert.deepEqual(
       service.draftState().draft.identityConfig.tagNormalization,
@@ -560,7 +631,7 @@ test('accepting everything on a Revit model nests equipment and publishes', asyn
 
     const compiled = await service.compile();
     assert.equal(compiled.state, 'done');
-    assert.equal(compiled.summary.assetCount, 12);
+    assert.equal(compiled.summary.assetCount, 18);
     assert.equal(compiled.summary.missingSystemCount, 0);
 
     const completeness = compiled.summary.completeness;
@@ -568,7 +639,11 @@ test('accepting everything on a Revit model nests equipment and publishes', asyn
       completeness.assetsNested > 0,
       'the acceptance criterion for B3 on real-shaped data: something nests',
     );
-    assert.equal(completeness.assetsNested, 5, 'three pumps in their air handlers, two drives in an MCC');
+    assert.equal(
+      completeness.assetsNested,
+      7,
+      'three pumps in their air handlers, two drives in an MCC, and the controls stack of two',
+    );
 
     for (const level of completeness.levels) {
       if (!level.boundary) {

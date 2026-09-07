@@ -22,6 +22,14 @@ export const COMPONENT_EVIDENCE_TIER = {
   'mel-lookup': EVIDENCE_TIER.TRACKING_DOCUMENT,
   /** Cut out of a tag by a profile rule: derived, never stated by a source. */
   'tag-segment': EVIDENCE_TIER.INFERRED,
+  /** Read out of a tag against the approved UPN list: derived the same way. */
+  'upn-from-tag': EVIDENCE_TIER.INFERRED,
+  /**
+   * Looked up in the approved VF Exto vocabulary from a key and a description
+   * other rungs supplied. It is only ever as good as those, and the standard it
+   * checks them against is not a source that stated anything about this asset.
+   */
+  'exto-system-name': EVIDENCE_TIER.INFERRED,
   /**
    * Assembled from other values; the real tier is the lowest among the
    * placeholders it filled, computed per evaluation. This entry is the floor

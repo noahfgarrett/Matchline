@@ -678,6 +678,11 @@ function ResolverStep({
                 <span className="candidate__name">{template.label}</span>
                 <span className="candidate__why">{template.what}</span>
                 <span className="candidate__examples">e.g. {template.example}</span>
+                {template.impact === '' ? null : (
+                  <span className="candidate__why" data-testid={`quick-template-impact-${template.templateId}`}>
+                    {template.impact}
+                  </span>
+                )}
                 {template.available ? null : (
                   <span className="candidate__blocked">{template.unavailableReason}</span>
                 )}

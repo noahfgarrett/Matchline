@@ -1,4 +1,8 @@
 import type { UniversePropertyCatalogEntry } from '@matchline/asset-catalog';
+import {
+  extoRev21SystemName,
+  extoRev21UpnCandidates,
+} from '@matchline/ssm-audit/exto';
 import { previewAnatomy, type AnatomyPreview } from '@matchline/tag-anatomy';
 
 import type {
@@ -1153,7 +1157,68 @@ export interface TemplateEvidence {
   readonly hasMel: boolean;
   /** The property most likely to hold the system code, if any. */
   readonly systemProperty: { readonly category: string; readonly name: string } | null;
+  /** What the approved-UPN rung would find in this site's own tags. */
+  readonly upn: ExtoUpnCoverage;
 }
+
+/**
+ * The share of a site's tags that carry an approved Exto UPN.
+ *
+ * Read off the real tags, once, and handed to the templates rather than
+ * recomputed inside each of them. A proposal whose numbers were derived twice
+ * could offer a template on one count and print another underneath it.
+ */
+export interface ExtoUpnCoverage {
+  /** Tags looked at. */
+  readonly tagCount: number;
+  /** Tags carrying exactly one approved UPN. Zero or several do not count. */
+  readonly singleUpnCount: number;
+  /** Of those, how many reach an approved System Name with no description. */
+  readonly namedCount: number;
+  /** Of those, how many own several approved names and need a description. */
+  readonly needsDescriptionCount: number;
+}
+
+/**
+ * How much of this site the approved UPN rung would answer for.
+ *
+ * `singleUpnCount` is deliberately strict: a tag carrying two approved UPNs is
+ * not a tag the rung can read, and counting it as coverage would offer a
+ * template that then skips those very assets.
+ */
+export function extoUpnCoverage(tags: readonly string[]): ExtoUpnCoverage {
+  let singleUpnCount = 0;
+  let namedCount = 0;
+  let needsDescriptionCount = 0;
+  for (const tag of tags) {
+    const candidates = extoRev21UpnCandidates(tag);
+    const only = candidates[0];
+    if (only === undefined || candidates.length > 1) {
+      continue;
+    }
+    singleUpnCount += 1;
+    // With no description at all, `allowUniqueUpn` is the only way through:
+    // `unique-upn` means the UPN owns one name, anything else means the words
+    // have to come from somewhere before a name can be settled.
+    if (extoRev21SystemName(only, '', true).status === 'unique-upn') {
+      namedCount += 1;
+    } else {
+      needsDescriptionCount += 1;
+    }
+  }
+  return { tagCount: tags.length, singleUpnCount, namedCount, needsDescriptionCount };
+}
+
+/**
+ * The share of tags that has to carry an approved UPN before the rung is
+ * proposed.
+ *
+ * Four tags in five. Below that the rung is still offered, greyed, with the
+ * real number in the reason — a site whose controls package uses UPNs and whose
+ * mechanical package does not should be told that, not quietly shown a
+ * different template.
+ */
+export const UPN_TAG_COVERAGE_THRESHOLD = 0.8;
 
 /**
  * The six starter templates the one-hour directive names.
@@ -1177,7 +1242,48 @@ export function resolverTemplates(evidence: TemplateEvidence): readonly WireReso
     ? ''
     : 'No tag anatomy with a “system” segment has been taught on screen 4 yet.';
 
+  const upnShare =
+    evidence.upn.tagCount === 0 ? 0 : evidence.upn.singleUpnCount / evidence.upn.tagCount;
+  const missingUpn =
+    evidence.upn.tagCount === 0
+      ? 'No equipment tags have been read yet — choose the tag property on screen 3 first.'
+      : upnShare >= UPN_TAG_COVERAGE_THRESHOLD
+        ? ''
+        : `Only ${String(evidence.upn.singleUpnCount)} of ` +
+          `${String(evidence.upn.tagCount)} tags carry exactly one approved Exto UPN, ` +
+          'so this would leave most of the site without a system.';
+
   return [
+    {
+      templateId: 'exto-approved-list',
+      label: 'The tag carries the approved UPN',
+      what: 'Reads the approved Exto UPN out of the tag itself and names the system from the approved list. Needs no tag anatomy and no MEL — the standard supplies both halves.',
+      example: 'MAH101-01 → UPN 101, named “101  Cleanroom Makeup Air System”',
+      available: missingUpn === '',
+      unavailableReason: missingUpn,
+      impact:
+        evidence.upn.tagCount === 0
+          ? ''
+          : `${String(evidence.upn.namedCount)} of ${String(evidence.upn.tagCount)} assets get an ` +
+            'approved System Name; ' +
+            `${String(evidence.upn.needsDescriptionCount)} need a description before one can be ` +
+            'settled.',
+      resolver: {
+        keyChain: [{ kind: 'upn-from-tag' }],
+        descriptionChain: [
+          { kind: 'exto-system-name', allowUniqueUpn: true, descriptionProperty: null },
+          ...(evidence.hasMel
+            ? ([
+                { kind: 'mel-lookup', joinBy: 'systemKey', returnField: 'systemDescription' },
+              ] as const)
+            : []),
+        ],
+        normalization,
+        conflictPolicy: 'review',
+        applyIcDisciplineRule: true,
+        labelTemplate: '',
+      },
+    },
     {
       templateId: 'model-field',
       label: 'The model states the system',
@@ -1185,12 +1291,14 @@ export function resolverTemplates(evidence: TemplateEvidence): readonly WireReso
       example: 'Dragon Data > UPN holding 001',
       available: missingProperty === '',
       unavailableReason: missingProperty,
+      impact: '',
       resolver: {
         keyChain: [{ kind: 'model-field', property: systemProperty }],
         descriptionChain: [],
         normalization,
         conflictPolicy: 'review',
         labelTemplate: '',
+        applyIcDisciplineRule: true,
       },
     },
     {
@@ -1200,6 +1308,7 @@ export function resolverTemplates(evidence: TemplateEvidence): readonly WireReso
       example: 'MAH001-10-01 → 001, described “Mechanical Dry Air Handling” by the MEL',
       available: missingSegment === '' && missingMel === '',
       unavailableReason: [missingSegment, missingMel].filter((part) => part !== '').join(' '),
+      impact: '',
       resolver: {
         keyChain: [{ kind: 'tag-segment', segment: 'system' }],
         descriptionChain: [
@@ -1208,6 +1317,7 @@ export function resolverTemplates(evidence: TemplateEvidence): readonly WireReso
         normalization,
         conflictPolicy: 'review',
         labelTemplate: '',
+        applyIcDisciplineRule: true,
       },
     },
     {
@@ -1217,6 +1327,7 @@ export function resolverTemplates(evidence: TemplateEvidence): readonly WireReso
       example: 'UPN 001 → “Mechanical Dry Air Handling”',
       available: missingProperty === '' && missingMel === '',
       unavailableReason: [missingProperty, missingMel].filter((part) => part !== '').join(' '),
+      impact: '',
       resolver: {
         keyChain: [{ kind: 'model-field', property: systemProperty }],
         descriptionChain: [
@@ -1225,6 +1336,7 @@ export function resolverTemplates(evidence: TemplateEvidence): readonly WireReso
         normalization,
         conflictPolicy: 'review',
         labelTemplate: '',
+        applyIcDisciplineRule: true,
       },
     },
     {
@@ -1234,12 +1346,14 @@ export function resolverTemplates(evidence: TemplateEvidence): readonly WireReso
       example: 'The register’s System column holding 001',
       available: missingProperty === '',
       unavailableReason: missingProperty,
+      impact: '',
       resolver: {
         keyChain: [{ kind: 'direct-column', property: systemProperty }],
         descriptionChain: [],
         normalization,
         conflictPolicy: 'review',
         labelTemplate: '',
+        applyIcDisciplineRule: true,
       },
     },
     {
@@ -1249,12 +1363,14 @@ export function resolverTemplates(evidence: TemplateEvidence): readonly WireReso
       example: '{segment:system}-{segment:unit} gives 001-10',
       available: missingSegment === '',
       unavailableReason: missingSegment,
+      impact: '',
       resolver: {
         keyChain: [{ kind: 'composite', template: '{segment:system}-{segment:unit}' }],
         descriptionChain: [],
         normalization,
         conflictPolicy: 'review',
         labelTemplate: '',
+        applyIcDisciplineRule: true,
       },
     },
     {
@@ -1264,12 +1380,14 @@ export function resolverTemplates(evidence: TemplateEvidence): readonly WireReso
       example: 'Every asset arrives in the review queue with no system',
       available: true,
       unavailableReason: '',
+      impact: '',
       resolver: {
         keyChain: [{ kind: 'manual' }],
         descriptionChain: [],
         normalization,
         conflictPolicy: 'review',
         labelTemplate: '',
+        applyIcDisciplineRule: true,
       },
     },
   ];

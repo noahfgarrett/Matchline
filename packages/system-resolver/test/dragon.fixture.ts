@@ -378,3 +378,162 @@ export const MANUAL_650: ManualAssignments = new Map([
 export const MANUAL_DESCRIPTION_ONLY: ManualAssignments = new Map([
   ['dragon-0001', { systemDescription: 'Dry Air, North Bay' }],
 ]);
+
+/* ------------------------------------------- the approved VF Exto vocabulary
+ *
+ * Dragon writes `MAH001-10-01`, whose `001` is not an approved Exto UPN. A
+ * plant that has been mapped onto the standard writes `MAH101-01` instead --
+ * the same nomenclature, carrying a UPN the Upload Template knows. These are
+ * that plant, because a fixture whose UPN is unapproved could never exercise
+ * the rungs at all.
+ */
+
+/** Approved UPN 101, on the first three-digit run after the role. */
+export const MAH101: ResolverSubject = {
+  assetId: 'dragon-1101',
+  canonicalTag: 'MAH101-01',
+  sourceFile: 'Dragon-Mechanical.nwd',
+  objectId: '51201',
+  properties: props([['Item', 'Name', 'MAH101-01']]),
+};
+
+/** A drive on the same system: a different role, the same UPN. */
+export const VFD101: ResolverSubject = {
+  assetId: 'dragon-1102',
+  canonicalTag: 'VFD101-01',
+  sourceFile: 'Dragon-Electrical.nwd',
+  objectId: '51202',
+  properties: props([['Item', 'Name', 'VFD101-01']]),
+};
+
+/**
+ * Approved UPN 105, which owns TWO approved System Names.
+ *
+ * The case the `allowUniqueUpn` toggle cannot answer: 105 is a general air
+ * handler system and it is a condensing unit, and only a description says
+ * which. `Item > Description` carries one that matches, `Dragon > System
+ * Description` the other, so both halves of the rung's input are testable.
+ */
+export const MAH105: ResolverSubject = {
+  assetId: 'dragon-1103',
+  canonicalTag: 'MAH105-01',
+  sourceFile: 'Dragon-Mechanical.nwd',
+  objectId: '51203',
+  properties: props([
+    ['Item', 'Name', 'MAH105-01'],
+    ['Dragon', 'System Description', 'General Air Handler System (AC)'],
+  ]),
+};
+
+/** A tag naming two approved UPNs. Two real systems, so the rung refuses. */
+export const TWO_UPNS: ResolverSubject = {
+  assetId: 'dragon-1104',
+  canonicalTag: 'MAH101-102-01',
+  sourceFile: 'Dragon-Mechanical.nwd',
+  objectId: '51204',
+  properties: props([['Item', 'Name', 'MAH101-102-01']]),
+};
+
+/** What a MEL says about the approved plant's two systems. */
+export const APPROVED_MEL: ReadonlyArray<MelCatalogRow> = [
+  {
+    equipmentTag: 'MAH101-01',
+    systemKey: '101',
+    systemDescription: 'Cleanroom Makeup Air System',
+    sourceFile: 'Dragon-MEL.xlsx',
+    sheet: 'MEL',
+    row: 2,
+  },
+  {
+    equipmentTag: 'MAH105-01',
+    systemKey: '105',
+    // The site's own words for it, which are not one of 105's approved names.
+    systemDescription: 'Rooftop air conditioning',
+    sourceFile: 'Dragon-MEL.xlsx',
+    sheet: 'MEL',
+    row: 3,
+  },
+];
+
+/** The UPN out of the tag, and nothing else. No anatomy needed. */
+export const UPN_FROM_TAG: SystemResolverConfig = {
+  keyChain: [{ kind: 'upn-from-tag' }],
+  descriptionChain: [],
+  normalization: [],
+  conflictPolicy: 'review',
+};
+
+/** The UPN out of the tag, named from the approved list where it is unique. */
+export const UPN_AND_APPROVED_NAME: SystemResolverConfig = {
+  keyChain: [{ kind: 'upn-from-tag' }],
+  descriptionChain: [{ kind: 'exto-system-name', allowUniqueUpn: true }],
+  normalization: [],
+  conflictPolicy: 'review',
+};
+
+/** The same, without the unique-UPN shortcut: a description has to agree. */
+export const UPN_AND_EXACT_NAME: SystemResolverConfig = {
+  keyChain: [{ kind: 'upn-from-tag' }],
+  descriptionChain: [{ kind: 'exto-system-name', allowUniqueUpn: false }],
+  normalization: [],
+  conflictPolicy: 'review',
+};
+
+/**
+ * The approved name first, the site's own words underneath it.
+ *
+ * The order matters and the chain is what states it (PRODUCT.md §5.2, "the
+ * first rung that yields supplies the answer"). Above the MEL rung, an approved
+ * name becomes the System Name and everything it cannot name falls through to
+ * the MEL's own description. Below it, the MEL always answers first and the
+ * approved rung never gets to speak -- which is a legitimate thing for a site
+ * to configure, and not what anybody adding this rung means.
+ *
+ * The approved-name rung still reads the MEL: `resolvedDescription` is only the
+ * chain's own running value, so a rung placed first has none, and this one is
+ * the exact-match case only because MAH101's UPN owns a single name and the
+ * config says `allowUniqueUpn: false`. `APPROVED_NAME_OVER_MEL_DESCRIPTION`
+ * below is the one that checks real MEL words.
+ */
+export const APPROVED_NAME_THEN_MEL: SystemResolverConfig = {
+  keyChain: [{ kind: 'upn-from-tag' }],
+  descriptionChain: [
+    { kind: 'exto-system-name', allowUniqueUpn: true },
+    { kind: 'mel-lookup', joinBy: 'systemKey', returnField: 'systemDescription' },
+  ],
+  normalization: [],
+  conflictPolicy: 'review',
+};
+
+/** The MEL first, so the approved-name rung checks the words the MEL supplied. */
+export const APPROVED_NAME_OVER_MEL_DESCRIPTION: SystemResolverConfig = {
+  keyChain: [{ kind: 'upn-from-tag' }],
+  descriptionChain: [
+    { kind: 'mel-lookup', joinBy: 'systemKey', returnField: 'systemDescription' },
+    { kind: 'exto-system-name', allowUniqueUpn: false },
+  ],
+  normalization: [],
+  conflictPolicy: 'review',
+};
+
+/** The approved-name rung reading a model property instead of the chain. */
+export const APPROVED_NAME_FROM_PROPERTY: SystemResolverConfig = {
+  keyChain: [{ kind: 'upn-from-tag' }],
+  descriptionChain: [
+    {
+      kind: 'exto-system-name',
+      allowUniqueUpn: false,
+      descriptionProperty: { category: 'Dragon', name: 'System Description' },
+    },
+  ],
+  normalization: [],
+  conflictPolicy: 'review',
+};
+
+/** The anatomy rung first, the approved-UPN rung as the fallback beneath it. */
+export const ANATOMY_THEN_UPN: SystemResolverConfig = {
+  keyChain: [{ kind: 'tag-segment', segment: 'system' }, { kind: 'upn-from-tag' }],
+  descriptionChain: [],
+  normalization: [],
+  conflictPolicy: 'review',
+};

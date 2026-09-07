@@ -53,6 +53,52 @@ export interface UnresolvedSystemCount {
 }
 
 /**
+ * One approved-vocabulary count, with the tags that failed it.
+ *
+ * The examples are equipment tags rather than asset ids because this is the
+ * one part of the report a person acts on by opening a model and looking at a
+ * piece of equipment. `auditRuleId` names the SSM Audit rule that says the same
+ * thing in the reviewer's own words: the numbers here are the build's
+ * accounting, the audit is the review, and neither restates the other.
+ */
+export interface ApprovedValueCount {
+  readonly assetCount: number;
+  /**
+   * Up to ten failing tags, code-unit sorted.
+   *
+   * Sorted rather than first-seen so that the same site read as three model
+   * files and as one federated file gives the same answer.
+   */
+  readonly exampleTags: ReadonlyArray<string>;
+  /** The SSM Audit rule covering the same fact, or `''` when none does. */
+  readonly auditRuleId: string;
+}
+
+/**
+ * How much of the register the approved VF Exto vocabulary would accept.
+ *
+ * Exto validates its gating columns against fixed dropdowns, and an upload
+ * carrying a value outside one is refused wholesale. That refusal used to
+ * arrive after somebody exported and uploaded; these five counts are the same
+ * refusal, computed while the compile is still on screen 8.
+ *
+ * Every count is of assets, like every other count in this report, and every
+ * one is read off the values the compile settled -- no cell is re-derived here.
+ */
+export interface ApprovedValueReport {
+  /** System Key that is not an approved UPN. Exto refuses the upload. */
+  readonly upnNotApproved: ApprovedValueCount;
+  /** A System Name that is not one of the approved names for its UPN. */
+  readonly systemNameNotApproved: ApprovedValueCount;
+  /** SSM discipline outside the approved Discipline list. Exto refuses it. */
+  readonly disciplineNotApproved: ApprovedValueCount;
+  /** Equipment Classification outside the approved list. Informational. */
+  readonly classificationNotInList: ApprovedValueCount;
+  /** An Item Master that is not one of VF's. Informational. */
+  readonly itemMasterNotVf: ApprovedValueCount;
+}
+
+/**
  * What a compile actually managed to say about the site.
  *
  * Read top to bottom it answers the three questions a coordinator asks of a
@@ -92,4 +138,13 @@ export interface CompletenessReport {
    * rather than only the rows that survived.
    */
   readonly melRowsDropped: number;
+  /**
+   * How much of the register the approved VF Exto vocabulary would accept.
+   *
+   * Two of these five are publish blockers (`upnNotApproved`,
+   * `disciplineNotApproved`); the others are a warning and two notes. The
+   * severity lives with the publish gate rather than here, because this is a
+   * count of what is true and that is a decision about what to do next.
+   */
+  readonly approvedValues: ApprovedValueReport;
 }

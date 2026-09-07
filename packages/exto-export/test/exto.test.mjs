@@ -161,7 +161,7 @@ test('every row field is a column, exactly once', () => {
 /** The cell fields a row actually carries, provenance excluded. */
 function extoCellRowFields() {
   const row = rowFor('MAH001-10-02');
-  const { itemMasterNormalization: _provenance, ...cells } = row;
+  const { itemMasterNormalization: _provenance, canonicalizedFields: _canonical, ...cells } = row;
   return cells;
 }
 

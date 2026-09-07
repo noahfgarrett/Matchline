@@ -375,6 +375,83 @@ test('a mapping the loaded model does not carry is kept, not silently cleared', 
   }
 });
 
+/* ================== the approved Exto vocabulary, through the draft (layer 2) */
+
+/**
+ * The two approved-list rungs and the I&C flag, stored and read back.
+ *
+ * A rung the wizard can build and the store cannot keep is a rung nobody can
+ * use twice, so the round-trip is the test that matters: draft → published
+ * revision → reopened project, with `descriptionProperty: null` surviving as a
+ * decision rather than collapsing into an absent key on the way through.
+ */
+const APPROVED_LIST_RESOLVER = {
+  keyChain: [{ kind: 'upn-from-tag' }, { kind: 'tag-segment', segment: 'system' }],
+  descriptionChain: [
+    { kind: 'exto-system-name', allowUniqueUpn: true, descriptionProperty: null },
+    {
+      kind: 'exto-system-name',
+      allowUniqueUpn: false,
+      descriptionProperty: { category: 'Dragon Data', name: 'System' },
+    },
+    { kind: 'mel-lookup', joinBy: 'systemKey', returnField: 'systemDescription' },
+  ],
+  normalization: [{ kind: 'trim' }],
+  conflictPolicy: 'review',
+  labelTemplate: '',
+  applyIcDisciplineRule: true,
+};
+
+test('the approved-list rungs and the I&C flag round-trip through a revision', async () => {
+  const service = await openTwoCacheProject('ApprovedList');
+  try {
+    teachDragon(service);
+    service.updateDraft({ systemResolver: APPROVED_LIST_RESOLVER });
+
+    assert.deepEqual(
+      service.draftState().draft.systemResolver,
+      APPROVED_LIST_RESOLVER,
+      'the draft keeps what the editor built',
+    );
+
+    service.saveProfile('approved list');
+    const projectPath = service.current().path;
+    service.close();
+
+    const reopened = newService();
+    try {
+      await reopened.open(projectPath, false);
+      assert.deepEqual(
+        reopened.draftState().draft.systemResolver,
+        APPROVED_LIST_RESOLVER,
+        'and so does the revision it was published as',
+      );
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    service.close();
+  }
+});
+
+test('a draft written before the I&C rule existed reads back with it off', () => {
+  const lifted = draftProfileSchema.parse({
+    profileId: 'old',
+    name: 'Old',
+    version: 1,
+    propertyMappings: { equipmentTag: { category: 'Dragon Data', name: 'Tag' } },
+    assetFilters: ASSET_FILTERS,
+    tagAnatomy: DRAGON_ANATOMY,
+    systemResolver: DRAGON_RESOLVER,
+  });
+
+  assert.equal(
+    lifted.systemResolver.applyIcDisciplineRule,
+    false,
+    'a rule that moves assets between systems does not switch itself on under a published site',
+  );
+});
+
 /* ============================== gate row 7: the derived-attribute registry */
 
 test('a derived attribute previews over the real universe before it is saved', async () => {

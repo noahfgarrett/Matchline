@@ -271,6 +271,24 @@ export const systemComponentSchema = z.discriminatedUnion('kind', [
   }),
   z.object({ kind: z.literal('direct-column'), property: propertyRefSchema }),
   z.object({ kind: z.literal('composite'), template: z.string().min(1) }),
+  /**
+   * The approved UPN inside the equipment tag. Carries no options: the rule is
+   * the approved list, and a site does not get to widen it.
+   */
+  z.object({ kind: z.literal('upn-from-tag') }),
+  /**
+   * The approved VF Exto System Name for the UPN the key chain settled.
+   *
+   * `descriptionProperty: null` is a decision — "read the description the chain
+   * already found" — rather than an absent key, because the wire shape is
+   * canonical JSON and an absent key and a null are the same row in the config
+   * table. The lift to the domain drops the null.
+   */
+  z.object({
+    kind: z.literal('exto-system-name'),
+    allowUniqueUpn: z.boolean(),
+    descriptionProperty: propertyRefSchema.nullable(),
+  }),
   z.object({ kind: z.literal('manual') }),
 ]);
 export type WireSystemComponent = z.infer<typeof systemComponentSchema>;
@@ -282,6 +300,15 @@ export const systemResolverSchema = z.object({
   normalization: z.array(normalizationStepSchema),
   conflictPolicy: z.enum(['review', 'precedence']),
   labelTemplate: z.string(),
+  /**
+   * Whether an I&C asset takes the SOP's discipline and the UPN in its tag.
+   *
+   * On for a new draft, off for one lifted from a stored revision — a rule that
+   * moves assets between systems does not switch itself on under a site that
+   * has already published. A draft written before the rule existed states
+   * nothing, and `false` is the reading that leaves its next compile alone.
+   */
+  applyIcDisciplineRule: z.boolean().default(false),
 });
 export type WireSystemResolver = z.infer<typeof systemResolverSchema>;
 
@@ -860,6 +887,26 @@ export const systemConflictSchema = z.object({
 });
 export type WireSystemConflict = z.infer<typeof systemConflictSchema>;
 
+/**
+ * What an `exto-system-name` rung made of the whole universe.
+ *
+ * Four numbers because there are four outcomes, and telling them apart is the
+ * decision a person is actually making on screen 5: `exact` needs nothing,
+ * `unique` is the inference the toggle turns on, `mismatch` is a description to
+ * go and fix, and `unknown` is a UPN the template has never heard of.
+ */
+export const extoSystemNameUsageSchema = z.object({
+  /** `<UPN> <description>` is itself an approved System Name. */
+  exactCount: z.number().int().nonnegative(),
+  /** The UPN owns exactly one approved name and the toggle allowed it. */
+  uniqueUpnCount: z.number().int().nonnegative(),
+  /** The UPN is approved; the description reaches none of its names. */
+  mismatchCount: z.number().int().nonnegative(),
+  /** No approved System Name belongs to that UPN at all. */
+  unknownCount: z.number().int().nonnegative(),
+});
+export type WireExtoSystemNameUsage = z.infer<typeof extoSystemNameUsageSchema>;
+
 export const resolverPreviewSchema = z.discriminatedUnion('state', [
   z.object({ state: z.literal('blocked'), reason: z.string().min(1) }),
   z.object({
@@ -875,6 +922,8 @@ export const resolverPreviewSchema = z.discriminatedUnion('state', [
     samples: z.array(resolvedSampleSchema),
     conflicts: z.array(systemConflictSchema),
     unresolvedExamples: z.array(z.string()),
+    /** `null` when no chain carries an approved-system-name rung. */
+    extoSystemName: extoSystemNameUsageSchema.nullable(),
   }),
 ]);
 export type WireResolverPreview = z.infer<typeof resolverPreviewSchema>;
@@ -1317,6 +1366,14 @@ export const resolverTemplateSchema = z.object({
   available: z.boolean(),
   /** Why it is unavailable, or `''`. */
   unavailableReason: z.string(),
+  /**
+   * What accepting this would do to the assets this project has, or `''`.
+   *
+   * A number read off the real universe, not a promise: RELEASE-1.0-PLAN's
+   * "one-click accept with preview + impact counts". Only the templates that
+   * can compute one carry it; the rest state nothing rather than a zero.
+   */
+  impact: z.string(),
   resolver: systemResolverSchema,
 });
 export type WireResolverTemplate = z.infer<typeof resolverTemplateSchema>;
@@ -1752,6 +1809,30 @@ export const levelDemotionSchema = z.object({
 });
 export type WireLevelDemotion = z.infer<typeof levelDemotionSchema>;
 
+/**
+ * One approved-vocabulary count, with the tags that failed it.
+ *
+ * `auditRuleId` names the SSM Audit rule that says the same thing in the
+ * reviewer's own words, so a screen can send somebody from the number to the
+ * findings rather than restating them.
+ */
+export const approvedValueCountSchema = z.object({
+  assetCount: z.number().int().nonnegative(),
+  exampleTags: z.array(z.string()),
+  auditRuleId: z.string(),
+});
+export type WireApprovedValueCount = z.infer<typeof approvedValueCountSchema>;
+
+/** How much of the register the approved VF Exto vocabulary would accept. */
+export const approvedValuesSchema = z.object({
+  upnNotApproved: approvedValueCountSchema,
+  systemNameNotApproved: approvedValueCountSchema,
+  disciplineNotApproved: approvedValueCountSchema,
+  classificationNotInList: approvedValueCountSchema,
+  itemMasterNotVf: approvedValueCountSchema,
+});
+export type WireApprovedValues = z.infer<typeof approvedValuesSchema>;
+
 /** One way the resolver came up empty, and how many assets it left. */
 export const unresolvedSystemGroupSchema = z.object({
   skipReasons: z.array(z.string()),
@@ -1777,6 +1858,8 @@ export const completenessSchema = z.object({
   demotionsPerLevel: z.array(levelDemotionSchema),
   unresolvedSystemBySkipReason: z.array(unresolvedSystemGroupSchema),
   melRowsDropped: z.number().int().nonnegative(),
+  /** What the approved VF Exto lists would refuse about this register. */
+  approvedValues: approvedValuesSchema,
 });
 export type WireCompleteness = z.infer<typeof completenessSchema>;
 
@@ -2287,22 +2370,46 @@ export type WireProfilePackageV1 = z.infer<typeof profilePackageV1Schema>;
 /**
  * A reason this profile cannot be published, in the words screen 9 shows.
  *
- * Not a validation error and not a warning: a blocker is a decision in the
- * draft that the engine will refuse to compile, so publishing it would store a
- * revision that can never produce a register. The only one today is a filter
- * naming a selection set no source could resolve (RELEASE-1.0-PLAN P0-3 —
- * "fallback = mark unusable for filtering + block profile publication +
- * explain"); the shape is a list because the next one will not be.
+ * Not a validation error: a blocker is something about this project that makes
+ * the profile unpublishable, so publishing it would store a revision that can
+ * never produce a register Exto accepts. Three today:
  *
- * `setName` and `sourceNames` are carried beside the sentence rather than only
- * inside it so a screen can emphasize the name the person has to go and change.
+ * - `unresolved-selection-set` — a filter naming a selection set no source
+ *   could resolve (RELEASE-1.0-PLAN P0-3, "fallback = mark unusable for
+ *   filtering + block profile publication + explain"). About the draft.
+ * - `upn-not-approved` — the last compile produced a System Key that is not an
+ *   approved VF Exto UPN. Exto refuses the whole upload over one such cell.
+ * - `discipline-not-approved` — the same, for the Discipline column.
+ * - `system-name-not-approved` — a System Name that is not one of the approved
+ *   names for its UPN. Only ever a warning, never a blocker: Exto accepts it.
+ *
+ * The same shape carries a WARNING, which is the same information and the
+ * opposite decision: see `profile:sections`.
+ *
+ * `setName`, `sourceNames`, `assetCount` and `exampleTags` are carried beside
+ * the sentence rather than only inside it so a screen can emphasize what the
+ * person has to go and change.
  */
 export const publishBlockerSchema = z.object({
-  kind: z.literal('unresolved-selection-set'),
-  /** The name the profile's asset filters ask for. */
-  setName: z.string().min(1),
+  kind: z.enum([
+    'unresolved-selection-set',
+    'upn-not-approved',
+    'discipline-not-approved',
+    'system-name-not-approved',
+  ]),
+  /**
+   * The name the profile's asset filters ask for.
+   *
+   * `''` on the approved-value blockers, which are about the register rather
+   * than about a named set.
+   */
+  setName: z.string(),
   /** The sources whose copy of it is unresolved, by their short label. */
-  sourceNames: z.array(z.string().min(1)).min(1),
+  sourceNames: z.array(z.string().min(1)),
+  /** How many assets the blocker is about. `0` when the count is not the point. */
+  assetCount: z.number().int().nonnegative(),
+  /** Up to three equipment tags, so the sentence names real equipment. */
+  exampleTags: z.array(z.string()),
   /** The whole explanation, ready to print. */
   message: z.string().min(1),
 });

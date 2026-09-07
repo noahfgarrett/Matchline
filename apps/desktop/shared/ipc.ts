@@ -191,6 +191,7 @@ const EXAMPLE_DRAFT = {
     normalization: [{ kind: 'trim' }],
     conflictPolicy: 'review',
     labelTemplate: '',
+    applyIcDisciplineRule: false,
   },
   // The sections that used to be the project's `config` rows. They are the
   // profile's since SiteProfileV2, and a site that has defined an attribute of
@@ -328,6 +329,29 @@ const EXAMPLE_COMPILE_SUMMARY = {
     demotionsPerLevel: [{ levelId: 'system', ladderSource: 'flow-family', count: 1 }],
     unresolvedSystemBySkipReason: [],
     melRowsDropped: 0,
+    // Dragon's own vocabulary is not VF's, so its System Names and Item Masters
+    // are outside the approved lists while its UPNs and disciplines are inside
+    // them. That is the shape of a real first compile on a site that has not
+    // been mapped onto the standard yet, which is why the example carries it.
+    approvedValues: {
+      upnNotApproved: { assetCount: 0, exampleTags: [], auditRuleId: 'exto.upn-not-approved' },
+      systemNameNotApproved: {
+        assetCount: 34,
+        exampleTags: ['MAH001-10-01', 'MAH001-10-02'],
+        auditRuleId: 'exto.system-name-not-approved',
+      },
+      disciplineNotApproved: {
+        assetCount: 0,
+        exampleTags: [],
+        auditRuleId: 'exto.discipline-not-approved',
+      },
+      classificationNotInList: {
+        assetCount: 0,
+        exampleTags: [],
+        auditRuleId: 'exto.classification-not-approved',
+      },
+      itemMasterNotVf: { assetCount: 0, exampleTags: [], auditRuleId: 'exto.item-master-not-vf' },
+    },
   },
   /**
    * What the SSM Audit gate made of the register.
@@ -967,6 +991,7 @@ export const IPC_CHANNELS = {
           ],
           conflicts: [],
           unresolvedExamples: [],
+          extoSystemName: null,
         },
       },
     },
@@ -1130,6 +1155,7 @@ export const IPC_CHANNELS = {
           normalization: [{ kind: 'trim' }],
           conflictPolicy: 'review',
           labelTemplate: '',
+          applyIcDisciplineRule: false,
         },
       },
       response: {
@@ -1146,6 +1172,7 @@ export const IPC_CHANNELS = {
           samples: [],
           conflicts: [],
           unresolvedExamples: [],
+          extoSystemName: null,
         },
       },
     },
@@ -1858,12 +1885,19 @@ export const IPC_CHANNELS = {
    * revision. `blockers` is empty for a profile that can be published; a
    * non-empty list is a refusal the screen prints and the service repeats if
    * anything calls `profile:save` anyway.
+   *
+   * `warnings` is the same shape and the opposite decision: something the last
+   * compile found that a person should see before publishing, and that
+   * Matchline will not stop them over. A System Name Exto has never heard of is
+   * the one today — the upload is accepted and the row lands under a system
+   * nobody can find it by, which is worth a sentence and not a locked button.
    */
   'profile:sections': {
     request: z.void(),
     response: z.object({
       sections: z.array(profileSectionSchema),
       blockers: z.array(publishBlockerSchema),
+      warnings: z.array(publishBlockerSchema),
     }),
     example: {
       request: undefined,
@@ -1877,6 +1911,7 @@ export const IPC_CHANNELS = {
           },
         ],
         blockers: [],
+        warnings: [],
       },
     },
   },

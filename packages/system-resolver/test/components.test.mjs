@@ -128,6 +128,8 @@ test('the component tier mapping puts the human and the model at the ceiling', (
     'direct-column': 4,
     'mel-lookup': 2,
     'tag-segment': 1,
+    'upn-from-tag': 1,
+    'exto-system-name': 1,
     composite: 1,
   });
 });

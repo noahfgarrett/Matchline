@@ -119,6 +119,8 @@ export type {
 } from './resolver-config.js';
 
 export type {
+  ApprovedValueCount,
+  ApprovedValueReport,
   CompletenessReport,
   LevelCompleteness,
   LevelDemotionCount,

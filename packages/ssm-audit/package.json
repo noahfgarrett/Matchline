@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./exto": {
+      "types": "./dist/exto.d.ts",
+      "default": "./dist/exto.js"
     }
   },
   "files": [

@@ -1,7 +1,12 @@
 import { Worker } from 'node:worker_threads';
 
 import type { CompileStage, CompiledProject } from '@matchline/compiler';
-import type { ResolvedAssetNode, ResolvedSnapshot, ReviewItem } from '@matchline/domain';
+import type {
+  ApprovedValueCount,
+  ResolvedAssetNode,
+  ResolvedSnapshot,
+  ReviewItem,
+} from '@matchline/domain';
 import { reviewItemSummary } from '@matchline/domain';
 import type { LedgerEvent } from '@matchline/asset-identity';
 import {
@@ -17,6 +22,7 @@ import type { HierarchyAssetNode, HierarchyLevelNode } from '@matchline/ssm-comp
 import type { CompileWorkerMessage, CompileWorkerRequest } from './compile-worker.js';
 
 import type {
+  WireApprovedValueCount,
   WireCompileIssueKind,
   WireCompileIssueRow,
   WireCompileSummary,
@@ -375,6 +381,15 @@ function page<TRow>(rows: readonly TRow[], offset: number, limit: number): Page<
  * would be fast and wrong, so the session drops the whole view when it
  * recompiles rather than patching it.
  */
+/** One approved-value count, copied onto the wire's own mutable arrays. */
+function approvedCount(count: ApprovedValueCount): WireApprovedValueCount {
+  return {
+    assetCount: count.assetCount,
+    exampleTags: [...count.exampleTags],
+    auditRuleId: count.auditRuleId,
+  };
+}
+
 export interface CompileView {
   /**
    * Which of the two views this is.
@@ -891,6 +906,19 @@ export function createCompileView(
             (group) => ({ skipReasons: [...group.skipReasons], assetCount: group.assetCount }),
           ),
           melRowsDropped: completeness.melRowsDropped,
+          approvedValues: {
+            upnNotApproved: approvedCount(completeness.approvedValues.upnNotApproved),
+            systemNameNotApproved: approvedCount(
+              completeness.approvedValues.systemNameNotApproved,
+            ),
+            disciplineNotApproved: approvedCount(
+              completeness.approvedValues.disciplineNotApproved,
+            ),
+            classificationNotInList: approvedCount(
+              completeness.approvedValues.classificationNotInList,
+            ),
+            itemMasterNotVf: approvedCount(completeness.approvedValues.itemMasterNotVf),
+          },
         },
 
         // Read straight off the gate's own report for the same reason: the

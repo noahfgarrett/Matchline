@@ -593,6 +593,115 @@ function teachDragon(service) {
   service.updateDraft({ systemResolver: DRAGON_RESOLVER });
 }
 
+/* ============ the approved Exto vocabulary at the publish gate (layer 2) */
+
+/**
+ * Exto refuses an upload whose UPN or Discipline is outside its dropdowns, so
+ * publishing a profile that produces one stores a revision that can never be
+ * delivered. The refusal used to arrive after somebody exported and uploaded;
+ * this is the same refusal, on screen 9, while it can still be acted on.
+ *
+ * Dragon is the right fixture precisely because it is not compliant: `001` and
+ * `002` are its own numbering, not the template's. And Dragon is also why the
+ * refusal is only made to a project that has ADOPTED the approved list — the
+ * EXTO layer is optional, and a plant on its own numbering must not be told its
+ * profile is unpublishable because of somebody else's dropdown.
+ */
+
+/** The one thing that says "this project delivers to Exto". */
+function adoptExtoStandard(service) {
+  const { draft } = service.draftState();
+  service.updateDraft({
+    systemResolver: { ...draft.systemResolver, applyIcDisciplineRule: true },
+  });
+}
+
+test('a compile whose UPNs are outside the approved list blocks publication', async () => {
+  const projectPath = join(workDir, 'ApprovedGate.matchline');
+  const service = newService();
+  try {
+    service.create(projectPath, 'Approved Gate');
+    await service.addSources([cachePath, melPath]);
+    teachDragon(service);
+    adoptExtoStandard(service);
+
+    assert.deepEqual(
+      service.publishBlockers(),
+      [],
+      'nothing has been compiled, and "we have not looked" is not a finding',
+    );
+
+    assert.equal((await service.compile()).state, 'done');
+
+    const blockers = service.publishBlockers();
+    const upn = blockers.find((blocker) => blocker.kind === 'upn-not-approved');
+    assert.ok(upn !== undefined, 'Dragon systems 001 and 002 are not approved Exto UPNs');
+    assert.ok(upn.assetCount > 0, 'the blocker names the count');
+    assert.ok(upn.exampleTags.length > 0 && upn.exampleTags.length <= 3, 'and three example tags');
+    assert.match(upn.message, /screen 5/, 'and the screen to fix it on');
+    assert.match(upn.message, new RegExp(upn.exampleTags[0]));
+    assert.doesNotMatch(
+      upn.message,
+      /[A-Z]{3,}_[A-Z]|upn-not-approved/,
+      'and never a machine code',
+    );
+
+    // The gate is the same one `saveProfile` meets, so screen 9 cannot be
+    // walked around by Quick Setup, an imported package or a headless call.
+    assert.throws(() => service.saveProfile('published over an unapproved UPN'), /approved Exto/);
+  } finally {
+    service.close();
+  }
+});
+
+test('an unapproved System Name is a warning, and does not stop publication', async () => {
+  const projectPath = join(workDir, 'ApprovedWarn.matchline');
+  const service = newService();
+  try {
+    service.create(projectPath, 'Approved Warn');
+    await service.addSources([cachePath, melPath]);
+    teachDragon(service);
+    adoptExtoStandard(service);
+    assert.equal((await service.compile()).state, 'done');
+
+    const [warning, ...rest] = service.publishWarnings();
+    assert.deepEqual(rest, [], 'one warning for a project that adopted the standard');
+    assert.equal(warning.kind, 'system-name-not-approved');
+    assert.ok(warning.assetCount > 0);
+    assert.match(warning.message, /Exto will accept the upload/);
+    assert.ok(
+      !service.publishBlockers().some((blocker) => blocker.kind === 'system-name-not-approved'),
+      'a warning is never also a blocker',
+    );
+  } finally {
+    service.close();
+  }
+});
+
+test('a project on its own numbering is told the same facts and not stopped', async () => {
+  const projectPath = join(workDir, 'OwnNumbering.matchline');
+  const service = newService();
+  try {
+    service.create(projectPath, 'Own Numbering');
+    await service.addSources([cachePath, melPath]);
+    teachDragon(service);
+    assert.equal((await service.compile()).state, 'done');
+
+    assert.deepEqual(
+      service.publishBlockers(),
+      [],
+      'this profile never said it delivers to Exto, so Exto does not get to refuse it',
+    );
+    const kinds = service.publishWarnings().map((warning) => warning.kind);
+    assert.ok(kinds.includes('upn-not-approved'), 'the same number, said rather than enforced');
+    assert.ok(kinds.includes('system-name-not-approved'));
+
+    assert.ok(service.saveProfile('own numbering').revision > 0);
+  } finally {
+    service.close();
+  }
+});
+
 test('a source whose bytes changed is reported as changed, not read anyway', async () => {
   // Its own copies of everything: this test edits a source file, and the
   // fixtures above are shared with every test in this file.

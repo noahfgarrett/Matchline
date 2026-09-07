@@ -8,6 +8,7 @@
  */
 import { assertNever, type Provenance, type SourceKind, type SourceRef } from '@matchline/domain';
 import type { SystemComponentConfig } from '@matchline/domain';
+import { extoRev21SystemName, extoRev21UpnCandidates } from '@matchline/ssm-audit/exto';
 import type { AnatomyResult } from '@matchline/tag-anatomy';
 
 import { expandComposite } from './composite.js';
@@ -32,7 +33,13 @@ export const UNSTATED_ROW = 0;
 
 export type RungOutcome =
   | ({ readonly ok: true } & RungYield)
-  | { readonly ok: false; readonly reason: SkipReason; readonly detail: string };
+  | {
+      readonly ok: false;
+      readonly reason: SkipReason;
+      readonly detail: string;
+      /** The approved values the rung would have taken. See `SkippedRung`. */
+      readonly candidates?: ReadonlyArray<string>;
+    };
 
 /** Everything a rung may consult. Assembled once per subject. */
 export interface RungContext {
@@ -78,6 +85,15 @@ export interface RungContext {
    * so the answer is the row the scan would have found.
    */
   readonly melTagIndex: MelTagIndex;
+  /**
+   * The description an EARLIER rung of the description chain yielded, or null.
+   *
+   * The description-chain twin of `joinKey`, and for the same reason: an
+   * `exto-system-name` rung reads the words a MEL lookup above it found, and a
+   * rung cannot read a value the chain has not produced yet. Always null in
+   * the key chain, which resolves no descriptions.
+   */
+  readonly resolvedDescription: string | null;
 }
 
 /** Which source vocabulary a rung's claim belongs to. */
@@ -87,9 +103,16 @@ export function sourceKindOf(kind: SystemComponentKind): SourceKind {
     case 'direct-column':
     case 'tag-segment':
     case 'composite':
+    case 'upn-from-tag':
       return 'MODEL';
     case 'mel-lookup':
       return 'MEL';
+    /* The approved list is a published standard, not a document this site
+       produced -- but it is read against a value the model or the MEL stated,
+       and STANDARD is not a `SourceKind`. MODEL is the honest half: the tag it
+       reads and the key it checks both came off the model. */
+    case 'exto-system-name':
+      return 'MODEL';
     case 'manual':
       return 'MANUAL';
     default:
@@ -110,8 +133,12 @@ function rowRef(row: MelCatalogRow | undefined): SourceRef {
   return { kind: 'sheet-row', sheet: row?.sheet ?? '', row: row?.row ?? UNSTATED_ROW };
 }
 
-function skip(reason: SkipReason, detail: string): RungOutcome {
-  return { ok: false, reason, detail };
+function skip(
+  reason: SkipReason,
+  detail: string,
+  candidates?: ReadonlyArray<string>,
+): RungOutcome {
+  return { ok: false, reason, detail, ...(candidates === undefined ? {} : { candidates }) };
 }
 
 /** Reads one property, trimmed. Whitespace is never part of an identifier. */
@@ -247,6 +274,128 @@ function evaluateMelLookup(
   return yieldFrom(value, backingRow);
 }
 
+/**
+ * The approved UPN carried in the equipment tag.
+ *
+ * The whole rule is the vendored `extoRev21UpnCandidates`: the approved
+ * three-digit runs that occur after a nomenclature boundary. `MAH101-01` and
+ * `VFD101-01` both yield `101`, and `RIO6500` yields `650` rather than also
+ * `500`, because the digits after the UPN are a panel sequence and not a second
+ * system.
+ *
+ * Exactly one candidate answers. Zero is a tag this list does not describe;
+ * several is a tag that names two real systems, and choosing between them here
+ * would put equipment on a system nobody picked -- so both skip, and the second
+ * one says which UPNs it refused to choose between.
+ */
+function evaluateUpnFromTag(
+  context: RungContext,
+  provenanceBase: Omit<Provenance, 'sourceFile' | 'sourceRef' | 'propertyOrColumn'>,
+): RungOutcome {
+  const tag = context.subject.canonicalTag;
+  if (tag === '') {
+    return skip('no-value', `${context.subject.assetId} has no equipment tag to read a UPN from`);
+  }
+  const candidates = extoRev21UpnCandidates(tag);
+  const only = candidates[0];
+  if (only === undefined) {
+    return skip('no-upn-candidate', `no approved UPN occurs in the tag ${tag}`);
+  }
+  if (candidates.length > 1) {
+    return skip(
+      'ambiguous-upn',
+      `the tag ${tag} carries ${String(candidates.length)} approved UPNs`,
+      candidates,
+    );
+  }
+  return {
+    ok: true,
+    rawValue: only,
+    evidenceTier: COMPONENT_EVIDENCE_TIER['upn-from-tag'],
+    provenance: {
+      sourceFile: context.subject.sourceFile ?? UNSTATED_SOURCE_FILE,
+      sourceRef: modelRef(context.subject),
+      propertyOrColumn: 'approved UPN in the equipment tag',
+      ...provenanceBase,
+    },
+  };
+}
+
+/**
+ * The approved VF Exto System Name for the UPN this chain settled.
+ *
+ * Reads two things and decides nothing itself: the System Key an earlier key
+ * rung produced (`joinKey`, which the description chain arrives with already
+ * set), and a description -- from `descriptionProperty` when the rung names
+ * one, otherwise from whatever earlier description rung has already answered.
+ * `extoRev21SystemName` is the whole of the rest.
+ *
+ * Four outcomes, all of them the vendored function's:
+ *
+ * - `exact` -- `<UPN> <description>` IS an approved System Name. The rung
+ *   yields the approved spelling, so `medium voltage` reaches the sheet spelled
+ *   the way the template spells it.
+ * - `unique-upn` -- the UPN owns exactly one approved name and the rung was
+ *   configured to allow that. An inference, and one a site opts into.
+ * - `description-mismatch` -- the UPN is approved and the description reaches
+ *   none of its names. Skipped, listing every name it could have been.
+ * - `unknown-system` -- no approved name belongs to this UPN at all. Skipped;
+ *   there is nothing to list.
+ *
+ * A skip here is not a gap in the register: the chain carries on, and a plain
+ * `mel-lookup` below this rung still supplies the site's own words. What it
+ * refuses to do is print a name Exto would reject as if it were approved.
+ */
+function evaluateExtoSystemName(
+  component: Extract<SystemComponentConfig, { kind: 'exto-system-name' }>,
+  context: RungContext,
+  provenanceBase: Omit<Provenance, 'sourceFile' | 'sourceRef' | 'propertyOrColumn'>,
+): RungOutcome {
+  const upn = context.joinKey ?? '';
+  if (upn === '') {
+    return skip('no-join-key', 'no earlier rung resolved a system key to name a system for');
+  }
+
+  const property = component.descriptionProperty;
+  const label =
+    property === undefined
+      ? 'approved Exto System Name'
+      : `approved Exto System Name (${property.category} > ${property.name})`;
+  const description =
+    property === undefined
+      ? (context.resolvedDescription ?? '')
+      : readProperty(context.subject, property.category, property.name).value;
+
+  const outcome = extoRev21SystemName(upn, description, component.allowUniqueUpn);
+  if (outcome.status === 'exact' || outcome.status === 'unique-upn') {
+    return {
+      ok: true,
+      rawValue: outcome.value,
+      evidenceTier: COMPONENT_EVIDENCE_TIER['exto-system-name'],
+      provenance: {
+        sourceFile: context.subject.sourceFile ?? UNSTATED_SOURCE_FILE,
+        sourceRef: modelRef(context.subject),
+        propertyOrColumn: label,
+        ...provenanceBase,
+        // The status is the whole reason a reviewer trusts or distrusts this
+        // cell, and `exact` and `unique-upn` are not the same claim.
+        rule: `exto-approved-list:${outcome.status}`,
+      },
+    };
+  }
+
+  if (outcome.status === 'description-mismatch') {
+    return skip(
+      'description-mismatch',
+      description === ''
+        ? `UPN ${upn} has no description to name a system with`
+        : `"${description}" is not an approved system name for UPN ${upn}`,
+      outcome.candidates,
+    );
+  }
+  return skip('unknown-system', `UPN ${upn} owns no approved Exto system name`);
+}
+
 /** Evaluates one rung. Returns the value it yielded, or why it yielded none. */
 export function evaluateComponent(
   component: SystemComponentConfig,
@@ -291,6 +440,12 @@ export function evaluateComponent(
 
     case 'mel-lookup':
       return evaluateMelLookup(component, context, provenanceBase);
+
+    case 'upn-from-tag':
+      return evaluateUpnFromTag(context, provenanceBase);
+
+    case 'exto-system-name':
+      return evaluateExtoSystemName(component, context, provenanceBase);
 
     case 'composite': {
       const expanded = expandComposite(component.template, context.subject, context.anatomy);

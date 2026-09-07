@@ -58,13 +58,17 @@ export type { ExtoExportReason } from './errors.js';
 export {
   DEFAULT_EXTO_SHEET_NAME,
   EXTO_BLANK_REGISTER_VALUE,
+  EXTO_DROPDOWN_FIELDS,
   buildExtoRows,
+  countCanonicalizedCells,
   extoAoa,
   extoTemplateAoa,
   writeExtoWorkbook,
 } from './exto.js';
 export type {
   BuildExtoRowsOptions,
+  ExtoCanonicalize,
+  ExtoDropdownField,
   ExtoRegisterBlanks,
   ExtoRow,
   WriteExtoWorkbookOptions,

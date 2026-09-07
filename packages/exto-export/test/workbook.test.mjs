@@ -86,7 +86,7 @@ test('an EXTO workbook reads back as the rows it was built from', () => {
   );
   assert.deepEqual(
     table.rows,
-    ROWS.map(({ itemMasterNormalization: _provenance, ...cells }) => cells),
+    ROWS.map(({ itemMasterNormalization: _provenance, canonicalizedFields: _canonical, ...cells }) => cells),
   );
   assert.deepEqual(table.rows.map((row) => row.equipmentId), DRAGON_REGISTER_ID_ORDER);
 });
@@ -175,7 +175,7 @@ test('500 Dragon assets export and read back intact, well inside two seconds', (
   assert.equal(table.rows.length, 500);
   assert.deepEqual(
     table.rows,
-    rows.map(({ itemMasterNormalization: _provenance, ...cells }) => cells),
+    rows.map(({ itemMasterNormalization: _provenance, canonicalizedFields: _canonical, ...cells }) => cells),
   );
   /* Ten systems of fifty, UPNs ascending: '001' x50, then '002' x50, ... */
   assert.deepEqual(table.rows.slice(0, 50).map((row) => row.upn), new Array(50).fill('001'));

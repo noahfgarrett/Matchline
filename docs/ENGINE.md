@@ -38,7 +38,8 @@ MEL workbook ─▶ spreadsheet-import ─▶ system-resolver ─▶ SystemResol
   → both objects kept, status `DUPLICATE_MODEL_TAG`, never merged. Output includes an
   inclusion-impact report (counts in/out per filter) for the wizard.
 - **`@matchline/system-resolver`** — ordered chain of components per PRODUCT.md §5:
-  `model-field | tag-segment | mel-lookup | direct-column | composite | manual`. Each
+  `model-field | tag-segment | mel-lookup | direct-column | composite | upn-from-tag |
+  exto-system-name | manual`. Each
   component yields an AttributeClaim for systemKey/systemDescription with provenance; the
   chain takes the first success for the *resolved* value but KEEPS all claims. Disagreement
   between components = System Conflict review item unless profile precedence explicitly
@@ -50,6 +51,40 @@ MEL workbook ─▶ spreadsheet-import ─▶ system-resolver ─▶ SystemResol
   other joins in one and not the other. System identifiers
   are strings, always. Also builds the System Catalog from a supplied MEL (systemKey →
   description, aliases, multi-description conflicts as review items).
+
+  Two rungs read the approved VF Exto vocabulary, which `@matchline/ssm-audit` vendors
+  byte-for-byte from SSM-Audit and publishes on its `/exto` subpath. Nothing about the
+  vocabulary is decided here.
+
+  - **`upn-from-tag`** — the UPN is carried INSIDE the equipment tag: the first approved
+    three-digit run after a nomenclature boundary, so `MAH101-01` and `VFD101-01` are both
+    on system 101, and `RIO6500` is 650 rather than also 500. Needs no tag anatomy, so it
+    is the rung for a Revit-shaped mark. Exactly one candidate answers; zero skips with
+    `no-upn-candidate`, several with `ambiguous-upn` and the candidates listed — two
+    approved UPNs in one tag are two real systems, and the rung will not choose. It
+    coexists with `tag-segment`; the profile's chain order decides which speaks first.
+  - **`exto-system-name`** — a description-chain rung. Takes the settled System Key and a
+    description (from an earlier description rung, or from its own `descriptionProperty`)
+    and yields the one System Name the Upload Template accepts. `exact` when
+    `<UPN> <description>` IS an approved name; `unique-upn` when the UPN owns exactly one
+    name and `allowUniqueUpn` is on — the claim's provenance rule says which, spelled
+    `exto-approved-list:exact` / `:unique-upn`. `description-mismatch` and `unknown-system`
+    skip with every approved name for that UPN as `candidates`, so the aggregate
+    `unresolved-system` item can print what to write instead of only that it was wrong.
+    When this rung wins the description chain its value is the whole `systemLabel` — the
+    approved spelling already opens with the UPN, and `buildLabel` would print it twice.
+    Put it ABOVE a MEL lookup: chain order is chain order, and everything it cannot name
+    approvingly falls through to the site's own words.
+
+  One more rule is the compiler's, not the resolver's, because it needs the discipline:
+  `systemResolver.applyIcDisciplineRule`. On, a native discipline the SOP reads as
+  instrumentation (`I&C`, `Instrumentation & Controls`) projects to
+  `FACILITIES MONITORING SYSTEM` — there is no I&C in the approved Discipline list — and
+  the asset's System Key becomes the approved UPN in its own tag, recorded as one more
+  `Provenance` entry with rule `ssm-audit:ic-discipline`. A site projection somebody wrote
+  down still outranks it. Default: on for a new draft, OFF for a profile lifted from a
+  stored revision, because a rule that moves assets between systems must not switch itself
+  on under a site that has already published.
 - **`@matchline/mel-export`** — canonical generated MEL: the §12.1 field list as typed rows
   from canonical assets + resolutions, then .xlsx via spreadsheet-import's vendored SheetJS.
   Deterministic row order (systemKey, then canonicalTag).
@@ -147,8 +182,16 @@ observations + identity + anatomy + role graph + learned rules
      the site the compile actually described — assets nested vs rooted, assets no rung
      proposed a parent for, assets with no system, per-level `assetsWithoutValue` with a
      flag on the boundary levels that thereby stop every nesting, demotions per (level,
-     rung), unresolved systems grouped by the resolver's own skip reasons, and MEL rows
-     dropped for saying nothing. Read off what the fold and the resolver already decided;
+     rung), unresolved systems grouped by the resolver's own skip reasons, MEL rows
+     dropped for saying nothing, and `approvedValues` — how much of the register the
+     approved VF Exto lists would refuse: `upnNotApproved`, `systemNameNotApproved`
+     (per UPN, not against the whole list), `disciplineNotApproved`,
+     `classificationNotInList`, `itemMasterNotVf`, each with an asset count, ten
+     code-unit-sorted example tags and the SSM Audit rule id that says the same thing in
+     the reviewer's words. A blank cell is never counted — that is a different fact with a
+     different fix. The overlap with the audit is deliberate and is not duplicated: these
+     are the build's own accounting, the audit is the review, and no second review item is
+     emitted for them. Read off what the fold and the resolver already decided;
      nothing is recomputed, so it cannot disagree with the snapshot it describes. The
      matching review items are counted rather than repeated: one `missing-boundary-level`
      per level, one `boundary-demotion` per (level, rung), one `unresolved-system` per
@@ -252,6 +295,34 @@ not the sentences, so a reworded message never orphans a decision.
 and every count opens the queue filtered to it; screen 9 draws the blockers as a warning above
 Save — a warning, never a refusal, because a blocker is a fact about the register a compile
 produced and not about the profile being published.
+
+### The publish gate, and the export's own spelling
+
+Two of the approved-value counts refuse a publication outright, because Exto refuses the
+whole upload over one such cell: a **UPN** outside the dropdown and a **Discipline** outside
+it. `publishBlockersFor` reads them off the LAST compile's report and never recomputes them,
+so screen 9 cannot disagree with screen 8; a project that has never compiled states nothing
+here rather than nothing-is-wrong, and does not block, because "we have not looked" is not a
+finding. Each blocker names the count, three example tags and the screen to fix it on. An
+unapproved **System Name** is a warning listed beside them — Exto accepts the row, and then
+nobody searching for that system finds the equipment on it. Classification and Item Master
+are informational counts on screen 8 only.
+
+The refusal is made only to a project whose profile says it delivers to Exto — an
+`upn-from-tag` or `exto-system-name` rung, or `applyIcDisciplineRule`. The EXTO layer is
+optional in exactly the sense `@matchline/exto-export` sets out, so a plant on its own
+numbering is told the same numbers as warnings and is not stopped over somebody else's
+dropdown. The compile gate reads the DRAFT blockers only: a compile refused because the
+previous compile found something would leave a project unable to look again.
+
+`@matchline/exto-export` prints the approved spelling of a dropdown-backed cell — `upn`,
+`discipline`, `wbs`, `systemName`, `equipmentClassification` — when the value matches one
+case- and whitespace-insensitively, and prints a non-matching value verbatim. It takes the
+canonicaliser as an option rather than importing the vocabulary: `@matchline/ssm-audit`
+already depends on the exporter, so the other direction would close a cycle. The desktop
+export path supplies `extoRev21Canonical` and counts the rewritten cells in the export note.
+The audit's own row builder deliberately does NOT, because auditing a copy the export had
+already corrected would report a site as compliant because of what happened on the way out.
 
 ### Switching a rule off
 

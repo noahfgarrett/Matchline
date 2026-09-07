@@ -38,7 +38,9 @@ import type { WizardContext } from './Wizard';
 const COMPONENT_KINDS: ReadonlyArray<readonly [WireSystemComponent['kind'], string]> = [
   ['model-field', 'Model property'],
   ['tag-segment', 'Tag segment'],
+  ['upn-from-tag', 'Approved Exto UPN in the tag'],
   ['mel-lookup', 'MEL lookup'],
+  ['exto-system-name', 'Approved Exto system name'],
   ['direct-column', 'Imported column'],
   ['composite', 'Composite template'],
   ['manual', 'Manual assignment'],
@@ -184,6 +186,24 @@ export function Screen5Resolver({ context }: { readonly context: WizardContext }
               <option value="precedence">Let the order above decide</option>
             </select>
           </Field>
+
+          <Field
+            label="Instrumentation and controls"
+            what="The SSM standard has no I&C discipline: instrumentation is FACILITIES MONITORING SYSTEM, and its system comes from the UPN in the tag rather than from a register that never states one. Exto refuses an upload whose Discipline column carries a value outside its list."
+            example="TIT101-01, discipline I&C → FACILITIES MONITORING SYSTEM on system 101"
+          >
+            <label className="inline-field">
+              <input
+                type="checkbox"
+                data-testid="apply-ic-discipline-rule"
+                checked={resolver.applyIcDisciplineRule}
+                onChange={(event): void => {
+                  setResolver({ applyIcDisciplineRule: event.target.checked });
+                }}
+              />
+              <span>Apply the I&amp;C rule when the model states that discipline</span>
+            </label>
+          </Field>
         </Panel>
       </div>
 
@@ -215,6 +235,34 @@ export function Screen5Resolver({ context }: { readonly context: WizardContext }
                 />
                 <Stat label="Conflicts" value={count(preview.data.conflictCount)} />
               </StatRow>
+
+              {preview.data.extoSystemName === null ? null : (
+                <>
+                  <h3 className="panel__subtitle">Approved Exto system names</h3>
+                  <StatRow>
+                    <Stat
+                      label="Named exactly"
+                      value={count(preview.data.extoSystemName.exactCount)}
+                      hint="the description already matches an approved name"
+                    />
+                    <Stat
+                      label="Named by unique UPN"
+                      value={count(preview.data.extoSystemName.uniqueUpnCount)}
+                      hint="the UPN owns one name and you allowed it"
+                    />
+                    <Stat
+                      label="Description mismatch"
+                      value={count(preview.data.extoSystemName.mismatchCount)}
+                      hint="approved UPN, unrecognised words"
+                    />
+                    <Stat
+                      label="UPN not in the list"
+                      value={count(preview.data.extoSystemName.unknownCount)}
+                      hint="no approved name belongs to it"
+                    />
+                  </StatRow>
+                </>
+              )}
 
               <RungUsageTable
                 title="Which source answered for the key"
@@ -351,6 +399,12 @@ function defaultComponent(kind: WireSystemComponent['kind']): WireSystemComponen
       return { kind, property: { category: '', name: 'System' } };
     case 'composite':
       return { kind, template: '{Area}-{SystemCode}' };
+    case 'upn-from-tag':
+      return { kind };
+    case 'exto-system-name':
+      // Off by default: taking a UPN's only approved name without a description
+      // that agrees is a real inference, and it should be a decision.
+      return { kind, allowUniqueUpn: false, descriptionProperty: null };
     case 'manual':
       return { kind };
     default: {
@@ -613,6 +667,39 @@ function ComponentBody({
               onChange({ ...component, template: event.target.value });
             }}
           />
+        </div>
+      );
+
+    case 'upn-from-tag':
+      return (
+        <p className="chain__what">
+          Reads the approved Exto UPN out of the tag itself — MAH101-01 and VFD101-01 both give
+          101. Needs no tag anatomy. It answers only when the tag carries exactly one approved
+          UPN; a tag carrying two names two real systems, and this will not choose between them.
+        </p>
+      );
+
+    case 'exto-system-name':
+      return (
+        <div className="chain__body">
+          <p className="chain__what">
+            Looks the System Key and its description up in the approved Exto list and writes the
+            spelling the upload template accepts. Put it above the MEL lookup: whatever it
+            cannot name approvingly falls through to your own words.
+          </p>
+          <label className="inline-field">
+            <input
+              type="checkbox"
+              data-testid="allow-unique-upn"
+              checked={component.allowUniqueUpn}
+              onChange={(event): void => {
+                onChange({ ...component, allowUniqueUpn: event.target.checked });
+              }}
+            />
+            <span>
+              Accept a UPN&apos;s only approved name when the description does not match
+            </span>
+          </label>
         </div>
       );
 

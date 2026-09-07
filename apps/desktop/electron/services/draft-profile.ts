@@ -46,6 +46,7 @@ import type {
   WirePropertyMappings,
   WirePropertyRef,
   WireSourceAssignmentRule,
+  WireSystemComponent,
   WireSystemResolver,
   WireTagAnatomy,
 } from '../../shared/schemas.js';
@@ -163,6 +164,10 @@ export function emptyDraft(name: string): WireDraftProfile {
       normalization: [],
       conflictPolicy: 'review',
       labelTemplate: '',
+      // On for a project nobody has published yet: it is what the SSM SOP says,
+      // and there is no stored register for it to move anything in. A profile
+      // lifted from a revision gets the opposite default, below.
+      applyIcDisciplineRule: true,
     },
     // The sections that used to be the project `config` table's. A new profile
     // starts from the default level preset (P0-5) and the full ladder, because
@@ -457,6 +462,40 @@ export function toTagAnatomy(wire: WireTagAnatomy): TagAnatomyConfig | null {
 }
 
 /** `null` when the key chain is empty — nothing to resolve a system from. */
+/**
+ * One rung as the domain takes it.
+ *
+ * Only `exto-system-name` needs lifting: the wire spells "read the description
+ * the chain already found" as `descriptionProperty: null`, because the config
+ * table stores canonical JSON and an absent key round-trips as a null. Under
+ * `exactOptionalPropertyTypes` an explicit `undefined` is not an absent key, so
+ * the property is added or not added rather than set to undefined.
+ */
+function toSystemComponent(wire: WireSystemComponent): SystemComponentConfig {
+  if (wire.kind !== 'exto-system-name') {
+    return wire;
+  }
+  return {
+    kind: 'exto-system-name',
+    allowUniqueUpn: wire.allowUniqueUpn,
+    ...(wire.descriptionProperty === null
+      ? {}
+      : { descriptionProperty: toPropertyRef(wire.descriptionProperty) }),
+  };
+}
+
+/** The same rung on the way back out to the wizard. */
+function toWireComponent(component: SystemComponentConfig): WireSystemComponent {
+  if (component.kind !== 'exto-system-name') {
+    return component;
+  }
+  return {
+    kind: 'exto-system-name',
+    allowUniqueUpn: component.allowUniqueUpn,
+    descriptionProperty: component.descriptionProperty ?? null,
+  };
+}
+
 export function toSystemResolver(wire: WireSystemResolver): SystemResolverConfig | null {
   if (wire.keyChain.length === 0) {
     return null;
@@ -468,11 +507,13 @@ export function toSystemResolver(wire: WireSystemResolver): SystemResolverConfig
     normalization: readonly NormalizationStep[];
     conflictPolicy: 'review' | 'precedence';
     labelTemplate?: string;
+    applyIcDisciplineRule: boolean;
   } = {
-    keyChain: [...wire.keyChain],
-    descriptionChain: [...wire.descriptionChain],
+    keyChain: wire.keyChain.map(toSystemComponent),
+    descriptionChain: wire.descriptionChain.map(toSystemComponent),
     normalization: [...wire.normalization],
     conflictPolicy: wire.conflictPolicy,
+    applyIcDisciplineRule: wire.applyIcDisciplineRule,
   };
 
   if (wire.labelTemplate.length > 0) {
@@ -819,11 +860,15 @@ export function fromSiteProfile(profile: SiteProfileV2): WireDraftProfile {
       resolver === undefined
         ? base.systemResolver
         : {
-            keyChain: [...resolver.keyChain],
-            descriptionChain: [...resolver.descriptionChain],
+            keyChain: resolver.keyChain.map(toWireComponent),
+            descriptionChain: resolver.descriptionChain.map(toWireComponent),
             normalization: [...resolver.normalization],
             conflictPolicy: resolver.conflictPolicy,
             labelTemplate: resolver.labelTemplate ?? '',
+            // Absent means off, and a stored revision written before the rule
+            // existed states nothing. Reopening a published project must not
+            // change what its next compile decides.
+            applyIcDisciplineRule: resolver.applyIcDisciplineRule ?? false,
           },
     derivedAttributes: profile.derivedAttributes.map((definition) => ({
       attributeId: definition.attributeId,

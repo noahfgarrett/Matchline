@@ -88,6 +88,8 @@ const COMPONENT_KINDS = [
   'mel-lookup',
   'direct-column',
   'composite',
+  'upn-from-tag',
+  'exto-system-name',
   'manual',
 ] as const satisfies ReadonlyArray<SystemComponentConfig['kind']>;
 
@@ -351,6 +353,33 @@ function readSystemComponent(value: unknown, field: string): SystemComponentConf
       };
     case 'composite':
       return { kind, template: requireStringAt(record['template'], `${field}.template`, fail) };
+    case 'upn-from-tag':
+      return { kind };
+    case 'exto-system-name': {
+      const component: {
+        kind: 'exto-system-name';
+        allowUniqueUpn: boolean;
+        descriptionProperty?: PropertyRef;
+      } = {
+        kind,
+        allowUniqueUpn: requireBooleanAt(
+          record['allowUniqueUpn'],
+          `${field}.allowUniqueUpn`,
+          fail,
+        ),
+      };
+      // Absent and `null` are the same decision — "read the description the
+      // chain already found" — and canonical JSON round-trips an absent
+      // optional as neither, so both have to be accepted here.
+      const property = record['descriptionProperty'];
+      if (property !== undefined && property !== null) {
+        component.descriptionProperty = readPropertyRef(
+          property,
+          `${field}.descriptionProperty`,
+        );
+      }
+      return component;
+    }
     case 'manual':
       return { kind };
     default: {
@@ -373,6 +402,7 @@ function readSystemResolver(value: unknown, field: string): SystemResolverConfig
     normalization: ReadonlyArray<NormalizationStep>;
     conflictPolicy: 'review' | 'precedence';
     labelTemplate?: string;
+    applyIcDisciplineRule?: boolean;
   } = {
     keyChain: readChain(record['keyChain'], `${field}.keyChain`),
     descriptionChain: readChain(record['descriptionChain'], `${field}.descriptionChain`),
@@ -394,6 +424,17 @@ function readSystemResolver(value: unknown, field: string): SystemResolverConfig
   );
   if (labelTemplate !== undefined) {
     resolver.labelTemplate = labelTemplate;
+  }
+  // Absent is the reading a profile written before the rule existed needs, and
+  // it is the reading the engine gives an absent flag: off. Stated, it is
+  // stored as stated — a validator does not decide a site's rules for it.
+  const applyIcDisciplineRule = record['applyIcDisciplineRule'];
+  if (applyIcDisciplineRule !== undefined) {
+    resolver.applyIcDisciplineRule = requireBooleanAt(
+      applyIcDisciplineRule,
+      `${field}.applyIcDisciplineRule`,
+      fail,
+    );
   }
   return resolver;
 }

@@ -43,16 +43,18 @@
  *
  * ## Values are otherwise verbatim
  *
- * Nothing here trims to a new spelling, pads, or upper-cases. The only
+ * Nothing here trims to a new spelling, pads, or upper-cases on its own. The
  * transforms are the ones the column list itself calls for: the dependency
- * join, the two `'N/A'` renderings, and the CA_*→VF_* item-master normalization
- * the caller opts into by supplying a vocabulary.
+ * join, the two `'N/A'` renderings, the CA_*→VF_* item-master normalization the
+ * caller opts into by supplying a vocabulary, and — also opt-in — the approved
+ * spelling of a dropdown-backed cell (see {@link ExtoCanonicalize}). Every one
+ * of them is a decision the caller made out loud; the default is verbatim.
  */
 
 import { writeWorkbook } from '@matchline/spreadsheet-import';
 
 import type { ExtoAsset } from './asset.js';
-import type { ExtoCells } from './columns.js';
+import type { ExtoCells, ExtoField } from './columns.js';
 import { extoCellRow, extoHeaderRow, extoSpacerRow } from './columns.js';
 import type { ItemMasterNormalization } from './itemmasters.js';
 import { describeItemMasterNormalization } from './itemmasters.js';
@@ -99,7 +101,49 @@ export interface ExtoRow extends ExtoCells {
    * did not.
    */
   readonly itemMasterNormalization: ItemMasterNormalization;
+  /**
+   * Which dropdown-backed cells this row prints in the approved spelling rather
+   * than the one the source used.
+   *
+   * Always present, empty when no canonicaliser was supplied or nothing
+   * matched. Sorted in {@link EXTO_DROPDOWN_FIELDS} order, so two runs over the
+   * same register produce the same list — the row is part of a byte-stable
+   * export and a set iterated in insertion order would not be.
+   */
+  readonly canonicalizedFields: ReadonlyArray<ExtoDropdownField>;
 }
+
+/**
+ * The five Rev21 columns Exto validates against a fixed dropdown.
+ *
+ * Item Master is deliberately not one: it has its own normalization layer
+ * (`itemmasters.ts`), which reports what it did and why, and a second one
+ * rewriting the same cell would leave two answers for one column.
+ */
+export const EXTO_DROPDOWN_FIELDS = [
+  'upn',
+  'discipline',
+  'wbs',
+  'systemName',
+  'equipmentClassification',
+] as const satisfies ReadonlyArray<ExtoField>;
+
+/** One of {@link EXTO_DROPDOWN_FIELDS}. */
+export type ExtoDropdownField = (typeof EXTO_DROPDOWN_FIELDS)[number];
+
+/**
+ * The approved spelling of one dropdown value, or `''` when there is none.
+ *
+ * Supplied by the caller rather than imported, and not because it is
+ * configurable — the approved list is a published standard and this package
+ * would use it directly if it could. It cannot: `@matchline/ssm-audit` vendors
+ * that list and already depends on this package, so importing it back would
+ * close a cycle. The callers hand over `extoRev21Canonical` from
+ * `@matchline/ssm-audit/exto`, and the SSM Audit's OWN row builder deliberately
+ * does not — it must judge the register as written, not as this package could
+ * have written it.
+ */
+export type ExtoCanonicalize = (field: ExtoDropdownField, value: string) => string;
 
 /** Options for {@link buildExtoRows}. */
 export interface BuildExtoRowsOptions {
@@ -121,6 +165,17 @@ export interface BuildExtoRowsOptions {
    * every master is printed as stated: an empty vocabulary means no guessing.
    */
   readonly itemMasterVocabulary?: ReadonlyArray<string>;
+  /**
+   * The approved spelling for a dropdown-backed cell.
+   *
+   * Supplied, a value that matches an approved one case- and
+   * whitespace-insensitively is printed the way the template spells it, so
+   * `medium voltage` reaches Exto as `Medium Voltage`. A value that matches
+   * nothing is printed exactly as it arrived — this rewrites spellings, it does
+   * not correct data, and a site's own word for something is a fact about the
+   * site rather than a typo to fix. Omitted, no cell is touched.
+   */
+  readonly canonicalize?: ExtoCanonicalize;
 }
 
 /**
@@ -138,8 +193,23 @@ export function buildExtoRows(
   const registerBlanks = options.registerBlanks ?? 'blank';
   const vocabulary = options.itemMasterVocabulary ?? [];
   return assets
-    .map((asset) => toRow(asset, rootsAttachToSystem, registerBlanks, vocabulary))
+    .map((asset) =>
+      toRow(asset, rootsAttachToSystem, registerBlanks, vocabulary, options.canonicalize),
+    )
     .sort(compareRows);
+}
+
+/**
+ * How many cells across a set of rows print an approved spelling.
+ *
+ * The export's own accounting: "6 cells now spell what the template spells" is
+ * something a person can check, and a rewrite nobody counted is a rewrite
+ * nobody can audit.
+ */
+export function countCanonicalizedCells(rows: ReadonlyArray<ExtoRow>): number {
+  let total = 0;
+  for (const row of rows) total += row.canonicalizedFields.length;
+  return total;
 }
 
 function toRow(
@@ -147,25 +217,48 @@ function toRow(
   rootsAttachToSystem: boolean,
   registerBlanks: ExtoRegisterBlanks,
   vocabulary: ReadonlyArray<string>,
+  canonicalize: ExtoCanonicalize | undefined,
 ): ExtoRow {
   const normalization = describeItemMasterNormalization(asset.itemMaster, vocabulary);
-  return {
+  const dropdown: Record<ExtoDropdownField, string> = {
     upn: clean(asset.systemKey),
+    discipline: clean(asset.ssmDiscipline),
+    wbs: clean(asset.wbs),
+    systemName: clean(asset.systemLabel),
+    equipmentClassification: clean(asset.equipmentClass),
+  };
+  const canonicalizedFields: ExtoDropdownField[] = [];
+  if (canonicalize !== undefined) {
+    for (const field of EXTO_DROPDOWN_FIELDS) {
+      const stated = dropdown[field];
+      if (stated === '') continue;
+      const approved = canonicalize(field, stated);
+      // `''` is "no approved value matches"; an approved value identical to
+      // what the source already wrote is not a rewrite and is not counted.
+      if (approved === '' || approved === stated) continue;
+      dropdown[field] = approved;
+      canonicalizedFields.push(field);
+    }
+  }
+
+  return {
+    upn: dropdown.upn,
     equipmentId: clean(asset.canonicalTag),
     closestParent: closestParentOf(asset, rootsAttachToSystem, registerBlanks),
     milestone: clean(asset.milestoneLabel),
     itemMaster: normalization.output,
-    equipmentClassification: clean(asset.equipmentClass),
+    equipmentClassification: dropdown.equipmentClassification,
     dependencies: registerDisplayValue(joinDependencies(asset.dependencyTags), registerBlanks),
     building: clean(asset.building),
     level: clean(asset.level),
     grid: clean(asset.grid),
-    discipline: clean(asset.ssmDiscipline),
-    wbs: clean(asset.wbs),
-    systemName: clean(asset.systemLabel),
+    discipline: dropdown.discipline,
+    wbs: dropdown.wbs,
+    systemName: dropdown.systemName,
     manufacturer: clean(asset.manufacturer),
     modelNumber: clean(asset.modelNumber),
     itemMasterNormalization: normalization,
+    canonicalizedFields,
   };
 }
 

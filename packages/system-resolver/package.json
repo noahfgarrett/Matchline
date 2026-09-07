@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@matchline/domain": "0.1.0",
+    "@matchline/ssm-audit": "0.1.0",
     "@matchline/tag-anatomy": "0.1.0"
   }
 }

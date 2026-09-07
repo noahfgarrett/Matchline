@@ -48,6 +48,7 @@
  */
 import type { SystemResolution } from '@matchline/domain';
 import type { ModelAsset } from '@matchline/asset-catalog';
+import { extoRev21EffectiveDiscipline, extoRev21UpnCandidates } from '@matchline/ssm-audit/exto';
 
 import type { DerivedAttributeValue, SsmDisciplineProjection } from './types.js';
 
@@ -68,17 +69,42 @@ export const ATTRIBUTE_KEYS = [
 export type AttributeKey = (typeof ATTRIBUTE_KEYS)[number];
 
 /**
+ * What the SSM SOP calls an I&C asset's discipline.
+ *
+ * Not a Matchline decision: `extoRev21EffectiveDiscipline` is the vendored
+ * SSM-Audit rule, and this is the value it maps `I&C`, `I & C`,
+ * `Instrumentation` and `Instrumentation & Controls` onto.
+ */
+export const IC_SSM_DISCIPLINE = 'FACILITIES MONITORING SYSTEM';
+
+/** The provenance rule id every value the I&C rule decided carries. */
+export const IC_DISCIPLINE_RULE = 'ssm-audit:ic-discipline';
+
+/** Whether the SOP would read this native discipline as instrumentation. */
+function isInstrumentation(native: string): boolean {
+  return (
+    extoRev21EffectiveDiscipline(native) === IC_SSM_DISCIPLINE &&
+    native.trim().toUpperCase() !== IC_SSM_DISCIPLINE
+  );
+}
+
+/**
  * The SSM discipline for one asset.
  *
- * Three rules, in order:
+ * Four rules, in order:
  *
  * 1. No native discipline (absent, or blank once trimmed) -> no SSM discipline.
  *    Absent stays absent: the projection maps disciplines, it does not mint one.
- * 2. A projection entry -> that value. This is the only way an SSM discipline
- *    can differ from the native one, and it is always something a site wrote
- *    down (PRODUCT.md §11.3: `nativeDiscipline` and `ssmDiscipline` are separate
- *    fields, and the SSM one comes from profile projection rules).
- * 3. Otherwise -> the native discipline unchanged.
+ * 2. A projection entry -> that value. Something a site wrote down beats
+ *    everything below it (PRODUCT.md §11.3: `nativeDiscipline` and
+ *    `ssmDiscipline` are separate fields, and the SSM one comes from profile
+ *    projection rules).
+ * 3. `applyIcRule`, and a native discipline the SOP reads as instrumentation ->
+ *    {@link IC_SSM_DISCIPLINE}. The rule the SSM SOP states and Exto's
+ *    Discipline dropdown enforces: there is no `I&C` in the approved list, so a
+ *    register that prints one is an upload Exto refuses. Opt-in, because
+ *    turning it on moves assets between disciplines.
+ * 4. Otherwise -> the native discipline unchanged.
  *
  * A projection entry that maps to a blank string yields no value rather than an
  * empty one, because a blank at a boundary would be unknown wearing a value's
@@ -87,17 +113,48 @@ export type AttributeKey = (typeof ATTRIBUTE_KEYS)[number];
 export function ssmDisciplineOf(
   nativeDiscipline: string | undefined,
   projection?: SsmDisciplineProjection,
+  applyIcRule = false,
 ): string | undefined {
   const native = nativeDiscipline?.trim();
   if (native === undefined || native === '') {
     return undefined;
   }
   const mapped = projection?.get(native);
-  if (mapped === undefined) {
-    return native;
+  if (mapped !== undefined) {
+    const trimmed = mapped.trim();
+    return trimmed === '' ? undefined : trimmed;
   }
-  const trimmed = mapped.trim();
-  return trimmed === '' ? undefined : trimmed;
+  if (applyIcRule && isInstrumentation(native)) {
+    return IC_SSM_DISCIPLINE;
+  }
+  return native;
+}
+
+/**
+ * The UPN an I&C asset carries in its own tag.
+ *
+ * The other half of the SOP's instrumentation rule. An I&C register does not
+ * state a system: the transmitter, the panel and the controller all belong to
+ * whatever they monitor, and the only place that is written down is the tag --
+ * `TIT101-01` is on system 101. So when the rule is on and the asset is
+ * instrumentation, the approved UPN in the tag is the system key, ahead of
+ * anything the resolver chain settled.
+ *
+ * `undefined` unless the tag yields exactly one approved UPN. Zero says the tag
+ * does not carry one; several says it carries two real systems, and picking
+ * between them is not something a projection gets to do.
+ */
+export function icSystemKeyOf(
+  canonicalTag: string,
+  nativeDiscipline: string | undefined,
+  applyIcRule: boolean,
+): string | undefined {
+  const native = nativeDiscipline?.trim();
+  if (!applyIcRule || native === undefined || native === '' || !isInstrumentation(native)) {
+    return undefined;
+  }
+  const candidates = extoRev21UpnCandidates(canonicalTag);
+  return candidates.length === 1 ? candidates[0] : undefined;
 }
 
 /** Adds an entry only when the value says something. */
@@ -130,6 +187,7 @@ export function attributesFor(
   resolution: SystemResolution | null,
   projection?: SsmDisciplineProjection,
   derived: ReadonlyArray<DerivedAttributeValue> = [],
+  applyIcRule = false,
 ): ReadonlyMap<string, string> {
   const attributes = new Map<string, string>();
 
@@ -138,7 +196,11 @@ export function attributesFor(
   put(attributes, 'equipmentType', asset.equipmentType);
   put(attributes, 'building', asset.building);
   put(attributes, 'nativeDiscipline', asset.nativeDiscipline);
-  put(attributes, 'ssmDiscipline', ssmDisciplineOf(asset.nativeDiscipline, projection));
+  put(
+    attributes,
+    'ssmDiscipline',
+    ssmDisciplineOf(asset.nativeDiscipline, projection, applyIcRule),
+  );
 
   if (resolution !== null) {
     put(attributes, 'systemKey', resolution.systemKey);

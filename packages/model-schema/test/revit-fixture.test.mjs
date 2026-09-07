@@ -6,7 +6,8 @@ import test, { after, before } from 'node:test';
 
 import { openExtractionCache } from '../dist/index.js';
 import {
-  REVIT_MARKS,
+  REVIT_ALL_MARKS,
+  REVIT_IC_MARKS,
   REVIT_MARK_PROPERTY,
   writeRevitShapedFixture,
 } from '../dist/fixtures/revit.js';
@@ -39,9 +40,10 @@ after(() => {
   }
 });
 
-test('three files, one of them another building', () => {
+test('four files: two buildings, and a controls package on the approved standard', () => {
   const names = cache.sourceModels().map((model) => model.fileName).sort();
   assert.deepEqual(names, [
+    'B14-Controls.nwc',
     'B14-Electrical.nwc',
     'B14-Mechanical.nwc',
     'B22-Mechanical.nwc',
@@ -60,11 +62,25 @@ test('the mark is on roughly a twelfth of the objects, which is the point', () =
     }
   }
 
-  assert.deepEqual(marks, [...REVIT_MARKS]);
-  assert.equal(marks.length, 12);
-  assert.equal(cache.objectCount(), 148);
+  assert.deepEqual(marks, [...REVIT_ALL_MARKS]);
+  assert.equal(marks.length, 18);
+  assert.equal(cache.objectCount(), 180);
   const share = marks.length / cache.objectCount();
-  assert.ok(share > 0.07 && share < 0.09, `mark coverage is ${String(share)}`);
+  assert.ok(share > 0.08 && share < 0.12, `mark coverage is ${String(share)}`);
+});
+
+test('the controls package states I&C, which the approved Exto list does not carry', () => {
+  const marksByObject = new Map();
+  const disciplineByObject = new Map();
+  for (const row of cache.allProperties()) {
+    if (row.category !== 'Element' || !row.valueText) continue;
+    if (row.name === 'Mark') marksByObject.set(row.objectId, row.valueText);
+    if (row.name === 'Discipline') disciplineByObject.set(row.objectId, row.valueText);
+  }
+
+  const stated = [...disciplineByObject.keys()].map((id) => marksByObject.get(id));
+  assert.deepEqual(stated.sort(), [...REVIT_IC_MARKS].sort(), 'only the controls package');
+  assert.ok([...disciplineByObject.values()].every((value) => value === 'I&C'));
 });
 
 test('nothing in it is called Building', () => {
@@ -108,8 +124,10 @@ test('equipment is published inside equipment, which is what nests', () => {
     ['AHU-1', 'P101'],
     ['AHU-2', 'P102'],
     ['AHU-3', 'P103'],
+    ['LCP101-01', 'TIT101-01'],
     ['MCC-2A', 'VFD-2A-1'],
     ['MCC-2A', 'VFD-2A-2'],
+    ['PLC101-01', 'LCP101-01'],
   ]);
 });
 

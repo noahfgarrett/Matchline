@@ -7,16 +7,19 @@ import {
   assignItemMasters,
   assignWbs,
   buildExtoRows,
+  countCanonicalizedCells,
   validateExtoTemplate,
   validateItemMasterTable,
   validateWbsTable,
   writeExtoWorkbook,
   type ExtoAsset,
+  type ExtoDropdownField,
   type ExtoTemplate,
   type ItemMasterAsset,
   type ItemMasterTable,
   type WbsTable,
 } from '@matchline/exto-export';
+import { extoRev21Canonical } from '@matchline/ssm-audit/exto';
 import {
   classifyDescription,
   validateLearnedRuleSet,
@@ -425,11 +428,22 @@ export function exportExto(
     return built;
   });
 
-  const options: { itemMasterVocabulary?: ReadonlyArray<string> } = {};
+  const options: {
+    itemMasterVocabulary?: ReadonlyArray<string>;
+    canonicalize: (field: ExtoDropdownField, value: string) => string;
+  } = {
+    // The delivered sheet is the one place the approved spelling matters, so it
+    // is the one place the canonicaliser is supplied. `@matchline/ssm-audit`'s
+    // own row builder deliberately does not: the audit has to see the register
+    // as it stands, and auditing a copy this export had already corrected would
+    // report a site as compliant because of what happened on the way out.
+    canonicalize: extoRev21Canonical,
+  };
   if (itemMasterTable !== null && itemMasterTable.vocabulary.length > 0) {
     options.itemMasterVocabulary = itemMasterTable.vocabulary;
   }
   const rows = buildExtoRows(extoAssets, options);
+  const canonicalizedCells = countCanonicalizedCells(rows);
 
   const assignedItemMasters = counts.modelItemMaster + counts.learnedItemMaster;
   const itemMasterNote =
@@ -452,6 +466,12 @@ export function exportExto(
       : ` ${count(counts.learnedClassification, 'classification', 'classifications')} came from ` +
         'the learned description table.';
 
+  const canonicalNote =
+    canonicalizedCells === 0
+      ? ''
+      : ` ${count(canonicalizedCells, 'cell was', 'cells were')} rewritten to the approved ` +
+        'Exto spelling.';
+
   const layoutNote =
     template === null
       ? "Matchline's own Rev21 columns"
@@ -466,7 +486,7 @@ export function exportExto(
   return write(
     absolutePath,
     writeExtoWorkbook(rows, writeOptions),
-    `${count(rows.length, 'row', 'rows')} on ${layoutNote}. ${itemMasterNote}${wbsNote}${classificationNote} ` +
+    `${count(rows.length, 'row', 'rows')} on ${layoutNote}. ${itemMasterNote}${wbsNote}${classificationNote}${canonicalNote} ` +
       'No P6 schedule is loaded, so the milestone column is blank.' +
       (project.stats.assetCount === rows.length ? '' : ' Some assets produced no row.'),
   );

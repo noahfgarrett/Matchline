@@ -9,10 +9,14 @@
  * says almost none of that:
  *
  * - the equipment tag is `Element > Mark`, and only equipment carries one —
- *   here 12 of 148 objects, which is the 8% a real mechanical model runs at,
- *   because ducts, pipes and cable trays are the rest of the file;
- * - marks are `AHU-1`, `P101`, `MCC-2A`, `VFD-2A-1` — a role and a number, with
- *   no system segment anywhere in them;
+ *   here 18 of 178 objects, which is the ~10% a real MEP federation runs at,
+ *   because ducts, pipes, conduit and cable trays are the rest of the file;
+ * - the MEP marks are `AHU-1`, `P101`, `MCC-2A`, `VFD-2A-1` — a role and a
+ *   number, with no system segment anywhere in them. The CONTROLS package is
+ *   the other half: `MAH101-01`, `TIT101-01`, `VFD101-01`, marks carrying the
+ *   approved Exto UPN, and `Element > Discipline` saying `I&C`. One federation
+ *   where half the tags can be read against the approved list and half cannot
+ *   is what a site part-way onto the standard actually looks like;
  * - nothing is called Building. The building is in the FILE NAME
  *   (`B14-Mechanical.nwc`), and the closest properties are `Level` (`L01`,
  *   which repeats in every building) and `Workset` (`B14 - Mechanical`);
@@ -53,18 +57,26 @@ const REVIT_META: readonly (readonly [string, string])[] = [
 const SOURCE_MODEL_B14_MECHANICAL = 1;
 const SOURCE_MODEL_B14_ELECTRICAL = 2;
 const SOURCE_MODEL_B22_MECHANICAL = 3;
+const SOURCE_MODEL_B14_CONTROLS = 4;
 
 /** The source model ids, published so a split or a rule can name one. */
 export const REVIT_SOURCE_MODEL_IDS = {
   b14Mechanical: SOURCE_MODEL_B14_MECHANICAL,
   b14Electrical: SOURCE_MODEL_B14_ELECTRICAL,
   b22Mechanical: SOURCE_MODEL_B22_MECHANICAL,
+  b14Controls: SOURCE_MODEL_B14_CONTROLS,
 } as const;
 
 /** The category and name a Revit export writes the equipment tag under. */
 export const REVIT_MARK_PROPERTY = { category: 'Element', name: 'Mark' } as const;
 
-/** Every mark this fixture writes, in the order the walk emits them. */
+/**
+ * The architectural and MEP marks, in the order the walk emits them.
+ *
+ * Role and number, no system anywhere in them. This is the shape the audit
+ * found the engine mishandling, and it stays exactly as it was: `inferAnatomy`
+ * over this list must keep teaching no `system` segment.
+ */
 export const REVIT_MARKS: readonly string[] = [
   'AHU-1',
   'P101',
@@ -79,6 +91,32 @@ export const REVIT_MARKS: readonly string[] = [
   'AHU-3',
   'P103',
 ];
+
+/**
+ * The controls package's marks: the same federation, on the approved standard.
+ *
+ * A site that has been mapped onto the VF Exto template writes the UPN into the
+ * mark — `MAH101-01` is on system 101, and so are `VFD101-01`, `PLC101-01`,
+ * `LCP101-01` and `TIT101-01`. `P102-01` is on 102. That is Noah's directive
+ * made concrete, and it is the half of a real federation the approved-UPN rung
+ * can read; the twelve marks above are the half it cannot, which is why both
+ * are in one fixture rather than two.
+ *
+ * Kept as its own list so the anatomy inference over {@link REVIT_MARKS} is
+ * unchanged: mixing these in would teach a `system` segment and the finding
+ * that says a Revit mark carries none would stop being tested.
+ */
+export const REVIT_IC_MARKS: readonly string[] = [
+  'MAH101-01',
+  'P102-01',
+  'PLC101-01',
+  'LCP101-01',
+  'TIT101-01',
+  'VFD101-01',
+];
+
+/** Every mark the fixture writes, in walk order. */
+export const REVIT_ALL_MARKS: readonly string[] = [...REVIT_MARKS, ...REVIT_IC_MARKS];
 
 /* --------------------------------------------------------------- the content */
 
@@ -221,6 +259,15 @@ const REVIT_SOURCE_MODELS: readonly FixtureSourceModel[] = [
     sourceFileName: 'B22-Mechanical.rvt',
     sourceGuid: guidFor(2103),
   },
+  {
+    id: SOURCE_MODEL_B14_CONTROLS,
+    parentId: null,
+    fileName: 'B14-Controls.nwc',
+    displayName: 'B14 Controls',
+    guid: guidFor(2004),
+    sourceFileName: 'B14-Controls.rvt',
+    sourceGuid: guidFor(2104),
+  },
 ];
 
 /** One piece of tagged equipment, as Revit would have published it. */
@@ -236,6 +283,14 @@ interface EquipmentSpec {
   readonly description: string;
   /** Equipment this one sits INSIDE in the model tree, by mark. */
   readonly insideMark?: string;
+  /**
+   * `Element > Discipline`, when the package states one.
+   *
+   * Only the controls file does. A Revit MEP model routinely publishes no such
+   * parameter at all, which is why the other three files carry none and the
+   * building has to come off the file name.
+   */
+  readonly discipline?: string;
 }
 
 /** One run of duct, pipe or tray: no mark, and most of the file by count. */
@@ -335,6 +390,35 @@ function driveIn(mark: string): EquipmentSpec {
     model: 'IL-VFD30',
     description: `Variable frequency drive in ${MCC_2A.mark}`,
     insideMark: MCC_2A.mark,
+  };
+}
+
+/**
+ * The controls package, whose marks carry the approved UPN.
+ *
+ * `Element > Discipline` says `I&C` on every one of them — the discipline the
+ * approved Exto list does not contain, and which the SSM SOP reads as
+ * FACILITIES MONITORING SYSTEM on the system its own tag names.
+ */
+function icDevice(
+  mark: string,
+  family: string,
+  typeName: string,
+  description: string,
+  insideMark?: string,
+): EquipmentSpec {
+  return {
+    mark,
+    category: 'Specialty Equipment',
+    family,
+    typeName,
+    systemClassification: 'Controls',
+    systemName: 'Building Automation',
+    manufacturer: 'Meridian Controls',
+    model: 'MC-100',
+    description,
+    discipline: 'I&C',
+    ...(insideMark === undefined ? {} : { insideMark }),
   };
 }
 
@@ -483,6 +567,41 @@ const FILES: readonly FileSpec[] = [
             systemClassification: 'Hydronic Supply',
             systemName: 'Hydronic Supply 3',
             count: 12,
+          },
+        ],
+      },
+    ],
+  },
+  {
+    sourceModelId: SOURCE_MODEL_B14_CONTROLS,
+    fileName: 'B14-Controls.nwc',
+    workset: 'B14 - Controls',
+    levels: [
+      {
+        level: 'L01',
+        equipment: [
+          icDevice('MAH101-01', 'Air Handling Unit', 'MAH 20k CFM', 'Cleanroom makeup air unit'),
+          icDevice('P102-01', 'Pump', 'End Suction 80 GPM', 'Process cooling water pump'),
+          icDevice('PLC101-01', 'Controller', 'PLC Rack', 'Programmable controller for MAH101-01'),
+          icDevice('LCP101-01', 'Control Panel', 'LCP 24V', 'Local control panel', 'PLC101-01'),
+          icDevice(
+            'TIT101-01',
+            'Transmitter',
+            'TIT 4-20mA',
+            'Supply air temperature transmitter',
+            'LCP101-01',
+          ),
+          icDevice('VFD101-01', 'Variable Frequency Drive', 'VFD 40HP', 'Supply fan drive'),
+        ],
+        runs: [
+          {
+            namePrefix: 'Conduit',
+            category: 'Conduits',
+            family: 'Conduit with Fittings',
+            typeName: 'EMT',
+            systemClassification: 'Controls',
+            systemName: 'Building Automation',
+            count: 18,
           },
         ],
       },
@@ -637,6 +756,9 @@ function buildRevitContent(): FixtureContent {
           systemName: spec.systemName,
         });
         addProperty(equipment.id, 'Element', 'Mark', spec.mark);
+        if (spec.discipline !== undefined) {
+          addProperty(equipment.id, 'Element', 'Discipline', spec.discipline);
+        }
         addProperty(equipment.id, 'Element', 'Comments', 'Coordinate with the controls package');
         addProperty(equipment.id, 'Revit Type', 'Type Name', spec.typeName);
         addProperty(equipment.id, 'Revit Type', 'Manufacturer', spec.manufacturer);

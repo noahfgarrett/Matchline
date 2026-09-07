@@ -14,6 +14,8 @@
  */
 import { boundaryAttributeOf, unicodeFold } from '@matchline/domain';
 import type {
+  ApprovedValueCount,
+  ApprovedValueReport,
   CompletenessReport,
   HierarchyConfig,
   LadderSourceKind,
@@ -24,6 +26,13 @@ import type {
   SsmRelationshipClaim,
   UnresolvedSystemCount,
 } from '@matchline/domain';
+import {
+  extoRev21Canonical,
+  extoRev21IsUpn,
+  extoRev21Norm,
+  extoRev21SystemsForUpn,
+  vfItemMasterKnown,
+} from '@matchline/ssm-audit/exto';
 import type { CompileSubject } from '@matchline/ssm-compiler';
 import type { ResolveSystemsResult, SkippedRung } from '@matchline/system-resolver';
 
@@ -41,6 +50,27 @@ export interface CompletenessInput {
   readonly structuralClaims: ReadonlyArray<SsmRelationshipClaim>;
   /** MEL rows that stated no tag, no key and no description (audit low finding). */
   readonly melRowsDropped: number;
+  /**
+   * The register as the EXTO sheet would print it, for the approved-value
+   * counts.
+   *
+   * The generated MEL assets, which is what the exporter flattens: reading the
+   * same values the sheet carries is the whole point -- a count taken off some
+   * other spelling would answer a question nobody asked.
+   */
+  readonly registerRows: ReadonlyArray<ApprovedValueRow>;
+}
+
+/** One register row, reduced to the five cells the approved lists judge. */
+export interface ApprovedValueRow {
+  readonly canonicalTag: string;
+  /** The resolved System Key. Exto's UPN column. */
+  readonly systemKey?: string;
+  /** The System Name the sheet prints: the resolution's label. */
+  readonly systemLabel?: string;
+  readonly ssmDiscipline?: string;
+  readonly equipmentClassification?: string;
+  readonly itemMaster?: string;
 }
 
 /** The report, plus the review items only this stage is in a position to raise. */
@@ -71,9 +101,22 @@ function states(subject: CompileSubject, attributeKey: string): boolean {
   return unicodeFold(value).trim() !== '';
 }
 
-/** One skipped rung, in the words the review item prints. */
+/**
+ * One skipped rung, in the words the review item prints.
+ *
+ * A vocabulary rung that refused because it could not choose names what it
+ * would have accepted: "the tag carries two approved UPNs" is a sentence a
+ * person can only act on once they can see which two. Every other rung has no
+ * candidates and prints exactly what it always did.
+ *
+ * Only key-chain rungs reach here, so an `exto-system-name` mismatch -- which
+ * is a description-chain rung on an asset that DOES have a key -- is not one of
+ * these. That fact has its own home: `approvedValues.systemNameNotApproved`.
+ */
 function describeRung(rung: SkippedRung): string {
-  return `${rung.chain}[${String(rung.rungIndex)}] ${rung.component} ${rung.reason}`;
+  const base = `${rung.chain}[${String(rung.rungIndex)}] ${rung.component} ${rung.reason}`;
+  const candidates = rung.candidates ?? [];
+  return candidates.length === 0 ? base : `${base} (${candidates.join(', ')})`;
 }
 
 /**
@@ -142,6 +185,128 @@ function demotionsOf(snapshot: ResolvedSnapshot): ReadonlyArray<LevelDemotionCou
     const byLevel = compareText(left.levelId, right.levelId);
     return byLevel !== 0 ? byLevel : compareText(left.ladderSource, right.ladderSource);
   });
+}
+
+/* ------------------------------------------- the approved VF Exto vocabulary */
+
+/**
+ * The SSM Audit rule that says the same thing about each count.
+ *
+ * Deliberate overlap, deliberately not duplicated: the numbers below are the
+ * build's own accounting and the audit is the reviewer's view of the same
+ * register. Naming the rule here is what lets screen 8 send somebody from a
+ * count to the findings that explain it, without this stage emitting a second
+ * queue of items saying what the audit already said.
+ */
+const APPROVED_VALUE_AUDIT_RULES = {
+  upnNotApproved: 'exto.upn-not-approved',
+  systemNameNotApproved: 'exto.system-name-not-approved',
+  disciplineNotApproved: 'exto.discipline-not-approved',
+  classificationNotInList: 'exto.classification-not-approved',
+  itemMasterNotVf: 'exto.item-master-not-vf',
+} as const;
+
+/** One count under construction: the total, and every tag that failed it. */
+interface TagGroup {
+  count: number;
+  readonly tags: string[];
+}
+
+function newTagGroup(): TagGroup {
+  return { count: 0, tags: [] };
+}
+
+function failed(group: TagGroup, canonicalTag: string): void {
+  group.count += 1;
+  if (canonicalTag !== '') {
+    group.tags.push(canonicalTag);
+  }
+}
+
+/**
+ * The count, and the ten lowest-sorting tags behind it.
+ *
+ * Sorted rather than first-seen. The same site split across three model files
+ * and federated into one produces the same register, and the two compiles read
+ * it in different orders; a report that named "the first ten" would then give
+ * two different answers about one project. Ten tags nobody can act on in a
+ * particular order is no loss, and an answer that changes with the file layout
+ * is a real one.
+ */
+function countOf(group: TagGroup, auditRuleId: string): ApprovedValueCount {
+  return {
+    assetCount: group.count,
+    exampleTags: [...group.tags].sort(compareText).slice(0, EXAMPLE_LIMIT),
+    auditRuleId,
+  };
+}
+
+/**
+ * Which register cells the approved VF Exto lists would refuse.
+ *
+ * A blank cell is never counted. Exto refuses a BLANK gating column too, but
+ * that is a different fact with a different fix, and `assetsWithoutSystem` and
+ * the level counts above already say it; folding the two together would make
+ * "nobody has taught the resolver yet" look like "your site uses a UPN the
+ * template has never heard of".
+ *
+ * The System Name test is per UPN, not against the whole list: `101  Cleanroom
+ * Makeup Air System` is an approved name, and it is approved for UPN 101 only.
+ * A row that carries it under UPN 205 is exactly the mistake this catches. A
+ * row whose UPN is itself unapproved is not counted here as well -- it is
+ * already counted once, and one wrong cell should not read as two.
+ */
+function approvedValuesOf(rows: ReadonlyArray<ApprovedValueRow>): ApprovedValueReport {
+  const upn = newTagGroup();
+  const systemName = newTagGroup();
+  const discipline = newTagGroup();
+  const classification = newTagGroup();
+  const itemMaster = newTagGroup();
+
+  for (const row of rows) {
+    const key = (row.systemKey ?? '').trim();
+    const upnApproved = key === '' || extoRev21IsUpn(key);
+    if (key !== '' && !upnApproved) {
+      failed(upn, row.canonicalTag);
+    }
+
+    const name = (row.systemLabel ?? '').trim();
+    if (name !== '' && key !== '' && upnApproved) {
+      const approved = extoRev21SystemsForUpn(key).map(extoRev21Norm);
+      if (!approved.includes(extoRev21Norm(name))) {
+        failed(systemName, row.canonicalTag);
+      }
+    }
+
+    const ssmDiscipline = (row.ssmDiscipline ?? '').trim();
+    if (ssmDiscipline !== '' && extoRev21Canonical('discipline', ssmDiscipline) === '') {
+      failed(discipline, row.canonicalTag);
+    }
+
+    const equipmentClass = (row.equipmentClassification ?? '').trim();
+    if (
+      equipmentClass !== '' &&
+      extoRev21Canonical('equipmentClassification', equipmentClass) === ''
+    ) {
+      failed(classification, row.canonicalTag);
+    }
+
+    const master = (row.itemMaster ?? '').trim();
+    if (master !== '' && !vfItemMasterKnown(master)) {
+      failed(itemMaster, row.canonicalTag);
+    }
+  }
+
+  return {
+    upnNotApproved: countOf(upn, APPROVED_VALUE_AUDIT_RULES.upnNotApproved),
+    systemNameNotApproved: countOf(systemName, APPROVED_VALUE_AUDIT_RULES.systemNameNotApproved),
+    disciplineNotApproved: countOf(discipline, APPROVED_VALUE_AUDIT_RULES.disciplineNotApproved),
+    classificationNotInList: countOf(
+      classification,
+      APPROVED_VALUE_AUDIT_RULES.classificationNotInList,
+    ),
+    itemMasterNotVf: countOf(itemMaster, APPROVED_VALUE_AUDIT_RULES.itemMasterNotVf),
+  };
 }
 
 /**
@@ -253,6 +418,7 @@ export function buildCompleteness(input: CompletenessInput): CompletenessResult 
       demotionsPerLevel: demotionsOf(snapshot),
       unresolvedSystemBySkipReason,
       melRowsDropped: input.melRowsDropped,
+      approvedValues: approvedValuesOf(input.registerRows),
     },
     reviewItems,
   };

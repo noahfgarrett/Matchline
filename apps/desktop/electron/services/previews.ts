@@ -223,6 +223,12 @@ export function describeComponent(component: SystemComponentConfig): string {
       return `Imported column "${component.property.category} > ${component.property.name}"`;
     case 'composite':
       return `Composite "${component.template}"`;
+    case 'upn-from-tag':
+      return 'Approved Exto UPN in the tag';
+    case 'exto-system-name':
+      return component.allowUniqueUpn
+        ? 'Approved Exto system name (unique UPN allowed)'
+        : 'Approved Exto system name';
     case 'manual':
       return 'Manual assignment';
     default: {
@@ -301,6 +307,14 @@ export function buildResolverPreview(
     tallies.set(key, tally);
   };
 
+  // What the approved-name rung made of each subject. Counted only when a chain
+  // actually carries one, so a project without it reports null rather than four
+  // zeroes — which would read as "nothing matched" instead of "nobody asked".
+  const hasExtoRung = [...config.keyChain, ...config.descriptionChain].some(
+    (component) => component.kind === 'exto-system-name',
+  );
+  const extoUsage = { exactCount: 0, uniqueUpnCount: 0, mismatchCount: 0, unknownCount: 0 };
+
   const samples: WireResolvedSample[] = [];
   const conflicts: WireSystemConflict[] = [];
   const unresolvedExamples: string[] = [];
@@ -319,6 +333,26 @@ export function buildResolverPreview(
     }
     for (const skipped of resolution.skippedRungs) {
       bump(skipped.chain, skipped.rungIndex, 'skippedCount');
+      if (skipped.component === 'exto-system-name') {
+        if (skipped.reason === 'description-mismatch') {
+          extoUsage.mismatchCount += 1;
+        } else if (skipped.reason === 'unknown-system') {
+          extoUsage.unknownCount += 1;
+        }
+      }
+    }
+    for (const claim of resolution.claims) {
+      if (claim.component !== 'exto-system-name') {
+        continue;
+      }
+      // The rung records WHICH of the two accepting outcomes it took on the
+      // claim's provenance; nothing else can tell an exact match from the
+      // inference the toggle allows.
+      if (claim.provenance.rule === 'exto-approved-list:unique-upn') {
+        extoUsage.uniqueUpnCount += 1;
+      } else {
+        extoUsage.exactCount += 1;
+      }
     }
     if (resolution.keyClaim !== null) {
       bump('keyChain', resolution.keyClaim.rungIndex, 'wonCount');
@@ -398,6 +432,7 @@ export function buildResolverPreview(
     samples,
     conflicts,
     unresolvedExamples,
+    extoSystemName: hasExtoRung ? extoUsage : null,
   };
 }
 

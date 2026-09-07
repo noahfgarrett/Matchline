@@ -65,6 +65,13 @@ export function Screen9Publish({
    * re-extracting the model that could not resolve it.
    */
   const [blockers, setBlockers] = useState<readonly WirePublishBlocker[]>([]);
+  /**
+   * What the last compile found that is worth seeing and does not stop a save.
+   *
+   * Same shape as a blocker, opposite decision — an unapproved System Name is
+   * an upload Exto accepts and a system nobody can find the equipment on.
+   */
+  const [warnings, setWarnings] = useState<readonly WirePublishBlocker[]>([]);
   const [attributes, setAttributes] = useState<readonly WireAttributeChoice[]>([]);
   /**
    * Whether the person has confirmed the boundary summary for THIS publish
@@ -108,6 +115,7 @@ export function Screen9Publish({
       const data = await call(window.matchline.profile.sections());
       setSections(data.sections);
       setBlockers(data.blockers);
+      setWarnings(data.warnings);
     } catch (caught: unknown) {
       setError(messageOf(caught));
     }
@@ -265,6 +273,16 @@ export function Screen9Publish({
           data-testid={`publish-blocker-${String(index)}`}
         >
           {blocker.message}
+        </Callout>
+      ))}
+
+      {warnings.map((warning: WirePublishBlocker, index: number): JSX.Element => (
+        <Callout
+          key={`${warning.kind}:${String(index)}`}
+          tone="warning"
+          data-testid={`publish-warning-${String(index)}`}
+        >
+          {warning.message}
         </Callout>
       ))}
 
@@ -441,13 +459,20 @@ export function Screen9Publish({
         </p>
         {blockers.length > 0 ? (
           <p className="muted" data-testid="publish-blocked-by-filter">
-            {blockers.length === 1
-              ? `Saving is off until the '${blockers[0]?.setName ?? ''}' filter is dealt with — ` +
-                'a profile that names an unresolved set cannot be compiled, so publishing it ' +
-                'would store a revision that never produces a register.'
-              : 'Saving is off until the filters named above are dealt with — a profile that ' +
-                'names an unresolved set cannot be compiled, so publishing it would store a ' +
-                'revision that never produces a register.'}
+            {blockers.every(
+              (blocker: WirePublishBlocker): boolean =>
+                blocker.kind !== 'unresolved-selection-set',
+            )
+              ? 'Saving is off until the register above is fixed — Exto validates those ' +
+                'columns against a fixed list and refuses a whole upload over one cell ' +
+                'outside it, so this profile would store a revision that cannot be delivered.'
+              : blockers.length === 1
+                ? `Saving is off until the '${blockers[0]?.setName ?? ''}' filter is dealt with — ` +
+                  'a profile that names an unresolved set cannot be compiled, so publishing it ' +
+                  'would store a revision that never produces a register.'
+                : 'Saving is off until the reasons named above are dealt with — a profile that ' +
+                  'names an unresolved set cannot be compiled, and a register Exto refuses ' +
+                  'cannot be delivered.'}
           </p>
         ) : boundariesConfirmed ? null : (
           <p className="muted" data-testid="publish-blocked">

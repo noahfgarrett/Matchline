@@ -144,7 +144,21 @@ export type SkipReason =
   /** A composite whose placeholders could not all be filled. */
   | 'placeholder-unfilled'
   /** The value was present but blank once trimmed. */
-  | 'blank-value';
+  | 'blank-value'
+  /** An `upn-from-tag` rung whose tag carries no approved UPN at all. */
+  | 'no-upn-candidate'
+  /**
+   * An `upn-from-tag` rung whose tag carries several approved UPNs. The rung
+   * refuses rather than takes the first: both are real systems.
+   */
+  | 'ambiguous-upn'
+  /**
+   * An `exto-system-name` rung whose UPN is approved but whose description
+   * reaches none of the UPN's approved System Names. `candidates` lists them.
+   */
+  | 'description-mismatch'
+  /** An `exto-system-name` rung whose UPN owns no approved System Name. */
+  | 'unknown-system';
 
 /**
  * A rung that yielded nothing.
@@ -159,6 +173,17 @@ export interface SkippedRung {
   readonly component: SystemComponentKind;
   readonly reason: SkipReason;
   readonly detail: string;
+  /**
+   * The approved values the rung would have accepted, when it knows them.
+   *
+   * Only the vocabulary rungs carry this: an `ambiguous-upn` names the UPNs it
+   * refused to choose between, a `description-mismatch` names every approved
+   * System Name the UPN owns. It is what lets the aggregate `unresolved-system`
+   * item tell a person what to write, rather than only that they wrote the
+   * wrong thing. Absent everywhere else -- an empty list would claim the rung
+   * had looked and found nothing.
+   */
+  readonly candidates?: ReadonlyArray<string>;
 }
 
 /**

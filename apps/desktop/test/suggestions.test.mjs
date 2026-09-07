@@ -13,6 +13,7 @@ import {
   inferAnatomy,
   inferSeparators,
   preferredSystemProperty,
+  extoUpnCoverage,
   resolverTemplates,
   suggestClasses,
   suggestFields,
@@ -306,16 +307,35 @@ test('tags with nothing to read produce no proposal rather than a useless one', 
 
 /* ------------------------------------------------------- resolver templates */
 
-test('all six starter templates are offered, with availability stated honestly', () => {
+/** Tags a site that writes the approved UPN into every mark would produce. */
+const UPN_TAGS = [
+  'MAH101-01',
+  'VFD101-01',
+  'P102-01',
+  'PLC101-01',
+  'LCP101-01',
+  'TIT101-01',
+];
+
+test('all seven starter templates are offered, with availability stated honestly', () => {
   const withEverything = resolverTemplates({
     hasSystemSegment: true,
     hasMel: true,
     systemProperty: { category: 'Dragon Data', name: 'UPN' },
+    upn: extoUpnCoverage(UPN_TAGS),
   });
 
   assert.deepEqual(
     withEverything.map((template) => template.templateId),
-    ['model-field', 'tag-and-mel', 'upn-and-mel', 'direct-column', 'composite', 'manual-only'],
+    [
+      'exto-approved-list',
+      'model-field',
+      'tag-and-mel',
+      'upn-and-mel',
+      'direct-column',
+      'composite',
+      'manual-only',
+    ],
   );
   assert.ok(withEverything.every((template) => template.available));
   assert.ok(withEverything.every((template) => template.resolver.keyChain.length > 0));
@@ -324,6 +344,7 @@ test('all six starter templates are offered, with availability stated honestly',
     hasSystemSegment: false,
     hasMel: false,
     systemProperty: null,
+    upn: extoUpnCoverage([]),
   });
   const byId = new Map(bare.map((template) => [template.templateId, template]));
 
@@ -333,9 +354,81 @@ test('all six starter templates are offered, with availability stated honestly',
   assert.match(byId.get('tag-and-mel').unavailableReason, /master equipment list/i);
   assert.equal(
     bare.length,
-    6,
+    7,
     'an unavailable template is shown with its reason, never quietly dropped',
   );
+});
+
+/* --------------------------------------------- the approved-Exto-list rung */
+
+/**
+ * The rung Noah's directive asks for: the UPN lives inside the tag.
+ *
+ * `MAH101-01` and `VFD101-01` are both on system 101, and neither an anatomy
+ * nor a MEL is needed to say so — the approved list supplies the UPN and the
+ * System Name together. Four tags in five have to carry one before Quick Setup
+ * proposes it, because a template that leaves a fifth of the site unresolved is
+ * a template that makes more work than it saves.
+ */
+test('a site whose tags carry approved UPNs is offered the approved-list rung', () => {
+  const [template] = resolverTemplates({
+    hasSystemSegment: false,
+    hasMel: false,
+    systemProperty: null,
+    upn: extoUpnCoverage(UPN_TAGS),
+  });
+
+  assert.equal(template.templateId, 'exto-approved-list');
+  assert.equal(template.available, true, 'six tags out of six carry one approved UPN');
+  assert.deepEqual(template.resolver.keyChain, [{ kind: 'upn-from-tag' }]);
+  assert.deepEqual(template.resolver.descriptionChain, [
+    { kind: 'exto-system-name', allowUniqueUpn: true, descriptionProperty: null },
+  ]);
+  assert.equal(
+    template.resolver.applyIcDisciplineRule,
+    true,
+    'a site on the approved list takes the SOP I&C rule with it',
+  );
+  assert.match(template.impact, /6 of 6 assets get an approved System Name/);
+  assert.match(template.impact, /0 need a description/);
+});
+
+test('the MEL still describes what the approved list cannot name', () => {
+  const [template] = resolverTemplates({
+    hasSystemSegment: false,
+    hasMel: true,
+    systemProperty: null,
+    upn: extoUpnCoverage(UPN_TAGS),
+  });
+
+  assert.deepEqual(
+    template.resolver.descriptionChain.map((rung) => rung.kind),
+    ['exto-system-name', 'mel-lookup'],
+    'the approved name first, the site\'s own words underneath it',
+  );
+});
+
+test('a site whose marks are AHU-1 and MCC-2A is told the number, not offered the rung', () => {
+  const marks = ['AHU-1', 'P101', 'AHU-2', 'MCC-2A', 'VFD-2A-1', 'PNL-5', 'EF-3', 'EF-4'];
+  const coverage = extoUpnCoverage(marks);
+  assert.equal(coverage.singleUpnCount, 1, 'only P101 happens to spell an approved UPN');
+
+  const [template] = resolverTemplates({
+    hasSystemSegment: false,
+    hasMel: false,
+    systemProperty: null,
+    upn: coverage,
+  });
+  assert.equal(template.available, false);
+  assert.match(template.unavailableReason, /of 8 tags carry exactly one approved Exto UPN/);
+});
+
+test('a tag carrying two approved UPNs is not coverage, because the rung skips it', () => {
+  // `101` and `102` both occur after a boundary. Two real systems; the rung
+  // refuses rather than takes the first, so it must not be counted as answered.
+  const coverage = extoUpnCoverage(['MAH101-102-01']);
+  assert.equal(coverage.singleUpnCount, 0);
+  assert.equal(coverage.namedCount, 0);
 });
 
 /* --------------------------------------------------------- class proposals */
@@ -366,8 +459,8 @@ test('classes are judged by whether their objects carry tags', () => {
 /**
  * The same engine over the fixture it was NOT written for.
  *
- * Every number below is read off `writeRevitShapedFixture`: 148 objects in
- * three files, `Element > Mark` on 12 of them, no property called Building, and
+ * Every number below is read off `writeRevitShapedFixture`: 180 objects in four
+ * files, `Element > Mark` on 18 of them, no property called Building, and MEP
  * marks (`AHU-1`, `P101`, `MCC-2A`, `VFD-2A-1`) with no system in them. The
  * audit's finding was that the engine proposed no building, called the instance
  * number a system, and offered System Classification as the register's
@@ -380,8 +473,8 @@ test('Mark is the equipment tag, and neither Comments nor Family and Type is', (
   assert.deepEqual(tag.candidates[0].property, { category: 'Element', name: 'Mark' });
   assert.equal(tag.confidence, 'strong');
   assert.ok(
-    tag.candidates[0].coverage < 0.1,
-    'and it wins on 8% coverage, because a mark is only ever on equipment',
+    tag.candidates[0].coverage < 0.15,
+    'and it wins on 10% coverage, because a mark is only ever on equipment',
   );
 
   for (const rejected of ['Comments', 'Family and Type', 'Type Name']) {

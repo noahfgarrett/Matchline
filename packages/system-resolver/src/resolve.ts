@@ -90,6 +90,10 @@ function runChain(
   // description chain it arrives already set to the resolved key.
   let joinKey = seedJoinKey;
   let sawManualRung = false;
+  // The description chain's own running value: what the first rung above this
+  // one said, so an `exto-system-name` rung can check it against the approved
+  // list. Never set in the key chain, which resolves no descriptions.
+  let resolvedDescription: string | null = null;
 
   const evaluateAt = (component: SystemComponentConfig, rungIndex: number): void => {
     const rungContext: RungContext = {
@@ -102,6 +106,7 @@ function runChain(
       joinIndex: indexes.join,
       melRowIndex: indexes.rows,
       melTagIndex: indexes.byTag,
+      resolvedDescription,
     };
     const outcome = evaluateComponent(component, chain, rungIndex, rungContext);
     if (!outcome.ok) {
@@ -111,6 +116,7 @@ function runChain(
         component: component.kind,
         reason: outcome.reason,
         detail: outcome.detail,
+        ...(outcome.candidates === undefined ? {} : { candidates: outcome.candidates }),
       });
       return;
     }
@@ -147,6 +153,9 @@ function runChain(
 
     if (chain === 'keyChain' && joinKey === null) {
       joinKey = normalized.value;
+    }
+    if (chain === 'descriptionChain' && resolvedDescription === null) {
+      resolvedDescription = normalized.value;
     }
   };
 
@@ -290,7 +299,15 @@ function resolveSubjectWith(
   const resolution: SystemResolution = {
     systemKey,
     ...(systemDescription === undefined ? {} : { systemDescription }),
-    systemLabel: buildLabel(systemKey, systemDescription, config.labelTemplate),
+    // An approved System Name is the label, whole. The Upload Template's
+    // spelling already opens with the UPN -- "101  Cleanroom Makeup Air
+    // System" -- so running it through `buildLabel` would print the UPN twice
+    // and produce a name Exto's System Name dropdown does not contain, which is
+    // the exact failure the rung exists to prevent.
+    systemLabel:
+      descriptionClaim?.component === 'exto-system-name'
+        ? descriptionClaim.proposedValue
+        : buildLabel(systemKey, systemDescription, config.labelTemplate),
     systemEvidence,
     systemConfidenceTier: keyClaim.evidenceTier,
     systemConflictStatus: CONFLICT_STATUS_OF[agreement],

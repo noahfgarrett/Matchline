@@ -21,7 +21,12 @@ import {
   type MelWorkbookInput,
 } from '@matchline/compiler';
 import { migrateSourceAssignmentRules } from '@matchline/domain';
-import type { ManualRelationshipOverride, SiteProfileV2 } from '@matchline/domain';
+import type {
+  ApprovedValueCount,
+  ApprovedValueReport,
+  ManualRelationshipOverride,
+  SiteProfileV2,
+} from '@matchline/domain';
 import { reviewKeyKind } from '@matchline/ssm-compiler';
 import type { ManualAssignment } from '@matchline/system-resolver';
 import { validateLearnedRuleSet, type LearnedRuleSet } from '@matchline/learned-rules';
@@ -204,6 +209,7 @@ import { catalogPage, type PropertyPageRequest } from './property-page.js';
 import {
   inferAnatomy,
   preferredSystemProperty,
+  extoUpnCoverage,
   resolverTemplates,
   suggestClasses,
   suggestFields,
@@ -513,6 +519,8 @@ export interface ProjectService {
    * before the button is pressed rather than after (P0-3).
    */
   publishBlockers(): readonly WirePublishBlocker[];
+  /** What the last compile found that a person should see and may publish over. */
+  publishWarnings(): readonly WirePublishBlocker[];
   exportProfilePackage(filePath: string): WireExportResult;
   importProfilePackage(filePath: string): { draft: WireDraftProfile; config: WireProjectConfig };
 
@@ -1739,6 +1747,13 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
    * in the order people actually work.
    */
   function publishBlockersFor(active: Session): readonly WirePublishBlocker[] {
+    const blockers: WirePublishBlocker[] = [...selectionSetBlockersFor(active)];
+    blockers.push(...approvedValueBlockersFor(active));
+    return blockers;
+  }
+
+  /** The P0-3 refusal: a filter naming a set no open source could resolve. */
+  function selectionSetBlockersFor(active: Session): readonly WirePublishBlocker[] {
     const names = active.draft.assetFilters.selectionSetNames;
     if (names.length === 0 || active.models.size === 0) {
       return [];
@@ -1763,6 +1778,8 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         kind: 'unresolved-selection-set',
         setName: name,
         sourceNames,
+        assetCount: 0,
+        exampleTags: [],
         message:
           `This profile keeps only the equipment in the set '${name}', and ${where} recorded ` +
           'without its contents — it is a saved search, and the extraction never got Navisworks ' +
@@ -1774,6 +1791,165 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
       });
     }
     return blockers;
+  }
+
+  /**
+   * The approved-vocabulary refusals the last compile found (SSM-Audit layer 2).
+   *
+   * Read off `completeness.approvedValues`, never recomputed: the compile is
+   * what looked at every asset, and a gate that counted again could refuse a
+   * profile over a number the report on screen 8 does not show.
+   *
+   * Only a compiled view answers. A project that has never compiled, or one
+   * showing the compile it had on file when it opened, states nothing here
+   * rather than nothing-is-wrong — but it also does not block, because "we have
+   * not looked" is not a finding, and refusing to publish on the strength of it
+   * would make the first save of a fresh project impossible.
+   *
+   * Two of the five counts are blockers because Exto refuses the whole upload
+   * over one such cell: a UPN outside the dropdown and a Discipline outside the
+   * dropdown. The System Name is a warning — the upload is accepted and the row
+   * lands under a name nobody can find it by. Classification and Item Master
+   * are neither; they are counts screen 8 prints.
+   */
+  function approvedValuesOfLastCompile(active: Session): ApprovedValueReport | null {
+    return active.view?.project?.completeness.approvedValues ?? null;
+  }
+
+  /**
+   * Whether this project has said it delivers to Exto.
+   *
+   * The gate below refuses a publication, and refusing one is only defensible
+   * against a standard the site has adopted. The EXTO layer is optional in
+   * exactly the sense `@matchline/exto-export` sets out — "a site running some
+   * other Cx software never supplies a registry and still gets every plain SSM
+   * and MEL output" — so a plant on its own numbering must not be told its
+   * profile is unpublishable because `001` is not in somebody else's dropdown.
+   *
+   * Three ways to say it, all of them decisions a person made on screen 5: an
+   * approved-UPN rung, an approved-name rung, or the SOP's I&C rule. Quick
+   * Setup proposes the first two together. Everything the gate would have said
+   * is still said — as a warning on screen 9, and as SSM Audit findings on
+   * screen 8 — for a project that has adopted none of them.
+   */
+  function deliversToExto(active: Session): boolean {
+    const resolver = active.draft.systemResolver;
+    return (
+      resolver.applyIcDisciplineRule ||
+      [...resolver.keyChain, ...resolver.descriptionChain].some(
+        (rung) => rung.kind === 'upn-from-tag' || rung.kind === 'exto-system-name',
+      )
+    );
+  }
+
+  /** `n of m assets`, with up to three real tags, and where to fix it. */
+  function approvedValueSentence(
+    finding: ApprovedValueCount,
+    what: string,
+    consequence: string,
+    fix: string,
+  ): string {
+    const tags = finding.exampleTags.slice(0, 3);
+    const naming = tags.length === 0 ? '' : ` For example: ${tags.join(', ')}.`;
+    return (
+      `${String(finding.assetCount)} ${finding.assetCount === 1 ? 'asset carries' : 'assets carry'}` +
+      ` ${what}.` +
+      `${naming} ${consequence} ${fix}`
+    );
+  }
+
+  function approvedValueBlockersFor(active: Session): readonly WirePublishBlocker[] {
+    const approved = approvedValuesOfLastCompile(active);
+    if (approved === null || !deliversToExto(active)) {
+      return [];
+    }
+    return approvedValueBlockerRows(approved);
+  }
+
+  /** The two refusals themselves, without the decision about whether to make them. */
+  function approvedValueBlockerRows(
+    approved: ApprovedValueReport,
+  ): readonly WirePublishBlocker[] {
+    const blockers: WirePublishBlocker[] = [];
+    if (approved.upnNotApproved.assetCount > 0) {
+      blockers.push({
+        kind: 'upn-not-approved',
+        setName: '',
+        sourceNames: [],
+        assetCount: approved.upnNotApproved.assetCount,
+        exampleTags: approved.upnNotApproved.exampleTags.slice(0, 3),
+        message: approvedValueSentence(
+          approved.upnNotApproved,
+          'a System Key that is not one of the approved Exto UPNs',
+          'Exto validates that column against a fixed list and refuses the whole upload over ' +
+            'a single cell outside it, so this register cannot be delivered as it stands.',
+          'Fix it on screen 5, where the System Resolver decides the key — the ' +
+            '"Approved Exto UPN in the tag" source reads the UPN out of the tag itself.',
+        ),
+      });
+    }
+    if (approved.disciplineNotApproved.assetCount > 0) {
+      blockers.push({
+        kind: 'discipline-not-approved',
+        setName: '',
+        sourceNames: [],
+        assetCount: approved.disciplineNotApproved.assetCount,
+        exampleTags: approved.disciplineNotApproved.exampleTags.slice(0, 3),
+        message: approvedValueSentence(
+          approved.disciplineNotApproved,
+          'a Discipline that is not one of the approved Exto values',
+          'Exto validates that column against a fixed list and refuses the whole upload over ' +
+            'a single cell outside it, so this register cannot be delivered as it stands.',
+          'Fix it on screen 7, where the discipline projection maps what the model says onto ' +
+            'what the SSM standard calls it.',
+        ),
+      });
+    }
+    return blockers;
+  }
+
+  /**
+   * What the last compile found that a person should see before publishing, and
+   * that does not stop them.
+   *
+   * A System Name that is not one of the approved names for its UPN is always
+   * one: Exto accepts the upload — the column is validated, but the row still
+   * lands — and then nobody looking for that system finds the equipment on it.
+   *
+   * A project that has NOT adopted the approved list gets the two blocker facts
+   * here as well. The numbers are the same either way; what changes is whether
+   * Matchline stops a person over them, and it only does that for a site whose
+   * profile says it delivers to Exto.
+   */
+  function publishWarningsFor(active: Session): readonly WirePublishBlocker[] {
+    const approved = approvedValuesOfLastCompile(active);
+    if (approved === null) {
+      return [];
+    }
+    const warnings: WirePublishBlocker[] = deliversToExto(active)
+      ? []
+      : approvedValueBlockerRows(approved).map((blocker) => ({ ...blocker }));
+    if (approved.systemNameNotApproved.assetCount === 0) {
+      return warnings;
+    }
+    return [
+      ...warnings,
+      {
+        kind: 'system-name-not-approved',
+        setName: '',
+        sourceNames: [],
+        assetCount: approved.systemNameNotApproved.assetCount,
+        exampleTags: approved.systemNameNotApproved.exampleTags.slice(0, 3),
+        message: approvedValueSentence(
+          approved.systemNameNotApproved,
+          'a System Name that is not one of the approved Exto names for their UPN',
+          'Exto will accept the upload, and then nobody searching for that system will find ' +
+            'this equipment on it.',
+          'Add the "Approved Exto system name" source to the description chain on screen 5 to ' +
+            'have Matchline write the approved spelling.',
+        ),
+      },
+    ];
   }
 
   /**
@@ -2793,7 +2969,13 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
     // Publishing gates the compile too, and for the same reason it gates a
     // save: a profile naming a selection set nobody resolved is one the engine
     // refuses, so the refusal is better read here than as an engine error.
-    const blocked = publishBlockersFor(active)[0];
+    //
+    // The DRAFT blockers only. The approved-value ones are read off the last
+    // compile's own report, and a compile refused because the previous compile
+    // found something is a project that can never look again — the first run
+    // would have nothing to read, and every run after a bad one would be
+    // refused on the strength of it.
+    const blocked = selectionSetBlockersFor(active)[0];
     if (blocked !== undefined) {
       return blocked.message;
     }
@@ -3856,6 +4038,11 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
               active.draft.tagAnatomy.segments.some((row) => row.segment === 'system'),
             hasMel: active.melRows.length > 0,
             systemProperty,
+            // The real tags this project's filters produce, so the approved-UPN
+            // proposal is a measurement rather than a hope. Empty before a tag
+            // property is chosen, which is what makes that template unavailable
+            // with a reason instead of available on a sample of nothing.
+            upn: extoUpnCoverage(tags),
           }),
         ],
         classes: [...classSuggestions(active)],
@@ -4301,6 +4488,10 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
 
     publishBlockers(): readonly WirePublishBlocker[] {
       return publishBlockersFor(requireSession());
+    },
+
+    publishWarnings(): readonly WirePublishBlocker[] {
+      return publishWarningsFor(requireSession());
     },
 
     exportProfilePackage(filePath: string): WireExportResult {

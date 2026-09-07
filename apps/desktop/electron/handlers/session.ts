@@ -574,6 +574,7 @@ export function createSessionHandlers(
       return {
         sections: [...guard(() => service.profileSections())],
         blockers: [...guard(() => service.publishBlockers())],
+        warnings: [...guard(() => service.publishWarnings())],
       };
     },
 

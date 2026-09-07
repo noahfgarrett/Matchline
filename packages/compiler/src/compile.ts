@@ -22,6 +22,7 @@
  */
 import {
   chainFor,
+  EVIDENCE_TIER,
   migrateDerivedAttributes,
   migrateHierarchyConfig,
   migratePropertyMappings,
@@ -82,7 +83,12 @@ import type {
 } from '@matchline/system-resolver';
 import { applyAnatomy } from '@matchline/tag-anatomy';
 
-import { attributesFor, ssmDisciplineOf } from './attributes.js';
+import {
+  attributesFor,
+  icSystemKeyOf,
+  ssmDisciplineOf,
+  IC_DISCIPLINE_RULE,
+} from './attributes.js';
 import { buildCompleteness } from './completeness.js';
 import {
   anatomyResultOf,
@@ -549,8 +555,57 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     profile.systemResolver ?? NO_SYSTEM_RESOLVER,
     resolveContext,
   );
+  // The SSM SOP's instrumentation rule, opt-in per profile (P0 layer 2). Off
+  // for a migrated profile, because turning it on moves assets between
+  // disciplines and systems and nobody asked for that on a reopen.
+  const applyIcRule = profile.systemResolver?.applyIcDisciplineRule ?? false;
+
+  /**
+   * The resolution one asset actually carries, I&C rule included.
+   *
+   * The rule is applied HERE rather than in `attributesFor` alone so that the
+   * hierarchy, the generated MEL and the EXTO sheet cannot disagree about which
+   * system a transmitter is on. The chain's own claims are untouched -- every
+   * one of them is still on `systems` for review -- and the override records
+   * itself as one more `Provenance` entry on the resolution's evidence, so a
+   * changed key is never a value that appeared from nowhere.
+   */
+  const icResolutions = new Map<string, SystemResolution>();
+  if (applyIcRule) {
+    for (const asset of catalog.assets) {
+      const upn = icSystemKeyOf(asset.canonicalTag, asset.nativeDiscipline, true);
+      if (upn === undefined) {
+        continue;
+      }
+      const resolved = systems.bySubject.get(asset.assetId)?.resolution ?? null;
+      if (resolved !== null && resolved.systemKey === upn) {
+        continue;
+      }
+      const evidence: Provenance = {
+        rule: IC_DISCIPLINE_RULE,
+        fallbackRung: 0,
+        sourceFile: '',
+        sourceRef: { kind: 'model-object', objectId: asset.assetId },
+        propertyOrColumn: 'approved UPN in the equipment tag',
+      };
+      icResolutions.set(asset.assetId, {
+        systemKey: upn,
+        ...(resolved?.systemDescription === undefined
+          ? {}
+          : { systemDescription: resolved.systemDescription }),
+        // The label follows the key it now carries, not the one it had.
+        systemLabel: resolved?.systemDescription === undefined
+          ? upn
+          : `${upn} ${resolved.systemDescription}`,
+        systemEvidence: [evidence, ...(resolved?.systemEvidence ?? [])],
+        systemConfidenceTier: EVIDENCE_TIER.INFERRED,
+        systemConflictStatus: resolved === null ? 'AGREED' : resolved.systemConflictStatus,
+      });
+    }
+  }
+
   const resolutionOf = (assetId: string): SystemResolution | null =>
-    systems.bySubject.get(assetId)?.resolution ?? null;
+    icResolutions.get(assetId) ?? systems.bySubject.get(assetId)?.resolution ?? null;
 
   // --- 5. identity ------------------------------------------------------------
   stage('identity-index');
@@ -643,7 +698,13 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
       : proposeNestings(
           input.learnedRules,
           catalog.assets.map((asset) =>
-            nestingAssetOf(asset, resolutionOf(asset.assetId), anatomy, disciplineProjection),
+            nestingAssetOf(
+              asset,
+              resolutionOf(asset.assetId),
+              anatomy,
+              disciplineProjection,
+              applyIcRule,
+            ),
           ),
         );
   const learned: LearnedClaimInput[] = learnedProposals.map((proposal) => ({
@@ -790,6 +851,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
         resolutionOf(asset.assetId),
         disciplineProjection,
         derivedByAsset.get(asset.assetId),
+        applyIcRule,
       ),
       ...(modelTreeParentId === undefined ? {} : { modelTreeParentId }),
     };
@@ -823,6 +885,7 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
       tagByAssetId,
       sourceFileFor(asset),
       disciplineProjection,
+      applyIcRule,
     ),
   );
   const generatedMel = {
@@ -842,6 +905,19 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     systems,
     structuralClaims: claims.structural,
     melRowsDropped: mel.droppedRowCount,
+    // The register as the EXTO sheet prints it, so the approved-value counts
+    // judge the cells that would actually be uploaded rather than some other
+    // spelling of the same asset.
+    registerRows: generatedAssets.map((asset) => ({
+      canonicalTag: asset.canonicalTag,
+      ...(asset.system === undefined ? {} : { systemKey: asset.system.systemKey }),
+      ...(asset.system === undefined ? {} : { systemLabel: asset.system.systemLabel }),
+      ...(asset.ssmDiscipline === undefined ? {} : { ssmDiscipline: asset.ssmDiscipline }),
+      ...(asset.equipmentClassification === undefined
+        ? {}
+        : { equipmentClassification: asset.equipmentClassification }),
+      ...(asset.itemMaster === undefined ? {} : { itemMaster: asset.itemMaster }),
+    })),
   });
 
   // --- 10c. the SSM Audit gate ----------------------------------------------------
@@ -999,9 +1075,10 @@ function nestingAssetOf(
   resolution: SystemResolution | null,
   anatomy: TagAnatomyConfig | undefined,
   projection: SsmDisciplineProjection,
+  applyIcRule: boolean,
 ): NestingAsset {
   const segments = anatomyOf(anatomy, asset.canonicalTag);
-  const discipline = ssmDisciplineOf(asset.nativeDiscipline, projection);
+  const discipline = ssmDisciplineOf(asset.nativeDiscipline, projection, applyIcRule);
   return {
     assetId: asset.assetId,
     description: asset.description ?? '',
@@ -1027,6 +1104,7 @@ function generatedMelAssetOf(
   tagByAssetId: ReadonlyMap<string, string>,
   sourceModelFile: string,
   projection: SsmDisciplineProjection,
+  applyIcRule: boolean,
 ): GeneratedMelAsset {
   const parentAssetId = node?.parent.parentAssetId ?? null;
   const parentTag = parentAssetId === null ? undefined : tagByAssetId.get(parentAssetId);
@@ -1044,7 +1122,7 @@ function generatedMelAssetOf(
     }
   }
 
-  const ssmDiscipline = ssmDisciplineOf(asset.nativeDiscipline, projection);
+  const ssmDiscipline = ssmDisciplineOf(asset.nativeDiscipline, projection, applyIcRule);
 
   return {
     canonicalTag: asset.canonicalTag,
