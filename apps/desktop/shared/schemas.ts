@@ -954,6 +954,44 @@ export type WireMissingValuePolicy = z.infer<typeof missingValuePolicySchema>;
 export const levelSortSchema = z.enum(['label', 'key']);
 export type WireLevelSort = z.infer<typeof levelSortSchema>;
 
+/**
+ * Mirrors `EquipmentClass` in `@matchline/domain`: what the SSM SOP calls a
+ * piece of equipment.
+ *
+ * Restated rather than imported for the reason every other list here is: this
+ * module is bundled into the sandboxed preload and may import nothing but
+ * `zod`. `electron/services/draft-profile.ts` is where the two meet, and its
+ * conversion stops compiling if a member is added on one side only.
+ */
+export const equipmentClassSchema = z.enum([
+  'vfd',
+  'starter',
+  'plc',
+  'rio',
+  'panel',
+  'transformer',
+  'heat-trace-panel',
+  'heat-trace-connection',
+  'lcp',
+  'control-valve',
+  'room-sensor',
+  'instrument',
+  'fms-io',
+  'fdu',
+  'vesda',
+  'facp',
+  'driven',
+  'control-equipment',
+  'other',
+]);
+export type WireEquipmentClass = z.infer<typeof equipmentClassSchema>;
+
+/** The child classes one level's boundary is waived for (the SOP's exception). */
+export const boundaryExceptionsSchema = z.object({
+  childClasses: z.array(equipmentClassSchema),
+});
+export type WireBoundaryExceptions = z.infer<typeof boundaryExceptionsSchema>;
+
 /** Lifts a level that spells its key attribute the engine's way. */
 function liftLevelKeySpelling(value: unknown): unknown {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -979,6 +1017,8 @@ export const hierarchyLevelSchema = z.preprocess(
     /** Optional: which attribute the boundary compares, when it is not the key. */
     boundaryAttributeKey: z.string().min(1).optional(),
     boundary: z.boolean(),
+    /** Optional: child classes this boundary does not apply to (the SOP's exception). */
+    boundaryExceptions: boundaryExceptionsSchema.optional(),
     missingValuePolicy: missingValuePolicySchema,
     sort: levelSortSchema,
   }),
@@ -1025,6 +1065,7 @@ export const ladderSourceSchema = z.enum([
   'manual',
   'explicit-model',
   'mel-parent',
+  'sop-rule',
   'profile-lookup',
   'flow-family',
   'family-role',
@@ -1485,6 +1526,23 @@ export type WireClassSuggestion = z.infer<typeof classSuggestionSchema>;
  * RELEASE-1.0-PLAN's "never silently published; one-click accept with preview +
  * impact counts".
  */
+/**
+ * One SSM SOP build rule, with what it would do to this project.
+ *
+ * `claimCount` is measured, not estimated: the rules are run over the real
+ * universe by the same code the compile calls. The two power-path rules read a
+ * cable schedule and a projection has none, so their honest count is zero.
+ */
+export const sopRuleSuggestionSchema = z.object({
+  ruleId: z.string().min(1),
+  title: z.string().min(1),
+  statement: z.string().min(1),
+  effect: z.enum(['structural', 'dependency']),
+  /** Claims this rule would make over the assets this project has. */
+  claimCount: z.number().int().nonnegative(),
+});
+export type WireSopRuleSuggestion = z.infer<typeof sopRuleSuggestionSchema>;
+
 export const quickSetupSuggestionsSchema = z.object({
   /** `false` when no model source is readable, which blocks every section. */
   ready: z.boolean(),
@@ -1513,6 +1571,13 @@ export const quickSetupSuggestionsSchema = z.object({
   hierarchyProjection: hierarchyProjectionSchema,
   /** Parent → child role pairs the model tree draws, strongest first. */
   rolePairs: z.array(rolePairSuggestionSchema),
+  /**
+   * The same pairs again, proposed from the SSM SOP rather than from the model
+   * tree: the SOP's class graph translated into this site's own role letters.
+   */
+  sopRolePairs: z.array(rolePairSuggestionSchema),
+  /** Every SSM SOP build rule, with its projected claim count over this project. */
+  sopRules: z.array(sopRuleSuggestionSchema),
 });
 export type WireQuickSetupSuggestions = z.infer<typeof quickSetupSuggestionsSchema>;
 
@@ -1595,6 +1660,19 @@ export const ssmAuditConfigSchema = z.object({
 });
 export type WireSsmAuditConfig = z.infer<typeof ssmAuditConfigSchema>;
 
+/**
+ * What a site has said about the SSM SOP build rules.
+ *
+ * The mirror of {@link ssmAuditConfigSchema}, and for the same reason: the SOP
+ * is the SOP, so a site does not get to reword a rule. What it gets to say is
+ * "not here". The rules only run at all when {@link ladderConfigSchema}'s tiers
+ * carry `sop-rule`.
+ */
+export const sopRulesConfigSchema = z.object({
+  disabledRuleIds: z.array(z.string().min(1)).default([]),
+});
+export type WireSopRulesConfig = z.infer<typeof sopRulesConfigSchema>;
+
 export const draftProfileSchema = z.object({
   profileId: z.string().min(1),
   name: z.string().min(1),
@@ -1626,6 +1704,7 @@ export const draftProfileSchema = z.object({
   authorityRules: z.array(authorityRuleSchema).default([]),
   profileTestExamples: z.array(profileTestExampleSchema).default([]),
   ssmAudit: ssmAuditConfigSchema.default({ disabledRuleIds: [] }),
+  sopRules: sopRulesConfigSchema.default({ disabledRuleIds: [] }),
 });
 export type WireDraftProfile = z.infer<typeof draftProfileSchema>;
 
@@ -1650,6 +1729,7 @@ export const draftPatchSchema = z.object({
   authorityRules: z.array(authorityRuleSchema).optional(),
   profileTestExamples: z.array(profileTestExampleSchema).optional(),
   ssmAudit: ssmAuditConfigSchema.optional(),
+  sopRules: sopRulesConfigSchema.optional(),
 });
 export type WireDraftPatch = z.infer<typeof draftPatchSchema>;
 

@@ -167,6 +167,43 @@ each is proven.
     `@matchline/exto-export`'s own flattening so it audits exactly what the upload sheet
     would carry. (docs/ENGINE.md "SSM Audit gate".)
 
+## 2026-09-07 — the SSM SOP as build rules (Noah, authoritative directive)
+
+- **A tag carries the UPN and the instance, and that is what pairs a device to its
+  equipment.** Noah, verbatim: *"Instruments need to be placed under their respective
+  parents. The UPN will be available within the equipment tag like: MAH101-01 has a
+  VFD101-01 down the line as a child."* So the pairing is `MAH101-01` ↔ `VFD101-01` by
+  UPN `101` and instance `01`, and it is read out of the tags a site already writes rather
+  than out of the model tree, a lookup table or anything Matchline infers. The two values
+  come from the site's taught anatomy where it has one and from the approved Exto list plus
+  the trailing `-NN` run where it has not; a tag naming two approved UPNs names none.
+- **Controls devices cross the discipline line.** The same sentence's second half: the drive
+  is published in the electrical package and the machine in the mechanical one, and they are
+  one machine. SSM-Audit's `parent.cross-discipline` already calls this the approved
+  exception, so it is implemented as an exception rather than as a relaxation — a hierarchy
+  level may name the CHILD classes its boundary is waived for, and everything else folds
+  exactly as it always did.
+- **The default hierarchy is unchanged; the starter profile adopts the exception.**
+  `DEFAULT_HIERARCHY_LEVELS` keeps SSM Discipline `boundary: false` (RELEASE-1.0-PLAN P0-5):
+  that is the blunt, safe answer for a site nobody has taught anything, and changing it would
+  move equipment in every project that already exists. What a site gets by taking the Quick
+  Setup fast path is the SOP's own answer instead — the level becomes a real boundary, with
+  the controls devices exempt by class — because taking that path is the site saying it
+  follows the SOP. Both answers keep the same equipment nested; the difference is what ELSE
+  is allowed to cross, and the exception is the stricter of the two.
+- **The rules build; the rulebook still judges.** The SOP rules are claims on a `sop-rule`
+  ladder rung, with ids mirroring the vendored rulebook's own, and the layer-1 gate runs over
+  the result unchanged. `tests/integration/e5-ssm-sop.test.mjs` is the standing proof that
+  the two halves agree: one compile, zero `sop.*` and `logic.*` findings, with every one of
+  those rules switched on. No site may reword a SOP rule for the same reason no site may
+  reword an audit rule; what it may say is which ones it does not follow
+  (`SiteProfileV2.sopRules.disabledRuleIds`), and whether the rung is on the ladder at all.
+- **Power is never guessed.** `logic.driven-electrical-path` and
+  `logic.control-electrical-path` claim a feed only where connectivity states one. With no
+  cable schedule they make no claim, the gate reports "no power path", and that finding
+  stands — an invented feeder in a commissioning register is worse than a known gap.
+  (docs/ENGINE.md "SSM SOP rules".)
+
 ## Open items (not yet decided)
 
 - Code-signing certificate (MSIX): long-lead item, start before Phase 6.

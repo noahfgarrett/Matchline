@@ -455,6 +455,11 @@ function resolveSubject(subject: CompileSubject, ctx: WalkContext): SubjectResol
       dependencies: [...dependencies.values()].sort(compareDependencies),
       levelPath,
       losingClaims,
+      // Carried through rather than recomputed downstream: the fold already
+      // read it to apply a level's boundary exception, and a second
+      // classification of the same description is a second answer waiting to
+      // disagree with this one.
+      ...(subject.equipmentClass === undefined ? {} : { equipmentClass: subject.equipmentClass }),
     },
     reviewItems,
     demotionCount: demotedParents.size,

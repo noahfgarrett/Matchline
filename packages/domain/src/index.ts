@@ -168,6 +168,7 @@ export {
   migrateHierarchyLevel,
 } from './hierarchy-config.js';
 export type {
+  BoundaryExceptionConfig,
   HierarchyConfig,
   HierarchyConfigInput,
   HierarchyLevelConfig,
@@ -179,6 +180,18 @@ export type {
   RoleGraphConfig,
   RoleRule,
 } from './hierarchy-config.js';
+
+export {
+  EQUIPMENT_CLASSES,
+  isSopDeviceClass,
+  isSopEquipmentClass,
+  SOP_DEVICE_CLASSES,
+  SOP_EQUIPMENT_CLASSES,
+} from './equipment-class.js';
+export type { EquipmentClass } from './equipment-class.js';
+
+export { SOP_RULE_IDS, SOP_RULES, SOP_TAG_PAIR } from './sop-rules.js';
+export type { SopRuleDescriptor, SopRuleId, SopRulesConfig } from './sop-rules.js';
 
 export type { SsmRelationshipClaim } from './ssm-claims.js';
 

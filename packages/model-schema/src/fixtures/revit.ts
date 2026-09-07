@@ -58,6 +58,7 @@ const SOURCE_MODEL_B14_MECHANICAL = 1;
 const SOURCE_MODEL_B14_ELECTRICAL = 2;
 const SOURCE_MODEL_B22_MECHANICAL = 3;
 const SOURCE_MODEL_B14_CONTROLS = 4;
+const SOURCE_MODEL_B14_COMMISSIONING = 5;
 
 /** The source model ids, published so a split or a rule can name one. */
 export const REVIT_SOURCE_MODEL_IDS = {
@@ -65,6 +66,7 @@ export const REVIT_SOURCE_MODEL_IDS = {
   b14Electrical: SOURCE_MODEL_B14_ELECTRICAL,
   b22Mechanical: SOURCE_MODEL_B22_MECHANICAL,
   b14Controls: SOURCE_MODEL_B14_CONTROLS,
+  b14Commissioning: SOURCE_MODEL_B14_COMMISSIONING,
 } as const;
 
 /** The category and name a Revit export writes the equipment tag under. */
@@ -115,8 +117,40 @@ export const REVIT_IC_MARKS: readonly string[] = [
   'VFD101-01',
 ];
 
+/**
+ * The commissioning package: the rest of one complete SSM SOP scenario.
+ *
+ * The controls package above is the machine -- an air handler, its drive, its
+ * controller, its local panel and a transmitter. This is everything the SOP
+ * says has to be around it before a register is right: the MCC that feeds the
+ * drive, the transformer and the heat-trace branch under it, the remote I/O
+ * drop, a second instrument, and the VESDA/fire-alarm pair the SOP ties
+ * together by building rather than by system.
+ *
+ * Deliberately its own `.nwc` rather than more rows in the controls file. A
+ * commissioning scenario spans disciplines by nature -- the MCC is Electrical,
+ * the air handler is Mechanical, the transmitter is I&C -- and a federation
+ * publishes those from different authoring models. Keeping the split real is
+ * what makes the discipline-boundary exception a thing this fixture can prove
+ * rather than assert.
+ */
+export const REVIT_COMMISSIONING_MARKS: readonly string[] = [
+  'MCC101',
+  'XFMR101',
+  'HTP101-01',
+  'HTC101-01',
+  'RIO101-01',
+  'PT101-01',
+  'VESDA-B14-01',
+  'FACP-B14-01',
+];
+
 /** Every mark the fixture writes, in walk order. */
-export const REVIT_ALL_MARKS: readonly string[] = [...REVIT_MARKS, ...REVIT_IC_MARKS];
+export const REVIT_ALL_MARKS: readonly string[] = [
+  ...REVIT_MARKS,
+  ...REVIT_IC_MARKS,
+  ...REVIT_COMMISSIONING_MARKS,
+];
 
 /* --------------------------------------------------------------- the content */
 
@@ -268,6 +302,15 @@ const REVIT_SOURCE_MODELS: readonly FixtureSourceModel[] = [
     sourceFileName: 'B14-Controls.rvt',
     sourceGuid: guidFor(2104),
   },
+  {
+    id: SOURCE_MODEL_B14_COMMISSIONING,
+    parentId: null,
+    fileName: 'B14-Commissioning.nwc',
+    displayName: 'B14 Commissioning',
+    guid: guidFor(2005),
+    sourceFileName: 'B14-Commissioning.rvt',
+    sourceGuid: guidFor(2105),
+  },
 ];
 
 /** One piece of tagged equipment, as Revit would have published it. */
@@ -406,6 +449,7 @@ function icDevice(
   typeName: string,
   description: string,
   insideMark?: string,
+  discipline = 'I&C',
 ): EquipmentSpec {
   return {
     mark,
@@ -417,8 +461,42 @@ function icDevice(
     manufacturer: 'Meridian Controls',
     model: 'MC-100',
     description,
-    discipline: 'I&C',
+    discipline,
     ...(insideMark === undefined ? {} : { insideMark }),
+  };
+}
+
+/**
+ * One row of the commissioning package.
+ *
+ * Everything here states its own `Element > Discipline`, because the SOP rules
+ * this package exists to exercise are about equipment in DIFFERENT disciplines
+ * being one machine: the MCC is Electrical, the air handler it feeds is
+ * Mechanical, the transmitter on that air handler is I&C, and the SOP says all
+ * three nest together anyway.
+ *
+ * The descriptions are load-bearing. SSM-Audit recognises a drive, a transformer
+ * or a heat-trace panel from its description and nothing else, so each one here
+ * is written in the words the vendored rulebook's own regexes read -- which is
+ * also what `@matchline/ssm-audit`'s `equipmentClass` reads, by construction.
+ */
+function sopDevice(
+  mark: string,
+  family: string,
+  description: string,
+  discipline: string,
+): EquipmentSpec {
+  return {
+    mark,
+    category: 'Specialty Equipment',
+    family,
+    typeName: `${family} 100`,
+    systemClassification: 'Commissioning',
+    systemName: 'Commissioning',
+    manufacturer: 'Meridian Controls',
+    model: 'MC-200',
+    description,
+    discipline,
   };
 }
 
@@ -580,18 +658,47 @@ const FILES: readonly FileSpec[] = [
       {
         level: 'L01',
         equipment: [
-          icDevice('MAH101-01', 'Air Handling Unit', 'MAH 20k CFM', 'Cleanroom makeup air unit'),
-          icDevice('P102-01', 'Pump', 'End Suction 80 GPM', 'Process cooling water pump'),
-          icDevice('PLC101-01', 'Controller', 'PLC Rack', 'Programmable controller for MAH101-01'),
+          icDevice(
+            'MAH101-01',
+            'Air Handling Unit',
+            'MAH 20k CFM',
+            'Makeup air handler for the cleanroom suite',
+            undefined,
+            // The machine itself is Mechanical. Its drive is Electrical and its
+            // transmitters are I&C, and the SOP nests all three together: that
+            // difference is the point of this package.
+            'Mechanical',
+          ),
+          icDevice(
+            'P102-01',
+            'Pump',
+            'End Suction 80 GPM',
+            'Process cooling water pump',
+            undefined,
+            'Mechanical',
+          ),
+          icDevice(
+            'PLC101-01',
+            'Controller',
+            'PLC Rack',
+            'Programmable logic controller (PLC) for the cleanroom suite',
+          ),
           icDevice('LCP101-01', 'Control Panel', 'LCP 24V', 'Local control panel', 'PLC101-01'),
           icDevice(
             'TIT101-01',
             'Transmitter',
             'TIT 4-20mA',
-            'Supply air temperature transmitter',
+            'Supply air temperature element',
             'LCP101-01',
           ),
-          icDevice('VFD101-01', 'Variable Frequency Drive', 'VFD 40HP', 'Supply fan drive'),
+          icDevice(
+            'VFD101-01',
+            'Variable Frequency Drive',
+            'VFD 40HP',
+            'Variable frequency drive for the supply fan',
+            undefined,
+            'Electrical',
+          ),
         ],
         runs: [
           {
@@ -602,6 +709,42 @@ const FILES: readonly FileSpec[] = [
             systemClassification: 'Controls',
             systemName: 'Building Automation',
             count: 18,
+          },
+        ],
+      },
+    ],
+  },
+  {
+    sourceModelId: SOURCE_MODEL_B14_COMMISSIONING,
+    fileName: 'B14-Commissioning.nwc',
+    workset: 'B14 - Commissioning',
+    levels: [
+      {
+        level: 'L01',
+        equipment: [
+          sopDevice('MCC101', 'Motor Control Center', 'MCC 101 motor control centre', 'Electrical'),
+          sopDevice('XFMR101', 'Transformer', 'Dry type transformer', 'Electrical'),
+          sopDevice('HTP101-01', 'Heat Trace Panel', 'Heat trace panel', 'Electrical'),
+          sopDevice(
+            'HTC101-01',
+            'Heat Trace Connection',
+            'Heat trace power connection box',
+            'Electrical',
+          ),
+          sopDevice('RIO101-01', 'Remote IO', 'Remote I/O drop for the cleanroom controller', 'I&C'),
+          sopDevice('PT101-01', 'Transmitter', 'Supply air pressure element', 'I&C'),
+          sopDevice('VESDA-B14-01', 'Aspirating Detection', 'VESDA aspirating smoke detection', 'Life Safety'),
+          sopDevice('FACP-B14-01', 'Fire Alarm Panel', 'Fire alarm control panel', 'Life Safety'),
+        ],
+        runs: [
+          {
+            namePrefix: 'Cable Tray',
+            category: 'Cable Trays',
+            family: 'Cable Tray with Fittings',
+            typeName: 'Ladder',
+            systemClassification: 'Commissioning',
+            systemName: 'Commissioning',
+            count: 10,
           },
         ],
       },

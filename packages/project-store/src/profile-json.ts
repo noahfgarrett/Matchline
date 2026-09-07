@@ -9,11 +9,13 @@
  */
 import {
   emptyIdentityConfig,
+  EQUIPMENT_CLASSES,
   MAPPED_PROPERTY_FIELDS,
   migrateSiteProfileV1,
   type AssetFilterConfig,
   type AttributeResolverInput,
   type AuthorityRule,
+  type BoundaryExceptionConfig,
   type HierarchyLevelConfig,
   type HierarchyLevelConfigInput,
   type LadderSourceKind,
@@ -22,6 +24,7 @@ import {
   type ProfileMapEntry,
   type SiteProfileV2,
   type SourceAssignmentScope,
+  type SopRulesConfig,
   type SourceAssignmentsInput,
   type SsmAuditConfig,
   type TagAlias,
@@ -502,6 +505,7 @@ const LADDER_SOURCES = [
   'manual',
   'explicit-model',
   'mel-parent',
+  'sop-rule',
   'profile-lookup',
   'flow-family',
   'family-role',
@@ -509,6 +513,8 @@ const LADDER_SOURCES = [
   'prior-ssm',
   'model-tree',
 ] as const satisfies ReadonlyArray<LadderSourceKind>;
+
+const EQUIPMENT_CLASS_VALUES = EQUIPMENT_CLASSES;
 
 const MISSING_VALUE_POLICIES = [
   'unassigned-group',
@@ -583,6 +589,28 @@ function readSsmAuditConfig(value: unknown): SsmAuditConfig {
   };
 }
 
+/**
+ * The SSM SOP section: a list of rule ids, or nothing.
+ *
+ * Ids are not checked against the rule catalogue, for the same reason
+ * {@link readSsmAuditConfig} does not check its own: a profile written against
+ * a newer build names rules this one has never heard of, and refusing to open a
+ * project over one would be worse than ignoring it.
+ */
+function readSopRulesConfig(value: unknown): SopRulesConfig {
+  if (value === undefined) {
+    return { disabledRuleIds: [] };
+  }
+  const record = requireRecordAt(value, 'profile.sopRules', fail);
+  return {
+    disabledRuleIds: readOptionalEach(
+      record['disabledRuleIds'],
+      'profile.sopRules.disabledRuleIds',
+      (item, at) => requireFilledStringAt(item, at, fail),
+    ),
+  };
+}
+
 function readPropertyRefOrNull(value: unknown, field: string): PropertyRef | null {
   return value === undefined || value === null ? null : readPropertyRef(value, field);
 }
@@ -610,7 +638,11 @@ function readHierarchyLevel(value: unknown, field: string): HierarchyLevelConfig
     ),
     sort: requireMemberAt(record['sort'], LEVEL_SORTS, `${field}.sort`, fail),
   };
-  const optional: { displayAttributeKey?: string; boundaryAttributeKey?: string } = {};
+  const optional: {
+    displayAttributeKey?: string;
+    boundaryAttributeKey?: string;
+    boundaryExceptions?: BoundaryExceptionConfig;
+  } = {};
   const display = record['displayAttributeKey'];
   if (display !== undefined) {
     optional.displayAttributeKey = requireFilledStringAt(
@@ -626,6 +658,21 @@ function readHierarchyLevel(value: unknown, field: string): HierarchyLevelConfig
       `${field}.boundaryAttributeKey`,
       fail,
     );
+  }
+
+  // The SSM SOP's approved exception to the discipline boundary. Absent is the
+  // state every level had before it existed and the state the default preset
+  // still ships, so it is read only when a profile states one.
+  const exceptions = record['boundaryExceptions'];
+  if (exceptions !== undefined) {
+    const exceptionRecord = requireRecordAt(exceptions, `${field}.boundaryExceptions`, fail);
+    optional.boundaryExceptions = {
+      childClasses: readEach(
+        exceptionRecord['childClasses'] ?? [],
+        `${field}.boundaryExceptions.childClasses`,
+        (item, at) => requireMemberAt(item, EQUIPMENT_CLASS_VALUES, at, fail),
+      ),
+    };
   }
 
   if (record['keyAttributeKey'] !== undefined) {
@@ -889,6 +936,10 @@ export function validateSiteProfileV2(value: unknown): SiteProfileV2 {
     // and an absent one means every rule is on -- which is what a profile that
     // never mentioned the gate always meant.
     ssmAudit: readSsmAuditConfig(record['ssmAudit']),
+    // Same story: a revision written before the SOP build rules existed carries
+    // no section, and an absent one means every rule is on -- which is inert
+    // anyway until that revision's ladder carries the `sop-rule` rung.
+    sopRules: readSopRulesConfig(record['sopRules']),
     authorityRules: readOptionalEach(
       record['authorityRules'],
       'profile.authorityRules',

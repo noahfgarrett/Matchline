@@ -98,7 +98,7 @@ test('family and role without a flow anchor is a weaker claim, not no claim', ()
   assert.equal(first.evidenceTier, 1);
   assert.equal(first.provenance.rule, 'MAH>PLC');
   assert.equal(first.provenance.sourceRef.sheet, 'roleGraph');
-  assert.equal(first.provenance.fallbackRung, 6);
+  assert.equal(first.provenance.fallbackRung, 7);
 });
 
 test('once flow anchors a pairing, family+role stops repeating it', () => {
@@ -129,7 +129,7 @@ test('a flow-anchored claim keeps the cable row that anchored it', () => {
   assert.equal(anchored.provenance.sourceFile, 'Dragon-CableSchedule.xlsx');
   assert.equal(anchored.provenance.sourceRef.row, 18);
   assert.equal(anchored.provenance.rule, 'MAH>PLC');
-  assert.equal(anchored.provenance.fallbackRung, 5);
+  assert.equal(anchored.provenance.fallbackRung, 6);
 });
 
 test('two role-compatible parents in one family both get claims', () => {

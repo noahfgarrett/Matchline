@@ -118,7 +118,7 @@ test('a profile lookup claims resolved pairs and skips the ones it cannot resolv
   assert.equal(claim.evidenceTier, 2);
   assert.equal(claim.provenance.sourceFile, 'site-profile');
   assert.equal(claim.provenance.sourceRef.sheet, 'profileLookup');
-  assert.equal(claim.provenance.fallbackRung, 4);
+  assert.equal(claim.provenance.fallbackRung, 5);
 
   assert.deepEqual(assembled.skipped, [
     {
@@ -142,7 +142,7 @@ test('a prior accepted SSM example is a claim on the rung below learning', () =>
   assert.equal(claim.targetAssetId, 'asset-0001');
   assert.equal(claim.ladderSource, 'prior-ssm');
   assert.equal(claim.relationshipType, 'STRUCTURAL_PARENT_CANDIDATE');
-  assert.equal(claim.provenance.fallbackRung, 8);
+  assert.equal(claim.provenance.fallbackRung, 9);
 });
 
 test('a claim-grade learned rule claims; a proposal-grade one only proposes', () => {

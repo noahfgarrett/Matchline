@@ -15,6 +15,7 @@ import type {
   WireQuickSetupSuggestions,
   WireResolverTemplate,
   WireRolePairSuggestion,
+  WireSopRuleSuggestion,
   WireSuggestionTarget,
 } from '../../../shared/schemas';
 import { starterProfile } from '../../../shared/starter-profile';
@@ -90,6 +91,11 @@ const STEPS: readonly QuickStep[] = [
     id: 'hierarchy',
     title: 'How the register is grouped',
     lede: 'The standard commissioning stack, what it would do to your assets, and the one thing about it you have to read before publishing.',
+  },
+  {
+    id: 'sop',
+    title: 'The SSM SOP’s own rules',
+    lede: 'The SOP says where a drive, an instrument and a control panel belong. Matchline already audits your register against those sentences; this is the same sentences read forwards, so the register is built that way to begin with.',
   },
 ];
 
@@ -266,6 +272,8 @@ function StepBody({
       return <RolesStep suggestions={suggestions} context={context} onAccepted={onAccepted} />;
     case 'hierarchy':
       return <HierarchyStep suggestions={suggestions} context={context} onAccepted={onAccepted} />;
+    case 'sop':
+      return <SopStep suggestions={suggestions} context={context} onAccepted={onAccepted} />;
     default:
       return <Callout tone="info">That step does not exist.</Callout>;
   }
@@ -1247,6 +1255,178 @@ function HierarchyStep({
           }}
         >
           Accept this stack{impact}
+        </button>
+      </div>
+    </>
+  );
+}
+
+/* --------------------------------------------------------------- step 8: SOP */
+
+/**
+ * The SSM SOP, as build rules.
+ *
+ * Every other step on this path proposes something read out of THIS model. This
+ * one is different and says so: the SOP is a written standard, and Matchline
+ * already ships the rulebook that audits a register against it. What is
+ * measured here is not whether the rules are right — it is what they would DO
+ * to this project, which is the number a person needs before switching one on.
+ *
+ * Two proposals, and they are separate on purpose. The rules themselves are the
+ * SOP and start ticked; the role pairings are a translation of the SOP's class
+ * graph into this site's own tag letters (`MAH` means an air handler HERE), and
+ * that is a claim about a site, so they are shown with the counts behind them.
+ */
+function SopStep({
+  suggestions,
+  context,
+  onAccepted,
+}: {
+  readonly suggestions: WireQuickSetupSuggestions;
+  readonly context: WizardContext;
+  readonly onAccepted: () => void;
+}): JSX.Element {
+  const [disabled, setDisabled] = useState<ReadonlySet<string>>(() => new Set<string>());
+  const pairKey = (pair: WireRolePairSuggestion): string =>
+    `${pair.parentRole} ${pair.childRole}`;
+  const [pairs, setPairs] = useState<ReadonlySet<string>>(
+    () => new Set(suggestions.sopRolePairs.map(pairKey)),
+  );
+
+  const enabled = suggestions.sopRules.filter((rule) => !disabled.has(rule.ruleId));
+  const claims = enabled.reduce((total, rule) => total + rule.claimCount, 0);
+  const chosenPairs = suggestions.sopRolePairs.filter((pair) => pairs.has(pairKey(pair)));
+
+  return (
+    <>
+      <Panel
+        title="What the SOP would place"
+        description="Each rule run over your real assets, right now. A rule that would claim nothing here is not wrong — it is about equipment this project does not have."
+      >
+        <TableScroll>
+          <table className="table table--compact" data-testid="quick-sop-rules">
+            <thead>
+              <tr>
+                <th>On</th>
+                <th>Rule</th>
+                <th>Effect</th>
+                <th className="table__number">Claims here</th>
+                <th>What it makes true</th>
+              </tr>
+            </thead>
+            <tbody>
+              {suggestions.sopRules.map((rule: WireSopRuleSuggestion): JSX.Element => (
+                <tr key={rule.ruleId}>
+                  <td className="table__number">
+                    <input
+                      type="checkbox"
+                      aria-label={`Enable ${rule.title}`}
+                      data-testid={`quick-sop-${rule.ruleId}`}
+                      checked={!disabled.has(rule.ruleId)}
+                      onChange={(): void => {
+                        const next = new Set(disabled);
+                        if (next.has(rule.ruleId)) {
+                          next.delete(rule.ruleId);
+                        } else {
+                          next.add(rule.ruleId);
+                        }
+                        setDisabled(next);
+                      }}
+                    />
+                  </td>
+                  <td>{rule.title}</td>
+                  <td className="muted">
+                    {rule.effect === 'structural' ? 'Places equipment' : 'Orders work'}
+                  </td>
+                  <td className="table__number">{count(rule.claimCount)}</td>
+                  <td className="muted">{rule.statement}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableScroll>
+
+        <Callout tone="info">
+          Accepting these also makes SSM Discipline structural, with the SOP’s own exception: a
+          drive, an instrument or a control panel still nests under the equipment it serves even
+          though it is in another discipline. That is the one exception the SSM Audit rulebook
+          names, and it is why the level can be a real boundary rather than switched off.
+        </Callout>
+      </Panel>
+
+      {suggestions.sopRolePairs.length === 0 ? null : (
+        <Panel
+          title="The SOP’s pairings, in your own tag letters"
+          description="What the SOP says about kinds of equipment, translated into the role prefixes your tags actually use. Read off your own assets — a role is proposed as a kind when most of the equipment carrying it is described that way."
+        >
+          <TableScroll>
+            <table className="table table--compact" data-testid="quick-sop-pairs">
+              <thead>
+                <tr>
+                  <th>Accept</th>
+                  <th>Parent role</th>
+                  <th>Child role</th>
+                  <th className="table__number">Children</th>
+                  <th>For example</th>
+                </tr>
+              </thead>
+              <tbody>
+                {suggestions.sopRolePairs.map((pair: WireRolePairSuggestion): JSX.Element => (
+                  <tr key={pairKey(pair)}>
+                    <td className="table__number">
+                      <input
+                        type="checkbox"
+                        aria-label={`Accept ${pair.parentRole} to ${pair.childRole}`}
+                        data-testid={`quick-sop-pair-${pair.parentRole}-${pair.childRole}`}
+                        checked={pairs.has(pairKey(pair))}
+                        onChange={(): void => {
+                          const next = new Set(pairs);
+                          if (next.has(pairKey(pair))) {
+                            next.delete(pairKey(pair));
+                          } else {
+                            next.add(pairKey(pair));
+                          }
+                          setPairs(next);
+                        }}
+                      />
+                    </td>
+                    <td>{pair.parentRole}</td>
+                    <td>{pair.childRole}</td>
+                    <td className="table__number">{count(pair.count)}</td>
+                    <td className="muted">{pair.examples.join(', ')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </TableScroll>
+        </Panel>
+      )}
+
+      <div className="button-row">
+        <button
+          className="button button--primary"
+          type="button"
+          data-testid="quick-accept-sop"
+          onClick={(): void => {
+            void context
+              .update((draft): WireDraftPatch => {
+                const patch = starterProfile(
+                  [
+                    ...draft.roleGraph.rules,
+                    ...chosenPairs.map((pair) => ({
+                      parentRole: pair.parentRole,
+                      childRole: pair.childRole,
+                    })),
+                  ],
+                  draft.hierarchy.levels,
+                );
+                return { ...patch, sopRules: { disabledRuleIds: [...disabled] } };
+              })
+              .then(onAccepted, onAccepted);
+          }}
+        >
+          Accept {count(enabled.length)} of {count(suggestions.sopRules.length)} rules —{' '}
+          {count(claims)} claims over this project
         </button>
       </div>
     </>

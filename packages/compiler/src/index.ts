@@ -54,7 +54,7 @@ export type { DerivedAttributeConfigReason, ProfileConfigReason } from './errors
 export { subjectPropertiesFor } from './properties.js';
 export type { SubjectProperties } from './properties.js';
 
-export { ATTRIBUTE_KEYS, ssmDisciplineOf } from './attributes.js';
+export { ATTRIBUTE_KEYS, sopTagFactsOf, ssmDisciplineOf } from './attributes.js';
 export type { AttributeKey } from './attributes.js';
 
 export { aggregateReviewItems } from './review.js';

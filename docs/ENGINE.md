@@ -332,6 +332,102 @@ number stays comparable between compiles — and what is dropped is its findings
 rows and its place in the exported report. A site cannot reword a rule, re-grade it, or add
 one: the rulebook is shared, and a local edit would mean two apps disagreeing about one SOP.
 
+## SSM SOP rules
+
+The gate above reads the SOP backwards: it takes a finished register and says "this drive is
+not under the equipment it runs". This is the same sentences read **forwards**, so the compile
+puts the drive there and the gate then has nothing to report. Two halves of one standard;
+`tests/integration/e5-ssm-sop.test.mjs` is the proof that they agree — one compile, zero
+`sop.*` and `logic.*` findings, with every one of those rules switched on.
+
+### The pairing everything stands on
+
+Noah's directive, verbatim:
+
+> Instruments need to be placed under their respective parents. The UPN will be available
+> within the equipment tag like: MAH101-01 has a VFD101-01 down the line as a child.
+
+So a tag carries two things — a UPN (`101`) and an instance (`01`) — and a device carrying the
+same two as a piece of equipment belongs to it. That is a fact about the tags a site already
+writes, which is why these claims may cross the discipline line the model draws: the drive is
+published in the electrical package and the air handler in the mechanical one, and they are
+one machine.
+
+The two values come from the site's own anatomy when it taught a `system` and an `instance`
+segment, and otherwise from `extoRev21UpnCandidates` (the vendored rule for reading an
+approved UPN out of a tag) plus the trailing `-NN` run. `sopTagFactsOf` in
+`@matchline/compiler` is the one place that decision is made. A tag naming two approved UPNs
+yields none: it has not named one.
+
+### Classifying, in lockstep with the rulebook
+
+The rules key on what a thing *is*, and the answer has to be the gate's answer.
+`@matchline/ssm-audit/classify` restates the engine's description regexes — `auditIsVfd` and
+its siblings are module-private and `vendor/` is never edited — and
+`test/classify.test.mjs` extracts each `auditIsX` function's regex literals out of
+`vendor/audit/engine.js` by name and asserts they equal the restated ones, source and flags,
+in order. A re-vendor that changes a word fails that test rather than splitting the two halves
+apart. `equipmentClass(description, tag)` resolves the overlaps in one documented order (an
+FACP before a panel, an LCP before a panel, a control valve before an instrument) and reads
+the tag's leading letter run only when the description classifies nothing — and then only
+through the same regexes, so `VFD101-01` yields `vfd` and `TIT101-01` yields nothing, because
+what `TIT` means is a fact about a site.
+
+### The rules
+
+They live in `@matchline/relationship-claims`'s `sop.ts`, on the `sop-rule` ladder rung
+(between `mel-parent` and `profile-lookup`), with rule ids mirroring the rulebook's own:
+
+| rule | effect |
+|---|---|
+| `sop.tag-pair` | a VFD, starter, instrument or FDU under the equipment on its UPN and instance |
+| `sop.lcp-placement` | a local control panel under the skid or driven equipment it serves |
+| `sop.control-valve-parent` / `sop.room-sensor-parent` | the same, for the two devices the SOP names separately |
+| `sop.instrument-parent-upn` | an instrument with nothing on its own instance falls back to its own UPN, and never crosses one |
+| `sop.fms-io-under-vfd` | FMS hardwired I/O under its drive, with the PLC as a dependency |
+| `sop.vfd-dependencies` | a VFD lists the panel and the PLC on its UPN |
+| `logic.heat-trace-chain` | panel under transformer, connection box under panel or upstream box |
+| `logic.vesda-fire-alarm` | a VESDA depends on the fire alarm panel in its own building |
+| `logic.rio-control-path` | an RIO depends on the controller on its UPN |
+| `logic.driven-electrical-path` / `logic.control-electrical-path` | the feeding panel, **from connectivity only** |
+
+Three rules run through all of them. They never guess power — the two path rules claim a feed
+only where a cable schedule states one, and with no connectivity they claim nothing and the
+gate's "no power path" finding stands, which is the honest answer. They never pick between
+candidates — two pieces of equipment on one UPN and instance each get a claim, and the
+ladder's tie rule raises `ambiguous-parent`. And they never cross a UPN.
+
+Precedence inside a pair is the SOP's own: a VFD pairs to the driven equipment and never to
+the panel that feeds it; an LCP to the skid; an instrument to whatever equipment is there.
+
+### Switching them off
+
+`SiteProfileV2.sopRules.disabledRuleIds` names rules this site does not follow, and the whole
+source is inert unless the ladder carries the `sop-rule` rung —
+`assembleRelationshipClaims` is handed `sopRules` only then. The rung is the coarse switch and
+has to be, because these rules also produce **dependency** claims, which no ladder would have
+filtered: a site that never asked for the SOP must not find its Dependencies column rewritten
+by it. A stored profile is migrated onto `LADDER_SOURCE_ORDER_BEFORE_MEL_PARENT`, which
+carries neither rung, so nothing changes under a site that has been compiling for months.
+
+### The discipline boundary's one exception
+
+SSM-Audit's `parent.cross-discipline` states the rule and its exception: "A structural child
+stays inside its parent's discipline. Controls devices nesting under the equipment they serve
+are the approved exception." A hierarchy level may therefore carry
+`boundaryExceptions.childClasses`, and a child of one of those classes is not compared at that
+level at all — not for a difference, and not for a missing value either, because a level that
+does not apply cannot be unknown about anything. It is keyed on the **child's** class and on
+one named level, so it can never widen into "boundaries are soft".
+
+`DEFAULT_HIERARCHY_LEVELS` is unchanged: SSM Discipline stays `boundary: false` (P0-5), which
+is the blunt safe answer — a discipline difference never breaks a parent, so any parent may
+cross it. The starter profile proposes the other one: the level becomes a real boundary, with
+the SOP's controls devices (`vfd`, `starter`, `lcp`, `control-valve`, `room-sensor`,
+`instrument`, `fdu`, `fms-io`, `plc`, `rio`) exempt by class. That is stricter and more
+truthful than switching the level off, and it is what a site that has said it follows the SOP
+should get.
+
 ## Binding semantics (all stages)
 
 1. Model-first: the asset universe comes ONLY from the extraction cache. MEL rows never

@@ -71,6 +71,7 @@ import type {
 } from '@matchline/relationship-claims';
 import { readMelTable } from '@matchline/spreadsheet-import';
 import { auditCompiledProject } from '@matchline/ssm-audit';
+import { equipmentClass } from '@matchline/ssm-audit/classify';
 import { compileSnapshot, hierarchyTree } from '@matchline/ssm-compiler';
 import type { CompileSubject } from '@matchline/ssm-compiler';
 import { buildSystemCatalog, resolveSystems, UNSTATED_ROW } from '@matchline/system-resolver';
@@ -86,6 +87,7 @@ import { applyAnatomy } from '@matchline/tag-anatomy';
 import {
   attributesFor,
   icSystemKeyOf,
+  sopTagFactsOf,
   ssmDisciplineOf,
   IC_DISCIPLINE_RULE,
 } from './attributes.js';
@@ -325,7 +327,12 @@ function readMel(mel: MelWorkbookInput | undefined): MelReadResult {
 function anatomyOf(
   anatomy: TagAnatomyConfig | undefined,
   canonicalTag: string,
-): { readonly role?: string; readonly familyKey?: string } {
+): {
+  readonly role?: string;
+  readonly familyKey?: string;
+  readonly system?: string;
+  readonly instance?: string;
+} {
   if (anatomy === undefined || canonicalTag === '') {
     return {};
   }
@@ -334,9 +341,17 @@ function anatomyOf(
     return {};
   }
   const role = result.segments.role;
+  // `system` and `instance` are carried for the SOP rules, which pair a device
+  // to equipment by the UPN and instance in its tag. A site that taught both
+  // segments has already said where they live, which is why `sopTagFactsOf`
+  // prefers them over reading the approved list out of the tag.
+  const system = result.segments.system;
+  const instance = result.segments.instance;
   return {
     ...(role === undefined ? {} : { role }),
     ...(result.familyKey === undefined ? {} : { familyKey: result.familyKey }),
+    ...(system === undefined ? {} : { system }),
+    ...(instance === undefined ? {} : { instance }),
   };
 }
 
@@ -786,6 +801,11 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
     // the site's profile lists the `mel-parent` rung; the claims exist either
     // way, because a claim nobody walked is still evidence.
     ...(mel.parents.length === 0 ? {} : { melParents: mel.parents }),
+    // The SSM SOP's own nesting rules, and only when the site's ladder carries
+    // the rung. Unlike every other source these also produce DEPENDENCY claims,
+    // which no ladder would have filtered -- so the switch has to be here, at
+    // the point the source is offered, rather than downstream at the walk.
+    ...(profile.ladder.tiers.includes('sop-rule') ? { sopRules: profile.sopRules } : {}),
     resolveTag: bridge,
     // Profile-borne claims address the published profile they came out of, so a
     // re-compile under a new version explains itself.
@@ -854,6 +874,10 @@ export function compileProject(input: CompileProjectInput): CompiledProject {
         applyIcRule,
       ),
       ...(modelTreeParentId === undefined ? {} : { modelTreeParentId }),
+      // Classified once per asset, here, and read by the fold for a level's
+      // boundary exception. The same call `claimSubjectOf` made -- pure, and
+      // over the same two strings, so the two can never disagree.
+      equipmentClass: equipmentClass(asset.description ?? '', asset.canonicalTag),
     };
   });
   const snapshot = compileSnapshot({
@@ -1038,7 +1062,24 @@ function claimSubjectOf(
   anatomy: TagAnatomyConfig | undefined,
   parentTagProperty: PropertyRef | undefined,
 ): ClaimSubject {
-  const segments = anatomyOf(anatomy, asset.canonicalTag);
+  const anatomySegments = anatomyOf(anatomy, asset.canonicalTag);
+  // The two anatomy segments the SOP reads are consumed by `sopTagFactsOf` and
+  // are NOT passed on as claim-subject fields of their own: `role` and
+  // `familyKey` are what the family rungs read, and adding two more segments to
+  // that shape would invite a rung to start pairing on them by accident.
+  const { system, instance, ...familySegments } = anatomySegments;
+  const sop = sopTagFactsOf(asset.canonicalTag, {
+    ...(system === undefined ? {} : { system }),
+    ...(instance === undefined ? {} : { instance }),
+  });
+  const segments = {
+    ...familySegments,
+    ...sop,
+    equipmentClass: equipmentClass(asset.description ?? '', asset.canonicalTag),
+    ...(asset.building === undefined || asset.building.trim() === ''
+      ? {}
+      : { building: asset.building.trim() }),
+  };
   if (parentTagProperty === undefined) {
     return { assetId: asset.assetId, canonicalTag: asset.canonicalTag, ...segments };
   }

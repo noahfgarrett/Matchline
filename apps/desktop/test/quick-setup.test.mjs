@@ -454,7 +454,7 @@ test('the Revit path: a building nobody stated, read off the file names', async 
         entry.matchedObjectCount,
       ]),
       [
-        ['B14-*', 'B14', 3, 140],
+        ['B14-*', 'B14', 4, 168],
         ['B22-*', 'B22', 1, 40],
       ],
     );
@@ -474,10 +474,10 @@ test('the Revit path: a building nobody stated, read off the file names', async 
       ]),
       [
         ['Building', 2, 0],
-        ['SSM Discipline', 1, 12],
-        ['System', 8, 0],
+        ['SSM Discipline', 4, 12],
+        ['System', 9, 0],
       ],
-      'two buildings, nobody without one, and eight systems — none of it stated by a property; ' +
+      'two buildings, nobody without one, and nine systems — none of it stated by a property; ' +
         'the one discipline is I&C, which only the controls package states',
     );
     assert.deepEqual(
@@ -540,8 +540,9 @@ test('the anatomy and the resolver agree that the system is not in the mark', as
  * The federation is half and half — the MEP packages write `AHU-1` and `P101`,
  * the controls package writes `MAH101-01` and `TIT101-01` — which is what a
  * site part-way onto the standard looks like. (`P101` and its two siblings
- * happen to spell an approved UPN as well, which is why nine rather than six of
- * the eighteen read.) Quick Setup does not pretend otherwise: at half the tags
+ * happen to spell an approved UPN as well, and the commissioning package's
+ * eight marks all carry one, which is why fifteen rather than six of the
+ * twenty-six read.) Quick Setup does not pretend otherwise: at half the tags
  * the rung is offered with the real number in the reason, and filtered to the
  * package that IS on the standard it is offered for real, with what it would
  * resolve stated in assets.
@@ -557,9 +558,9 @@ test('the approved-UPN rung is proposed for the package whose marks carry one', 
     assert.equal(
       mixed.available,
       false,
-      'nine marks in eighteen carry an approved UPN, which is not most of a site',
+      'fifteen marks in twenty-six carry an approved UPN, which is not most of a site',
     );
-    assert.match(mixed.unavailableReason, /9 of 18 tags carry exactly one approved Exto UPN/);
+    assert.match(mixed.unavailableReason, /15 of 26 tags carry exactly one approved Exto UPN/);
 
     // Filtered to the controls package, every mark carries one.
     const { draft } = service.draftState();
@@ -631,7 +632,7 @@ test('accepting everything on a Revit model nests equipment and publishes', asyn
 
     const compiled = await service.compile();
     assert.equal(compiled.state, 'done');
-    assert.equal(compiled.summary.assetCount, 18);
+    assert.equal(compiled.summary.assetCount, 26);
     assert.equal(compiled.summary.missingSystemCount, 0);
 
     const completeness = compiled.summary.completeness;
@@ -641,8 +642,9 @@ test('accepting everything on a Revit model nests equipment and publishes', asyn
     );
     assert.equal(
       completeness.assetsNested,
-      7,
-      'three pumps in their air handlers, two drives in an MCC, and the controls stack of two',
+      10,
+      'three pumps in their air handlers, two drives in an MCC, the controls stack of two, ' +
+        'and three the SSM SOP places: VFD101-01 under MAH101-01, and the heat-trace branch',
     );
 
     for (const level of completeness.levels) {

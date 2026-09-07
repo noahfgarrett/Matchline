@@ -19,6 +19,9 @@ export {
   DEFAULT_PROFILE_SOURCE,
 } from './assemble.js';
 
+export { SOP_SOURCE_FILE, sopClaims } from './sop.js';
+export type { SopClaims, SopInput } from './sop.js';
+
 export {
   DEPENDENCY_RULE,
   LADDER_SOURCE_EVIDENCE_TIER,

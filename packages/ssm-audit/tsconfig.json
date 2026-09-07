@@ -8,6 +8,7 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
+    { "path": "../domain" },
     { "path": "../exto-export" },
     { "path": "../identity" },
     { "path": "../mel-export" },

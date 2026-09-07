@@ -1,8 +1,12 @@
 import type { UniversePropertyCatalogEntry } from '@matchline/asset-catalog';
+import { sopTagFactsOf } from '@matchline/compiler';
+import { SOP_RULES, type EquipmentClass } from '@matchline/domain';
+import { sopClaims } from '@matchline/relationship-claims';
 import {
   extoRev21SystemName,
   extoRev21UpnCandidates,
 } from '@matchline/ssm-audit/exto';
+import { equipmentClass } from '@matchline/ssm-audit/classify';
 import { previewAnatomy, type AnatomyPreview } from '@matchline/tag-anatomy';
 
 import type {
@@ -13,6 +17,7 @@ import type {
   WireResolverTemplate,
   WireRolePairSuggestion,
   WireSegmentName,
+  WireSopRuleSuggestion,
   WireSourceAssignmentRule,
   WireSuggestionConfidence,
   WireSuggestionTarget,
@@ -1604,4 +1609,154 @@ export function suggestClasses(
         ? left.className.localeCompare(right.className)
         : right.objectCount - left.objectCount,
     );
+}
+
+/* --------------------------------------------------- the SSM SOP proposals */
+
+/** One asset, as much of it as the SOP proposals read. */
+export interface SopAsset {
+  readonly canonicalTag: string;
+  readonly description: string;
+  readonly building: string;
+  /** The site's own anatomy `role` segment, or `''` when it taught none. */
+  readonly role: string;
+}
+
+/**
+ * The class graph the SSM SOP nests by, as `parent -> child` pairs.
+ *
+ * Read straight off the SOP's own sentences: a drive goes under the machine it
+ * runs, an instrument under the equipment it serves, FMS I/O under its drive, a
+ * heat-trace panel under its transformer and a connection box under the panel,
+ * a remote I/O drop under its controller.
+ */
+const SOP_CLASS_PAIRS: readonly (readonly [EquipmentClass, EquipmentClass])[] = [
+  ['driven', 'vfd'],
+  ['driven', 'starter'],
+  ['driven', 'instrument'],
+  ['driven', 'lcp'],
+  ['driven', 'control-valve'],
+  ['driven', 'room-sensor'],
+  ['vfd', 'fms-io'],
+  ['transformer', 'heat-trace-panel'],
+  ['heat-trace-panel', 'heat-trace-connection'],
+  ['plc', 'rio'],
+];
+
+/**
+ * The SOP's class graph, translated into the role vocabulary this site's tags
+ * actually use.
+ *
+ * The SOP is written about kinds of equipment; a role graph is written about
+ * tag prefixes. Getting from one to the other is a question about THIS site --
+ * whether `MAH` means an air handler here and whether `PT` is an instrument --
+ * so it is answered from the site's own assets rather than from a table: every
+ * asset is classified from its description (the vendored rulebook's own
+ * classifiers) and its role comes from the site's anatomy, and a role is
+ * proposed as a class when most of the assets carrying it classify that way.
+ *
+ * Counted and never applied. `count` is how many child-role assets the pairing
+ * would be about, which is the number that tells a person whether a rule is
+ * worth having.
+ */
+export function suggestSopRolePairs(
+  assets: readonly SopAsset[],
+): readonly WireRolePairSuggestion[] {
+  const byRole = new Map<string, Map<EquipmentClass, string[]>>();
+  for (const asset of assets) {
+    if (asset.role === '') {
+      continue;
+    }
+    const className = equipmentClass(asset.description, asset.canonicalTag);
+    if (className === 'other') {
+      continue;
+    }
+    const classes = byRole.get(asset.role) ?? new Map<EquipmentClass, string[]>();
+    const tags = classes.get(className) ?? [];
+    tags.push(asset.canonicalTag);
+    classes.set(className, tags);
+    byRole.set(asset.role, classes);
+  }
+
+  /** The class most of a role's assets classify as, with its member tags. */
+  const dominant = new Map<EquipmentClass, { role: string; tags: readonly string[] }[]>();
+  for (const [role, classes] of [...byRole].sort(([left], [right]) => left.localeCompare(right))) {
+    let best: { className: EquipmentClass; tags: string[] } | null = null;
+    for (const [className, tags] of classes) {
+      if (best === null || tags.length > best.tags.length) {
+        best = { className, tags };
+      }
+    }
+    if (best === null) {
+      continue;
+    }
+    const bucket = dominant.get(best.className) ?? [];
+    bucket.push({ role, tags: [...best.tags].sort() });
+    dominant.set(best.className, bucket);
+  }
+
+  const pairs: WireRolePairSuggestion[] = [];
+  for (const [parentClass, childClass] of SOP_CLASS_PAIRS) {
+    for (const parent of dominant.get(parentClass) ?? []) {
+      for (const child of dominant.get(childClass) ?? []) {
+        if (parent.role === child.role) {
+          continue;
+        }
+        pairs.push({
+          parentRole: parent.role,
+          childRole: child.role,
+          count: child.tags.length,
+          examples: child.tags
+            .slice(0, ROLE_PAIR_EXAMPLE_LIMIT)
+            .map((tag) => `${parent.role} → ${tag}`),
+        });
+      }
+    }
+  }
+
+  return pairs.sort((left, right) =>
+    left.count === right.count
+      ? left.parentRole.localeCompare(right.parentRole) ||
+        left.childRole.localeCompare(right.childRole)
+      : right.count - left.count,
+  );
+}
+
+/**
+ * Every SSM SOP rule, with how many claims it would make over this project.
+ *
+ * The count is the real one: the rules are run, over the real universe, by the
+ * same `sopClaims` the compile calls. Nothing is applied and nothing is stored
+ * -- a projection that estimated would be a number a person could not check
+ * against the compile that follows it.
+ */
+export function projectSopRules(assets: readonly SopAsset[]): readonly WireSopRuleSuggestion[] {
+  const subjects = assets.map((asset, index) => {
+    const facts = sopTagFactsOf(asset.canonicalTag, {});
+    return {
+      assetId: `sop-preview-${String(index)}`,
+      canonicalTag: asset.canonicalTag,
+      equipmentClass: equipmentClass(asset.description, asset.canonicalTag),
+      ...(facts.upn === undefined ? {} : { upn: facts.upn }),
+      ...(facts.instance === undefined ? {} : { instance: facts.instance }),
+      ...(asset.building === '' ? {} : { building: asset.building }),
+    };
+  });
+
+  // No connectivity here: the two power-path rules read a cable schedule, and a
+  // Quick Setup projection has none. Their projected count is honestly zero,
+  // which is the same thing the compile would produce from the same evidence.
+  const claims = sopClaims({ subjects, flowEdges: [], disabledRuleIds: [] });
+  const counts = new Map<string, number>();
+  for (const claim of [...claims.structural, ...claims.dependencies]) {
+    counts.set(claim.rule, (counts.get(claim.rule) ?? 0) + 1);
+  }
+
+  return SOP_RULES.map((rule): WireSopRuleSuggestion => ({
+    ruleId: rule.ruleId,
+    title: rule.title,
+    statement: rule.statement,
+    effect: rule.effect,
+    claimCount: counts.get(rule.ruleId) ?? 0,
+  }));
 }

@@ -22,6 +22,7 @@ test('the default ladder is the §11.1 order, strongest rung first', () => {
     'manual',
     'explicit-model',
     'mel-parent',
+    'sop-rule',
     'profile-lookup',
     'flow-family',
     'family-role',
@@ -31,10 +32,16 @@ test('the default ladder is the §11.1 order, strongest rung first', () => {
   ]);
 });
 
-test('a profile written before the MEL rung is migrated without it', () => {
+test('a profile written before the MEL and SOP rungs is migrated without either', () => {
   assert.equal(LADDER_SOURCE_ORDER_BEFORE_MEL_PARENT.includes('mel-parent'), false);
+  // The pinned list is what a stored profile is migrated onto, and it is pinned
+  // against every rung added after it -- not only the one it is named for. A
+  // site that has been compiling for months must not start nesting its drives
+  // under their machines because the engine learned the SOP; it adds the rung
+  // when it decides to, which is how every other rung is turned on.
+  assert.equal(LADDER_SOURCE_ORDER_BEFORE_MEL_PARENT.includes('sop-rule'), false);
   assert.deepEqual(
-    LADDER_SOURCE_ORDER.filter((tier) => tier !== 'mel-parent'),
+    LADDER_SOURCE_ORDER.filter((tier) => tier !== 'mel-parent' && tier !== 'sop-rule'),
     LADDER_SOURCE_ORDER_BEFORE_MEL_PARENT,
   );
 });

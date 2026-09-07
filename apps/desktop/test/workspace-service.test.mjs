@@ -381,10 +381,14 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     assert.deepEqual(config.roleGraph.rules, []);
     assert.equal(config.parentTagProperty, null);
     assert.deepEqual(config.ssmDisciplineProjection, []);
-    assert.equal(config.ladder.tiers.length, 9, 'every ladder rung starts enabled');
+    assert.equal(config.ladder.tiers.length, 10, 'every ladder rung starts enabled');
     assert.ok(
       config.ladder.tiers.includes('mel-parent'),
       'a new site reads its own MEL, which is where a site writes down what hangs off what',
+    );
+    assert.ok(
+      config.ladder.tiers.includes('sop-rule'),
+      'and it builds to the SSM SOP, which is the standard its register is audited against',
     );
     assert.equal(config.ladder.tiers[0], 'manual', 'a human decision is the strongest rung');
 
@@ -536,7 +540,13 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     // The one thing this fixture exists to prove.
     assert.equal(summary.demotionCount, 1, 'exactly one cross-boundary demotion');
     assert.equal(summary.cycleCount, 0);
-    assert.equal(summary.rootCount, DRAGON_ASSET_COUNT, 'the demoted RIO is a root of System 650');
+    // Every asset used to be a root here, because this fixture's profile teaches
+    // no role graph and its model tree is flat. It no longer is: a new draft's
+    // ladder carries the `sop-rule` rung, and the SSM SOP pairs eight of these
+    // tags to the equipment they name -- `VFD001-10-01` under `MAH001-10-01`,
+    // and so on. The demoted RIO is still a root of System 650, which is what
+    // this fixture exists to prove.
+    assert.equal(summary.rootCount, DRAGON_ASSET_COUNT - 8, 'the SOP nested eight devices');
   });
 
   await t.test('the demotion drill-down names the level that broke the parent', () => {
@@ -665,7 +675,7 @@ test('screens 6-9 and the workspace, over the Dragon fixture', async (t) => {
     // winner. The System boundary is enabled and the two disagree at it, so the
     // panel is a dependency and the RIO stays a root of System 650.
     assert.equal(status.summary.demotionCount, 1);
-    assert.equal(status.summary.rootCount, DRAGON_ASSET_COUNT);
+    assert.equal(status.summary.rootCount, DRAGON_ASSET_COUNT - 8, 'the SOP nested eight devices');
 
     const hits = service.treeSearch('RIO603', 5);
     assert.equal(hits[0].overridden, false, 'no manual parent survived the fold');

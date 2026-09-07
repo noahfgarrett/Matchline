@@ -46,6 +46,7 @@ import {
   type ParentLadderConfig,
   type RoleGraphConfig,
 } from './hierarchy-config.js';
+import type { SopRulesConfig } from './sop-rules.js';
 import type {
   AssetFilterConfig,
   PropertyMappingsInput,
@@ -359,6 +360,15 @@ export interface SiteProfileV2 {
 
   /** Which SSM Audit rules this site has switched off. */
   readonly ssmAudit: SsmAuditConfig;
+  /**
+   * Which SSM SOP build rules this site has switched off (docs/ENGINE.md).
+   *
+   * The rules only run at all when the ladder carries the `sop-rule` rung, so
+   * this is the second switch rather than the first: the rung says whether the
+   * SOP builds this site's hierarchy, and this says which of its sentences the
+   * site disagrees with.
+   */
+  readonly sopRules: SopRulesConfig;
 
   /** Stated, carried, not enforced. See {@link AuthorityRule}. */
   readonly authorityRules: ReadonlyArray<AuthorityRule>;
@@ -376,6 +386,7 @@ export interface SiteProfileV2 {
 export interface SiteProfileV2Sections {
   readonly hierarchy?: HierarchyConfigInput;
   readonly ssmAudit?: SsmAuditConfig;
+  readonly sopRules?: SopRulesConfig;
   readonly roleGraph?: RoleGraphConfig;
   readonly ladder?: ParentLadderConfig;
   readonly ssmDisciplineProjection?: ReadonlyArray<DisciplineRewrite>;
@@ -447,6 +458,7 @@ export function migrateSiteProfileV1(
     profileLookup: ReadonlyArray<ParentPair>;
     priorSsm: ReadonlyArray<ParentPair>;
     ssmAudit: SsmAuditConfig;
+    sopRules: SopRulesConfig;
     authorityRules: ReadonlyArray<AuthorityRule>;
     profileTestExamples: ReadonlyArray<ProfileTestExample>;
   } = {
@@ -470,6 +482,10 @@ export function migrateSiteProfileV1(
     // Every rule on. A migration that silenced one would hide a finding the
     // site never asked to hide.
     ssmAudit: sections.ssmAudit ?? { disabledRuleIds: [] },
+    // Every SOP rule on, and every one of them inert: a V1 profile is migrated
+    // onto the pre-`mel-parent` ladder, which carries no `sop-rule` rung, so
+    // nothing here produces a claim until a site adds the rung on purpose.
+    sopRules: sections.sopRules ?? { disabledRuleIds: [] },
     authorityRules: sections.authorityRules ?? [],
     profileTestExamples: sections.profileTestExamples ?? [],
   };

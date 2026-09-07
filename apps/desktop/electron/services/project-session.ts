@@ -210,12 +210,15 @@ import {
   inferAnatomy,
   preferredSystemProperty,
   extoUpnCoverage,
+  projectSopRules,
   resolverTemplates,
   suggestClasses,
   suggestFields,
   suggestRolePairs,
+  suggestSopRolePairs,
   suggestSourceAssignments,
   type ClassTagCount,
+  type SopAsset,
   type TaggedNesting,
 } from './suggestions.js';
 import { buildHierarchyProjection, proposeHierarchy } from './hierarchy-preview.js';
@@ -2178,6 +2181,32 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
    * applied to each tag. Empty until both exist, which is the honest answer:
    * before a tag property and a tag shape there are no roles to pair.
    */
+  /**
+   * Every asset in the universe, as the SOP proposals read it.
+   *
+   * The description is what classifies it (the vendored rulebook's own
+   * classifiers read a description and nothing else), the building is what the
+   * VESDA rule pairs on, and the role is the site's own anatomy segment --
+   * absent when it has taught none, which simply leaves that asset out of the
+   * role-pair proposal.
+   */
+  function sopAssetsOf(active: Session, anatomy: WireAnatomySuggestion | null): SopAsset[] {
+    if (!hasMappings(active.draft)) {
+      return [];
+    }
+    const config = toTagAnatomy(anatomy?.anatomy ?? active.draft.tagAnatomy);
+    const derived = requireDerived(active);
+    return derived.catalog.assets.map((asset): SopAsset => {
+      const applied = config === null ? null : applyAnatomy(config, asset.canonicalTag);
+      return {
+        canonicalTag: asset.canonicalTag,
+        description: asset.description ?? '',
+        building: asset.building ?? '',
+        role: applied !== null && applied.matched ? (applied.segments.role ?? '') : '',
+      };
+    });
+  }
+
   function rolePairSuggestions(
     active: Session,
     anatomy: WireAnatomySuggestion | null,
@@ -3990,6 +4019,8 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
             reason: 'Add a model on screen 1 to see how the levels would group it.',
           },
           rolePairs: [],
+          sopRolePairs: [],
+          sopRules: [],
         };
       }
 
@@ -4051,6 +4082,11 @@ export function createProjectService(options: ProjectServiceOptions): ProjectSer
         hierarchyNotes: [...proposed.notes],
         hierarchyProjection: projection,
         rolePairs: [...rolePairSuggestions(active, anatomy)],
+        // The SOP's own two proposals, read off the same assets: the class
+        // graph in this site's role letters, and every rule with the number of
+        // claims it would actually make here.
+        sopRolePairs: [...suggestSopRolePairs(sopAssetsOf(active, anatomy))],
+        sopRules: [...projectSopRules(sopAssetsOf(active, anatomy))],
       };
     },
 

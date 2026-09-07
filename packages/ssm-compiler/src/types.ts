@@ -7,6 +7,7 @@
  * pipeline order owned by `@matchline/compiler`.
  */
 import type {
+  EquipmentClass,
   HierarchyConfigInput,
   ParentDecision,
   ParentLadderConfig,
@@ -37,6 +38,16 @@ export interface CompileSubject {
    * lives in the extraction cache, so no other package assembles that rung.
    */
   readonly modelTreeParentId?: string;
+  /**
+   * What the SSM SOP calls this asset (`@matchline/ssm-audit`'s
+   * `equipmentClass`), when the compile classified it.
+   *
+   * Read by the fold, and only by the fold: a level's
+   * `boundaryExceptions.childClasses` is the one place a class changes a
+   * structural decision. Absent means no exception can apply, which is the
+   * safe reading -- an unclassified asset folds like everything always did.
+   */
+  readonly equipmentClass?: EquipmentClass;
 }
 
 /**

@@ -28,6 +28,10 @@ import {
  * - `explicit-model` is the model stating a relationship itself.
  * - `flow-family` rests on a cable schedule or power study -- an engineered,
  *   stamped document -- even though the nesting is inferred from it.
+ * - `sop-rule` rests on the SSM SOP itself -- a written standard, not a model
+ *   and not a stamped calculation -- read against the tags a site already
+ *   writes. Inferred: the SOP states what a VFD does, and Matchline is the one
+ *   deciding that THIS row is a VFD.
  * - `mel-parent`, `profile-lookup` and `prior-ssm` rest on maintained lists
  *   that follow the work: explicit statements, but not stamped engineering. The
  *   MEL's System Parent column sits above the other two in the ladder because
@@ -40,6 +44,7 @@ export const LADDER_SOURCE_EVIDENCE_TIER = {
   manual: EVIDENCE_TIER.MODEL,
   'explicit-model': EVIDENCE_TIER.MODEL,
   'mel-parent': EVIDENCE_TIER.TRACKING_DOCUMENT,
+  'sop-rule': EVIDENCE_TIER.INFERRED,
   'profile-lookup': EVIDENCE_TIER.TRACKING_DOCUMENT,
   'flow-family': EVIDENCE_TIER.ENGINEERED_DOCUMENT,
   'family-role': EVIDENCE_TIER.INFERRED,
@@ -60,6 +65,10 @@ export const LADDER_SOURCE_KIND = {
   manual: 'MANUAL',
   'explicit-model': 'MODEL',
   'mel-parent': 'MEL',
+  // The SOP is a document a person maintains and applies by hand everywhere
+  // else; `MANUAL` is the vocabulary's word for that, and the claim's `rule`
+  // names the SOP sentence that produced it.
+  'sop-rule': 'MANUAL',
   'profile-lookup': 'MANUAL',
   'flow-family': 'FLOW',
   'family-role': 'MODEL',
@@ -79,6 +88,7 @@ export const LADDER_SOURCE_RELATIONSHIP_TYPE = {
   manual: 'EXPLICIT_PARENT',
   'explicit-model': 'EXPLICIT_PARENT',
   'mel-parent': 'EXPLICIT_PARENT',
+  'sop-rule': 'FAMILY_RELATED',
   'profile-lookup': 'EXPLICIT_PARENT',
   'flow-family': 'FAMILY_RELATED',
   'family-role': 'FAMILY_RELATED',
@@ -92,6 +102,7 @@ export const LADDER_SOURCE_RULE = {
   manual: 'relate.manualOverride',
   'explicit-model': 'relate.explicitModelParent',
   'mel-parent': 'relate.melSystemParent',
+  'sop-rule': 'relate.ssmSopRule',
   'profile-lookup': 'relate.profileLookup',
   'flow-family': 'relate.flowAnchoredFamily',
   'family-role': 'relate.familyRole',

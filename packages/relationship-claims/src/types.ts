@@ -9,11 +9,13 @@
  * `@matchline/compiler`.
  */
 import type {
+  EquipmentClass,
   ManualRelationshipOverride,
   Provenance,
   RelationshipType,
   RoleGraphConfig,
   ReviewItem,
+  SopRulesConfig,
   SsmRelationshipClaim,
 } from '@matchline/domain';
 
@@ -32,6 +34,29 @@ export interface ClaimSubject {
   readonly role?: string;
   /** Tag-anatomy composite family key, e.g. `001-10-01`. */
   readonly familyKey?: string;
+  /**
+   * What the SSM SOP calls this asset (`@matchline/ssm-audit`'s
+   * `equipmentClass`), when the caller classified it.
+   *
+   * Classified upstream rather than here: the classifiers are the vendored
+   * rulebook's, and a second implementation of them in this package is exactly
+   * the two-apps-disagreeing failure the vendoring exists to prevent. Absent
+   * disqualifies the asset from every SOP rule, which is the honest reading of
+   * "nobody said what this is".
+   */
+  readonly equipmentClass?: EquipmentClass;
+  /**
+   * The UPN the tag carries -- `101` in `MAH101-01` (PRODUCT.md §2.3).
+   *
+   * From the anatomy's `system` segment where the site taught one, and from the
+   * approved Exto list read out of the tag where it did not. Either way it is
+   * the caller's to state; this package does not parse tags.
+   */
+  readonly upn?: string;
+  /** The instance the tag carries -- `01` in `MAH101-01`. */
+  readonly instance?: string;
+  /** The building, for the rules that are about one building rather than one UPN. */
+  readonly building?: string;
   /** The parent tag a mapped model relationship property stated, verbatim. */
   readonly explicitParentTag?: string;
   /** Where that property was read. Supply it; assembly synthesizes a weaker
@@ -153,6 +178,16 @@ export interface AssembleOptions {
   readonly manualOverrides?: ReadonlyArray<ManualRelationshipOverride>;
   /** The MEL's own System Parent column (§11.1, the `mel-parent` rung). */
   readonly melParents?: ReadonlyArray<MelParentInput>;
+  /**
+   * The SSM SOP's own rules, and which of them the site switched off.
+   *
+   * Presence is the switch. The rules run when the caller passes this and not
+   * otherwise, so a site whose ladder does not carry the `sop-rule` rung gets
+   * no SOP claims at all -- including the dependency claims, which no ladder
+   * would have filtered. Passing `{ disabledRuleIds: [] }` is "every SOP rule
+   * on"; omitting it is "the SOP does not build this site's hierarchy".
+   */
+  readonly sopRules?: SopRulesConfig;
   readonly resolveTag: ResolveTag;
   /** Addresses profile-borne claims. Defaults to `DEFAULT_PROFILE_SOURCE`. */
   readonly profileSource?: ProfileSourceRef;

@@ -7,6 +7,7 @@
  *
  * Types only; `@matchline/ssm-compiler` produces it.
  */
+import type { EquipmentClass } from './equipment-class.js';
 import type { LadderSourceKind } from './hierarchy-config.js';
 import type { Provenance } from './provenance.js';
 import type { RelationshipType } from './relationship.js';
@@ -98,6 +99,16 @@ export interface ResolvedAssetNode {
   readonly levelPath: ReadonlyArray<ResolvedLevelPathEntry>;
   /** Every claim that lost the parent slot. Retained, never discarded. */
   readonly losingClaims: ReadonlyArray<SsmRelationshipClaim>;
+  /**
+   * What the SOP calls this asset (`@matchline/ssm-audit`'s `equipmentClass`).
+   *
+   * Carried on the node rather than recomputed by every reader: the fold reads
+   * it to apply a level's boundary exception, and a screen or an export that
+   * wants to say "this is a drive" would otherwise have to re-classify a
+   * description the compile already classified once. Absent when the compile
+   * stated no class for the asset.
+   */
+  readonly equipmentClass?: EquipmentClass;
 }
 
 /** Counts a reviewer checks before trusting a compile. */

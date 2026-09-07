@@ -7,6 +7,7 @@ import test, { after, before } from 'node:test';
 import { openExtractionCache } from '../dist/index.js';
 import {
   REVIT_ALL_MARKS,
+  REVIT_COMMISSIONING_MARKS,
   REVIT_IC_MARKS,
   REVIT_MARK_PROPERTY,
   writeRevitShapedFixture,
@@ -40,9 +41,10 @@ after(() => {
   }
 });
 
-test('four files: two buildings, and a controls package on the approved standard', () => {
+test('five files: two buildings, a controls package and a commissioning package', () => {
   const names = cache.sourceModels().map((model) => model.fileName).sort();
   assert.deepEqual(names, [
+    'B14-Commissioning.nwc',
     'B14-Controls.nwc',
     'B14-Electrical.nwc',
     'B14-Mechanical.nwc',
@@ -63,13 +65,13 @@ test('the mark is on roughly a twelfth of the objects, which is the point', () =
   }
 
   assert.deepEqual(marks, [...REVIT_ALL_MARKS]);
-  assert.equal(marks.length, 18);
-  assert.equal(cache.objectCount(), 180);
+  assert.equal(marks.length, 26);
+  assert.equal(cache.objectCount(), 208);
   const share = marks.length / cache.objectCount();
-  assert.ok(share > 0.08 && share < 0.12, `mark coverage is ${String(share)}`);
+  assert.ok(share > 0.08 && share < 0.14, `mark coverage is ${String(share)}`);
 });
 
-test('the controls package states I&C, which the approved Exto list does not carry', () => {
+test('only the two B14 packages state a Discipline, and they state four of them', () => {
   const marksByObject = new Map();
   const disciplineByObject = new Map();
   for (const row of cache.allProperties()) {
@@ -79,8 +81,27 @@ test('the controls package states I&C, which the approved Exto list does not car
   }
 
   const stated = [...disciplineByObject.keys()].map((id) => marksByObject.get(id));
-  assert.deepEqual(stated.sort(), [...REVIT_IC_MARKS].sort(), 'only the controls package');
-  assert.ok([...disciplineByObject.values()].every((value) => value === 'I&C'));
+  assert.deepEqual(
+    stated.sort(),
+    [...REVIT_IC_MARKS, ...REVIT_COMMISSIONING_MARKS].sort(),
+    'the three MEP packages publish no Discipline parameter at all',
+  );
+
+  const byMark = new Map(
+    [...disciplineByObject].map(([id, value]) => [marksByObject.get(id), value]),
+  );
+  // The SOP scenario is only a scenario because these differ: the machine is
+  // Mechanical, its drive is Electrical, its instruments are I&C, and the SOP
+  // nests all three together anyway.
+  assert.equal(byMark.get('MAH101-01'), 'Mechanical');
+  assert.equal(byMark.get('VFD101-01'), 'Electrical');
+  assert.equal(byMark.get('TIT101-01'), 'I&C');
+  assert.equal(byMark.get('MCC101'), 'Electrical');
+  assert.equal(byMark.get('FACP-B14-01'), 'Life Safety');
+  assert.deepEqual(
+    [...new Set(disciplineByObject.values())].sort(),
+    ['Electrical', 'I&C', 'Life Safety', 'Mechanical'],
+  );
 });
 
 test('nothing in it is called Building', () => {

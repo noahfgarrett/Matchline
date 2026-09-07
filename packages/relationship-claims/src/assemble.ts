@@ -15,6 +15,11 @@
  *    full stop (DECISIONS.md #3).
  * 3. Connectivity is always at least a dependency (PRODUCT.md §8.2), and it is
  *    only structure when a family key and a taught role pairing agree with it.
+ *
+ * The SSM SOP's own rules are one more source among these (`./sop.ts`), on the
+ * `sop-rule` rung, and they follow all three: they invent no asset, they never
+ * become a proposal, and they claim a power path only where connectivity states
+ * one.
  */
 import type {
   LadderSourceKind,
@@ -35,6 +40,7 @@ import {
   ladderRung,
 } from './mapping.js';
 import { compareClaims, compareProposals, compareSkipped, compareText } from './order.js';
+import { sopClaims } from './sop.js';
 import type {
   AssembleOptions,
   AssembledClaims,
@@ -517,7 +523,23 @@ export function assembleRelationshipClaims(
     });
   }
 
-  // --- Tier 4: explicit accepted profile lookup -----------------------------
+  // --- Tier 4: the SSM SOP's own nesting and commissioning rules ------------
+  // Off unless the caller passed `sopRules`, which the compiler does only when
+  // the site's ladder carries the `sop-rule` rung. Structural claims would have
+  // been filtered by the ladder anyway; the DEPENDENCY claims would not, and a
+  // site that never asked for the SOP must not find its register's Dependencies
+  // column rewritten by it.
+  if (opts.sopRules !== undefined) {
+    const sop = sopClaims({
+      subjects: [...subjectById.values()],
+      flowEdges: opts.flowEdges ?? [],
+      disabledRuleIds: opts.sopRules.disabledRuleIds,
+    });
+    structural.push(...sop.structural);
+    dependencies.push(...sop.dependencies);
+  }
+
+  // --- Tier 5: explicit accepted profile lookup -----------------------------
   (opts.profileLookup ?? []).forEach((entry, position) => {
     const resolved = resolvePair(
       'profile-lookup',
@@ -546,7 +568,7 @@ export function assembleRelationshipClaims(
     );
   });
 
-  // --- Tier 5: flow-anchored family, plus every dependency ------------------
+  // --- Tier 6: flow-anchored family, plus every dependency ------------------
   const roleRules = indexRoleGraph(opts.roleGraph);
   const anchoredPairs = new Set<string>();
 
@@ -598,7 +620,7 @@ export function assembleRelationshipClaims(
     );
   }
 
-  // --- Tier 6: family + role, where flow anchored nothing -------------------
+  // --- Tier 7: family + role, where flow anchored nothing -------------------
   if (roleRules.size > 0) {
     const families = new Map<string, FamilyMember[]>();
     for (const subject of subjectById.values()) {
@@ -654,7 +676,7 @@ export function assembleRelationshipClaims(
     }
   }
 
-  // --- Tier 7: learned description rules ------------------------------------
+  // --- Tier 8: learned description rules ------------------------------------
   (opts.learned ?? []).forEach((learned, position) => {
     if (
       !pairIsUsable(
@@ -699,7 +721,7 @@ export function assembleRelationshipClaims(
     );
   });
 
-  // --- Tier 8: prior accepted SSM examples ----------------------------------
+  // --- Tier 9: prior accepted SSM examples ----------------------------------
   (opts.priorSsm ?? []).forEach((example, position) => {
     const resolved = resolvePair(
       'prior-ssm',

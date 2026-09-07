@@ -253,6 +253,9 @@ const EXAMPLE_DRAFT = {
   // No SSM Audit rule switched off: the state a site starts in, and the one it
   // stays in unless somebody reads a rule and decides it does not apply here.
   ssmAudit: { disabledRuleIds: [] },
+  // No SSM SOP rule switched off either -- and this example's ladder predates
+  // the `sop-rule` rung, so none of them would produce a claim anyway.
+  sopRules: { disabledRuleIds: [] },
   authorityRules: [],
   profileTestExamples: [],
 } as const;
@@ -1132,6 +1135,8 @@ export const IPC_CHANNELS = {
             reason: 'Choose the equipment tag property first.',
           },
           rolePairs: [],
+          sopRolePairs: [],
+          sopRules: [],
         },
       },
     },

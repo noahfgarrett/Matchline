@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState, type JSX, type ReactNode } from 'react';
 
+import { SOP_RULES } from '@matchline/domain';
+
 import type {
   WireDraftPatch,
   WireDisciplineRewrite,
@@ -33,6 +35,7 @@ const LADDER_RUNGS: ReadonlyArray<
 > = [
   ['manual', 'Somebody said so', 'A parent a person set by hand. Beats every rung below it. A boundary still applies: a parent across one becomes a dependency, and the crossing is explained in Review.'],
   ['explicit-model', 'The model says so', 'A model property naming the parent outright. Needs the property mapped below.'],
+  ['sop-rule', 'The SSM SOP says so', 'The SOP’s own nesting rules, read forwards as build rules: a drive under the machine it runs, an instrument under the equipment it serves. Switch individual rules off below.'],
   ['profile-lookup', 'An accepted lookup table', 'Parent/child pairs this site wrote down and accepted.'],
   ['flow-family', 'Connected and same family', 'The two are electrically connected and share a tag family, with compatible roles.'],
   ['family-role', 'Same family', 'Same tag family and compatible roles, with no connectivity evidence.'],
@@ -146,6 +149,27 @@ export function Screen7Relationships({
             void context.update((): WireDraftPatch => ({ ladder: { tiers: [...tiers] } }));
           }}
         />
+      </Panel>
+
+      <Panel
+        title="SSM SOP rules"
+        description="The SOP’s own sentences, as build rules. They run only while the “The SSM SOP says so” rung is on the ladder above; this is which of them this site follows."
+      >
+        <SopRuleEditor
+          disabledRuleIds={context.draft.sopRules.disabledRuleIds}
+          onChange={(disabledRuleIds): void => {
+            void context.update(
+              (): WireDraftPatch => ({ sopRules: { disabledRuleIds: [...disabledRuleIds] } }),
+            );
+          }}
+        />
+        {context.draft.ladder.tiers.includes('sop-rule') ? null : (
+          <Callout tone="warning">
+            The SOP rung is off the ladder above, so none of these rules produces anything —
+            including the dependencies. Add “The SSM SOP says so” to the ladder to switch the
+            whole set on.
+          </Callout>
+        )}
       </Panel>
 
       <Panel
@@ -372,6 +396,72 @@ function RoleGraphEditor({
         </TableScroll>
       )}
     </div>
+  );
+}
+
+/* --------------------------------------------------------------- SOP rules */
+
+/**
+ * Which SSM SOP rules this site follows.
+ *
+ * Every rule on, and a checkbox to turn one off — deliberately not an editor.
+ * The rules ARE the SOP, and the same rulebook audits the register against
+ * them afterwards, so a site that could reword one here would be building to a
+ * standard its own gate then rejects. What a site legitimately says is "not
+ * here": a plant whose drives genuinely do not nest under their machines
+ * switches the pairing off rather than reviewing every claim it disagrees with.
+ */
+function SopRuleEditor({
+  disabledRuleIds,
+  onChange,
+}: {
+  readonly disabledRuleIds: readonly string[];
+  readonly onChange: (disabledRuleIds: readonly string[]) => void;
+}): JSX.Element {
+  const disabled = new Set(disabledRuleIds);
+  return (
+    <TableScroll>
+      <table className="table table--compact" data-testid="sop-rules">
+        <thead>
+          <tr>
+            <th>On</th>
+            <th>Rule</th>
+            <th>Effect</th>
+            <th>What it makes true</th>
+          </tr>
+        </thead>
+        <tbody>
+          {SOP_RULES.map((rule): JSX.Element => (
+            <tr key={rule.ruleId}>
+              <td className="table__number">
+                <input
+                  type="checkbox"
+                  aria-label={`Follow ${rule.title}`}
+                  data-testid={`sop-rule-${rule.ruleId}`}
+                  checked={!disabled.has(rule.ruleId)}
+                  onChange={(): void => {
+                    const next = new Set(disabled);
+                    if (next.has(rule.ruleId)) {
+                      next.delete(rule.ruleId);
+                    } else {
+                      next.add(rule.ruleId);
+                    }
+                    // Emitted in the catalogue's own order, so a stored profile
+                    // does not depend on the order somebody clicked.
+                    onChange(SOP_RULES.map((entry) => entry.ruleId).filter((id) => next.has(id)));
+                  }}
+                />
+              </td>
+              <td>{rule.title}</td>
+              <td className="muted">
+                {rule.effect === 'structural' ? 'Places equipment' : 'Orders work'}
+              </td>
+              <td className="muted">{rule.statement}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </TableScroll>
   );
 }
 

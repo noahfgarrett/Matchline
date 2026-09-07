@@ -44,7 +44,18 @@ against a real Autodesk assembly.
   guarded transaction commit with a busy timeout; verified, fsynced pre-migration
   backup; read-only/locked files open as results, not failures; system overrides
   now reach the compiler; one override row per asset regardless of key spelling.
-- Suite: 2326 tests, 0 failures. Remaining gates: the real Navisworks proof, code
+- **The SSM SOP, as build rules:** the vendored SSM-Audit rulebook now works in both
+  directions. Its description classifiers are restated as `@matchline/ssm-audit/classify`
+  and pinned to the vendored regexes by test; a `sop-rule` ladder rung pairs a device to
+  the equipment its tag names (UPN + instance, Noah's directive) and carries the SOP's
+  nesting and commissioning-logic rules as claims, each individually switchable
+  (`SiteProfileV2.sopRules`); a hierarchy level may waive its boundary for named child
+  classes, which is SSM-Audit's own approved cross-discipline exception. The default level
+  preset is unchanged (P0-5); the Quick Setup starter profile proposes the exception, the
+  rung and the SOP's pairings in the site's own role letters, with projected claim counts.
+  `tests/integration/e5-ssm-sop.test.mjs` compiles the scenario and proves the gate then
+  reports zero `sop.*` / `logic.*` findings.
+- Suite: 2431 tests, 0 failures. Remaining gates: the real Navisworks proof, code
   signing, the updater, and clean-machine install.
 
 ## 1.0.0-rc.1 — 2026-08-11 — release candidate

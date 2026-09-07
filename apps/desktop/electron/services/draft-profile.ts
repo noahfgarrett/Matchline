@@ -21,6 +21,7 @@ import type {
   SiteProfileV2,
   SourceAssignmentRuleInput,
   SourceAssignmentsInput,
+  SopRulesConfig,
   SsmAuditConfig,
   SystemComponentConfig,
   SystemResolverConfig,
@@ -196,6 +197,9 @@ export function emptyDraft(name: string): WireDraftProfile {
     // Every SSM Audit rule on. A rule a site wants silenced is a decision that
     // site makes on screen 8, having seen what the rule actually says.
     ssmAudit: { disabledRuleIds: [] },
+    // Every SOP rule on. They stay inert until the ladder carries the
+    // `sop-rule` rung, which `emptyDraft` does and a migrated profile does not.
+    sopRules: { disabledRuleIds: [] },
     authorityRules: [],
     profileTestExamples: [],
   };
@@ -297,6 +301,7 @@ export function applyPatch(draft: WireDraftProfile, patch: WireDraftPatch): Wire
     profileLookup: patch.profileLookup ?? draft.profileLookup,
     priorSsm: patch.priorSsm ?? draft.priorSsm,
     ssmAudit: patch.ssmAudit ?? draft.ssmAudit,
+    sopRules: patch.sopRules ?? draft.sopRules,
     authorityRules: patch.authorityRules ?? draft.authorityRules,
     profileTestExamples: patch.profileTestExamples ?? draft.profileTestExamples,
   };
@@ -611,6 +616,11 @@ export function toHierarchy(draft: WireDraftProfile): HierarchyConfigInput {
         ? {}
         : { boundaryAttributeKey: level.boundaryAttributeKey }),
       boundary: level.boundary,
+      // The SSM SOP's approved exception, carried straight through. Absent
+      // stays absent: a level with no exception list folds as it always did.
+      ...(level.boundaryExceptions === undefined
+        ? {}
+        : { boundaryExceptions: { childClasses: [...level.boundaryExceptions.childClasses] } }),
       missingValuePolicy: level.missingValuePolicy,
       sort: level.sort,
     })),
@@ -734,6 +744,7 @@ export function toSiteProfile(draft: WireDraftProfile): SiteProfileV2 {
     profileLookup: ReadonlyArray<ParentPair>;
     priorSsm: ReadonlyArray<ParentPair>;
     ssmAudit: SsmAuditConfig;
+    sopRules: SopRulesConfig;
     authorityRules: ReadonlyArray<AuthorityRule>;
     profileTestExamples: ReadonlyArray<ProfileTestExample>;
   } = {
@@ -755,6 +766,7 @@ export function toSiteProfile(draft: WireDraftProfile): SiteProfileV2 {
     profileLookup: toParentPairs(draft.profileLookup),
     priorSsm: toParentPairs(draft.priorSsm),
     ssmAudit: { disabledRuleIds: [...draft.ssmAudit.disabledRuleIds] },
+    sopRules: { disabledRuleIds: [...draft.sopRules.disabledRuleIds] },
     authorityRules: toAuthorityRules(draft),
     profileTestExamples: toTestExamples(draft),
   };
@@ -898,6 +910,10 @@ export function fromSiteProfile(profile: SiteProfileV2): WireDraftProfile {
     // A V1 revision predates the gate and carries no list; the migration
     // supplies an empty one, so a reopened wizard shows every rule switched on.
     ssmAudit: { disabledRuleIds: [...profile.ssmAudit.disabledRuleIds] },
+    // Same story as the gate: a revision written before the SOP rules existed
+    // carries no list, so a reopened wizard shows every rule switched on -- and
+    // every one of them inert, because that revision's ladder has no `sop-rule`.
+    sopRules: { disabledRuleIds: [...profile.sopRules.disabledRuleIds] },
     authorityRules: profile.authorityRules.map((rule) => ({
       field: rule.field,
       authority: rule.authority,
@@ -940,6 +956,9 @@ function toWireLevel(level: HierarchyConfigInput['levels'][number]): WireHierarc
       ? {}
       : { boundaryAttributeKey: level.boundaryAttributeKey }),
     boundary: level.boundary,
+    ...(level.boundaryExceptions === undefined
+      ? {}
+      : { boundaryExceptions: { childClasses: [...level.boundaryExceptions.childClasses] } }),
     missingValuePolicy: level.missingValuePolicy,
     sort: level.sort,
   };

@@ -214,3 +214,49 @@ export function attributesFor(
 
   return attributes;
 }
+
+/**
+ * The two things the SSM SOP reads out of a tag: its UPN and its instance.
+ *
+ * Noah's directive is a statement about tags -- "MAH101-01 has a VFD101-01 down
+ * the line as a child" -- so the pairing needs `101` and `01` out of every tag,
+ * and there are two honest ways to get them.
+ *
+ * 1. **The site's own anatomy**, when it taught a `system` and an `instance`
+ *    segment. A taught anatomy is a person saying where in the tag each thing
+ *    lives, and nothing outranks that.
+ * 2. **The approved Exto list plus the trailing run**, otherwise. A Revit mark
+ *    like `MAH101-01` carries no taught anatomy on most sites, and
+ *    `extoRev21UpnCandidates` is the vendored rule for reading an approved UPN
+ *    out of a tag -- the same one the I&C discipline rule already uses. The
+ *    instance is the trailing `-NN` group, which is what the SOP's own examples
+ *    are shaped like.
+ *
+ * Either half may come back absent, and an absent half simply disqualifies the
+ * asset from the rules that need it. Nothing is invented: more than one
+ * approved UPN in a tag yields none, because a tag naming two systems has not
+ * named one.
+ */
+export function sopTagFactsOf(
+  canonicalTag: string,
+  segments: { readonly system?: string; readonly instance?: string },
+): { readonly upn?: string; readonly instance?: string } {
+  const taughtUpn = segments.system?.trim();
+  const taughtInstance = segments.instance?.trim();
+  if (taughtUpn !== undefined && taughtUpn !== '' && taughtInstance !== undefined && taughtInstance !== '') {
+    return { upn: taughtUpn, instance: taughtInstance };
+  }
+
+  const tag = canonicalTag.trim();
+  if (tag === '') {
+    return {};
+  }
+  const candidates = extoRev21UpnCandidates(tag);
+  const upn = candidates.length === 1 ? candidates[0] : undefined;
+  const trailing = /-([0-9]{1,4})$/.exec(tag);
+  const instance = trailing === null ? undefined : trailing[1];
+  return {
+    ...(upn === undefined ? {} : { upn }),
+    ...(instance === undefined ? {} : { instance }),
+  };
+}

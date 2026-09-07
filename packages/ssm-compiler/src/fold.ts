@@ -25,6 +25,18 @@
  *    ladder competition and is then folded like any other winner. The fold does
  *    not know which rung selected the parent it is comparing, and that is the
  *    point: "cross-boundary manual → dependency", not a second set of rules.
+ * 6. **One exception exists, and a site has to write it down.** The SSM SOP
+ *    says a controls device nests under the equipment it serves even when the
+ *    two sit in different disciplines -- SSM-Audit's `parent.cross-discipline`
+ *    calls that the approved exception. So a level may carry
+ *    `boundaryExceptions.childClasses`, and a CHILD of one of those classes is
+ *    not compared at that level at all: not for a difference, and not for a
+ *    missing value either, because a level that does not apply cannot be
+ *    unknown about anything. It is keyed on the child's class and on one named
+ *    level, so it can never widen into "boundaries are soft": a class off the
+ *    list, or a level with no list, folds exactly as it always did. The default
+ *    preset ships no exception (P0-5 makes SSM Discipline non-structural
+ *    instead); the starter profile is what proposes one.
  *
  * What a boundary compares is the level's boundary attribute, which defaults to
  * its key (P0-6). Never its display attribute: a level that compared the words
@@ -130,6 +142,25 @@ export function boundaryLevels(
 }
 
 /**
+ * Whether this level's boundary is waived for this child (rule 6 above).
+ *
+ * The CHILD's class, never the parent's: the SOP's sentence is "a controls
+ * device nests under the equipment it serves", and reading the parent's class
+ * instead would let an air handler nest under a drive.
+ */
+export function boundaryWaived(child: CompileSubject, level: HierarchyLevelConfig): boolean {
+  const exceptions = level.boundaryExceptions;
+  if (exceptions === undefined) {
+    return false;
+  }
+  const childClass = child.equipmentClass;
+  if (childClass === undefined) {
+    return false;
+  }
+  return exceptions.childClasses.includes(childClass);
+}
+
+/**
  * Compare a child against the parent the ladder selected.
  *
  * Two passes on purpose. The first looks for a definite difference across every
@@ -145,6 +176,9 @@ export function foldBoundaries(
   const levels = boundaryLevels(hierarchy);
 
   for (const level of levels) {
+    if (boundaryWaived(child, level)) {
+      continue;
+    }
     const attributeKey = boundaryAttributeOf(level);
     const childValue = boundaryValue(child, attributeKey);
     const parentValue = boundaryValue(parent, attributeKey);
@@ -154,6 +188,9 @@ export function foldBoundaries(
   }
 
   for (const level of levels) {
+    if (boundaryWaived(child, level)) {
+      continue;
+    }
     const attributeKey = boundaryAttributeOf(level);
     const childValue = boundaryValue(child, attributeKey);
     const parentValue = boundaryValue(parent, attributeKey);

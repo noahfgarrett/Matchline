@@ -12,6 +12,8 @@
  * structural decision (ENGINE.md binding rule 4).
  */
 
+import type { EquipmentClass } from './equipment-class.js';
+
 /**
  * Which rung of the §11.1 parent candidate ladder produced a claim.
  *
@@ -24,6 +26,8 @@ export type LadderSourceKind =
   | 'explicit-model'
   /** The MEL's own "System Parent" column, which names a parent outright. */
   | 'mel-parent'
+  /** The SSM SOP's own nesting rules, read forwards as build rules. */
+  | 'sop-rule'
   | 'profile-lookup'
   | 'flow-family'
   | 'family-role'
@@ -46,6 +50,11 @@ export const LADDER_SOURCE_ORDER = [
   // every rule: a MEL "System Parent" cell is an engineer writing the parent
   // down in the document the site maintains for exactly that purpose.
   'mel-parent',
+  // Under the two documents that state a parent outright and above every
+  // lookup, every family rule and everything learned: the SOP is a written
+  // standard, so it outranks a table a site typed and a rule Matchline
+  // measured -- but it is still a rule, so a person and the model itself win.
+  'sop-rule',
   'profile-lookup',
   'flow-family',
   'family-role',
@@ -97,6 +106,24 @@ export interface ParentLadderConfig {
 }
 
 /**
+ * The exemption from one level's boundary, by child equipment class.
+ *
+ * The SSM SOP's one approved exception to "a structural child stays inside its
+ * parent's discipline", written down as configuration rather than baked into
+ * the fold.
+ */
+export interface BoundaryExceptionConfig {
+  /**
+   * The child equipment classes exempt from this level's boundary.
+   *
+   * A class, never a tag and never an asset id: the exception is a statement
+   * about what a kind of device does, and a list of assets would be a manual
+   * decision wearing a rule's clothes.
+   */
+  readonly childClasses: ReadonlyArray<EquipmentClass>;
+}
+
+/**
  * One configured level of the hierarchy (PRODUCT.md §2.4, §11, P0-6).
  *
  * Each attribute key addresses a raw or derived field on the asset -- building,
@@ -138,6 +165,27 @@ export interface HierarchyLevelConfig {
    * ladder and then folds like any other winner.
    */
   readonly boundary: boolean;
+  /**
+   * Child classes this level's boundary does not apply to.
+   *
+   * The SSM SOP's one approved exception, made configurable rather than
+   * hardcoded: "a structural child stays inside its parent's discipline.
+   * Controls devices nesting under the equipment they serve are the approved
+   * exception" (`parent.cross-discipline`). A VFD in Electrical under an air
+   * handler in Mechanical is the SOP working, not a boundary being crossed, so
+   * a site that has adopted the exception lists the classes it holds for and
+   * the fold stops demoting them at that level.
+   *
+   * Narrow on purpose. The exception is keyed on the CHILD's class and on one
+   * named level, so it can never become "boundaries are soft": a building
+   * boundary with no exception list still demotes every drive that crosses it,
+   * and a class not on the list is folded exactly as before.
+   *
+   * Absent means no exception, which is what every level had before and what
+   * {@link DEFAULT_HIERARCHY_LEVELS} keeps (RELEASE-1.0-PLAN P0-5 makes SSM
+   * Discipline non-structural instead).
+   */
+  readonly boundaryExceptions?: BoundaryExceptionConfig;
   /**
    * What to do when an asset has no value at this level.
    *
