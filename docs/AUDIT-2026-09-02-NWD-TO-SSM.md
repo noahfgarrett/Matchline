@@ -480,3 +480,18 @@ audit commit (`731c883`). Full suite after landing: build clean, renderer bundle
 wrong layer, see Packaging High), the updater (19), clean-machine install (21).
 Every C# change since the audit has been written without a compiler and is part of
 that proof.
+
+## SSM-Audit rulebook adopted (2026-09-07)
+
+Noah's SSM-Audit app is the authoritative SSM SOP rulebook. Three layers landed on top
+of the work packages (commits `1b97122`, `14e5c3f`, `a68c8b8`; suite 2431 / 0):
+
+| Layer | What it does |
+|-------|--------------|
+| 1 Post-compile gate | The five rulebook files vendored byte-identically into `packages/ssm-audit` with a parity test; every compile runs the 51 rules over its own EXTO rows; findings are `ssm-audit` review items, an SSM Audit card on screen 8 with per-rule switches, a warning block on screen 9, and an "SSM Audit findings" workbook export. |
+| 2 Approved vocabulary | `upn-from-tag` and `exto-system-name` resolver rungs; the I&C discipline rule; UPN / System Name / discipline / classification / item-master validation on the completeness report; UPN and discipline block publish for projects that adopted the standard; EXTO cells canonicalised to the approved spelling; Quick Setup proposes the rungs when the tags carry UPNs. |
+| 3 SOP rules as build rules | Description classifiers pinned regex-for-regex to the vendored engine; a `sop-rule` ladder rung with twelve claim rules carrying SSM-Audit rule ids as provenance, led by `sop.tag-pair` (`MAH101-01` ← `VFD101-01` by UPN and instance); a discipline-boundary exception for controls devices; the starter profile and Quick Setup adopt both. `tests/integration/e5-ssm-sop.test.mjs` proves the scenario end to end and that the gate then reports zero SOP findings. |
+
+The default hierarchy keeps P0-5 (SSM Discipline non-structural); the starter profile
+turns the boundary on with the controls-device exception, which is the SSM-Audit rule
+with its approved exception.
